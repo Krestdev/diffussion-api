@@ -11,3 +11,338 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+
+model Service {
+  uuid      String      @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  nom       String   @db.VarChar(100)
+
+  utilisateurServices UtilisateurService[]
+
+  @@map("service")
+}
+
+model Utilisateur {
+  uuid         String      @id @default(uuid())
+  name         String   @db.VarChar(255)
+  email        String   @unique @db.VarChar(255)
+  password     String   @db.VarChar(255)
+  refreshToken String?  @db.VarChar(255)
+  status       String   @db.VarChar(10)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  utilisateurServices     UtilisateurService[]
+  affectations            Affectation[]
+  instructionsExecutees   Instruction[]        @relation("InstructionExecutant")
+  instructionsSupervisees Instruction[]        @relation("InstructionSuperviseur")
+  validatetions           Validatetion[]
+  notifications           Notification[]
+  auditLogs               AuditLog[]
+  dechargedDocuments      Document[]           @relation("DocumentDecharge")
+
+  @@map("utilisateur")
+}
+
+model UtilisateurService {
+  utilisateurUuid String
+  serviceUuid     String
+
+  utilisateur Utilisateur @relation(fields: [utilisateurUuid], references: [uuid])
+  service     Service     @relation(fields: [serviceUuid], references: [uuid])
+
+  @@id([utilisateurUuid, serviceUuid])
+  @@map("utilisateur_service")
+}
+
+
+model AuditLog {
+  uuid            String   @id @default(uuid())
+  utilisateurUuid String
+  actions         String   @db.VarChar(10)
+  datetime        DateTime
+  entityUuid      String?
+  entityType      String?  @db.VarChar(10)
+  createdAt       DateTime @default(now())
+
+  utilisateur Utilisateur @relation(fields: [utilisateurUuid], references: [uuid])
+
+  @@map("audit_log")
+}
+
+
+model Notification {
+  uuid            String    @id @default(uuid())
+  utilisateurUuid String
+  documentUuid    String?
+  type            String    @db.VarChar(20)
+  message         String?   @db.VarChar(255)
+  statut          String?   @db.VarChar(10)
+  canal           String?   @db.VarChar(10)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime? @updatedAt
+
+  utilisateur Utilisateur @relation(fields: [utilisateurUuid], references: [uuid])
+  document    Document?   @relation(fields: [documentUuid], references: [uuid])
+
+  @@map("notification")
+}
+
+model Document {
+  uuid               String    @id @default(uuid())
+  documentType       String    @db.VarChar(10)
+  type               String?   @db.VarChar(10)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  parentDocumentUuid String?
+  categoryUuid       String?
+  correspondantUuid  String?
+  // status/canal widened from VarChar(10): the BAD's actual vocabulary
+  // ("Enregistré", "En vérification", "Dépôt physique", ...) doesn't fit
+  // 10 chars — was an artifact of an earlier reasonable-default guess.
+  status             String?   @db.VarChar(30)
+  date               DateTime?
+  libelle            String?   @db.VarChar(100)
+  directory          Int?
+  reference           String?  @db.VarChar(30)
+  canal               String?  @db.VarChar(30)
+  nombreExemplaires  Int?
+  parentVersionUuid  String?
+  numeroVersion      Int?
+
+  // Courrier workflow fields (RG-COU-003..007) — see courrier.constants.ts
+  // for the status/action vocabulary these support.
+  direction              String?   @db.VarChar(10)
+  modificationAuthorized Boolean   @default(false)
+  transmittedAt          DateTime?
+  scanUrl                String?   @db.VarChar(255)
+  rejectionMotif         String?   @db.VarChar(255)
+  // Décharge (§10.2.5): recorded independently of the status state machine
+  // — it's proof of physical handover, not a lifecycle transition.
+  dechargeAt             DateTime?
+  dechargeByUuid         String?
+  dechargeCachet         Boolean?
+  dateReception          DateTime?
+
+  // Dossier workflow fields (RG-DOS-001..008) — see dossier.constants.ts.
+  // numero: auto-generated reference number, set once at creation.
+  // priorite: reuses Instruction.priorite's vocabulary/length.
+  // siteUuid: was flagged unresolved (⚠) — added as a direct FK, the same
+  // way `direction` was added for Courrier, rather than derived through
+  // Affectation (no dossier "owner" user concept exists to derive it from).
+  numero   String? @unique @db.VarChar(30)
+  priorite String? @db.VarChar(20)
+  siteUuid String?
+
+  parent   Document?  @relation("DocumentHierarchy", fields: [parentDocumentUuid], references: [uuid])
+  children Document[] @relation("DocumentHierarchy")
+
+  category      Category?      @relation(fields: [categoryUuid], references: [uuid])
+  correspondant Correspondant? @relation(fields: [correspondantUuid], references: [uuid])
+  dechargeBy    Utilisateur?   @relation("DocumentDecharge", fields: [dechargeByUuid], references: [uuid])
+  site          Site?          @relation(fields: [siteUuid], references: [uuid])
+
+  instructions     Instruction[]
+  notifications    Notification[]
+  instanceCircuits InstanceCircuit[]
+
+  @@map("document")
+}
+
+model Instruction {
+  uuid      String      @id @default(uuid())
+  utilisateurUuid  String
+  utilisateurUuid2 String?
+  documentUuid     String
+  libelle          String    @db.VarChar(100)
+  priorite         String?   @db.VarChar(20)
+  echeance         DateTime?
+  statut           String    @db.VarChar(30)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime? @updatedAt
+  dependsOnUuid    String?
+  validatetionUuid String?
+
+  document     Document      @relation(fields: [documentUuid], references: [uuid])
+  executant    Utilisateur   @relation("InstructionExecutant", fields: [utilisateurUuid], references: [uuid])
+  superviseur  Utilisateur?  @relation("InstructionSuperviseur", fields: [utilisateurUuid2], references: [uuid])
+  dependsOn    Instruction?  @relation("InstructionDependency", fields: [dependsOnUuid], references: [uuid])
+  dependents   Instruction[] @relation("InstructionDependency")
+  validatetion Validatetion? @relation(fields: [validatetionUuid], references: [uuid])
+
+  @@map("instruction")
+}
+
+model Category {
+  uuid      String      @id @default(uuid())
+  libelle           String?   @db.VarChar(100)
+  type              String?   @db.VarChar(10)
+  dureeConservation Int?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime? @updatedAt
+
+  documents Document[]
+
+  @@map("category")
+}
+
+model Correspondant {
+  uuid      String      @id @default(uuid())
+  noms      String?  @db.VarChar(100)
+  type      String?  @db.VarChar(10)
+  ville     String?  @db.VarChar(100)
+  status    String?  @db.VarChar(10)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents        Document[]
+  instanceCircuits InstanceCircuit[]
+
+  @@map("correspondant")
+}
+
+model Validatetion {
+  uuid      String      @id @default(uuid())
+  decision            String?   @db.VarChar(255)
+  instanceCircuitUuid String?
+  motif               String?   @db.VarChar(255)
+  dateDecision        DateTime?
+  utilisateurUuid     String
+
+  utilisateur     Utilisateur       @relation(fields: [utilisateurUuid], references: [uuid])
+  instanceCircuit InstanceCircuit?  @relation(fields: [instanceCircuitUuid], references: [uuid])
+  instructions    Instruction[]
+
+  @@map("validatetion")
+}
+
+
+model Site {
+  uuid      String      @id @default(uuid())
+  nom       String   @db.VarChar(100)
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  affectations Affectation[]
+  documents    Document[]
+
+  @@map("site")
+}
+
+model Affectation {
+  uuid      String      @id @default(uuid())
+  utilisateurUuid String
+  siteUuid        String
+
+  utilisateur Utilisateur @relation(fields: [utilisateurUuid], references: [uuid])
+  site        Site        @relation(fields: [siteUuid], references: [uuid])
+  roles       Role[]
+
+  @@map("affectation")
+}
+
+model Permission {
+  uuid      String      @id @default(uuid())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
+  noms String?   @db.VarChar(10)
+
+  rolePermissions RolePermission[]
+
+  @@map("permission")
+}
+
+model Role {
+  uuid      String      @id @default(uuid())
+  affectationUuid  String
+  etapeCircuitUuid String?
+  // Role had no name/label field at all — added for the RBAC skeleton so
+  // roles are addressable (e.g. seeding/checking "Admin").
+  nom              String? @db.VarChar(50)
+
+  affectation     Affectation      @relation(fields: [affectationUuid], references: [uuid])
+  rolePermissions RolePermission[]
+  etapesCircuit   EtapeCircuit[]   
+  etapeCircuit    EtapeCircuit?    @relation("RoleEtapeCircuitLegacy", fields: [etapeCircuitUuid], references: [uuid])
+  circuits        Circuit[]
+
+  @@map("role")
+}
+
+model RolePermission {
+  permissionUuid String
+  roleUuid       String
+
+  permission Permission @relation(fields: [permissionUuid], references: [uuid])
+  role       Role       @relation(fields: [roleUuid], references: [uuid])
+
+  @@id([permissionUuid, roleUuid])
+  @@map("role_permission")
+}
+
+
+model Circuit {
+  uuid      String      @id @default(uuid())
+  roleUuid        String?
+  nom             String? @db.VarChar(100)
+  typeDossierUuid Int?
+
+  role             Role?             @relation(fields: [roleUuid], references: [uuid])
+  etapesCircuit    EtapeCircuit[]
+  instanceCircuits InstanceCircuit[]
+
+  @@map("circuit")
+}
+
+model EtapeCircuit {
+  uuid      String      @id @default(uuid())
+  circuitUuid            String
+  order                  Int
+  typeAction             String? @db.VarChar(100)
+  delaiMaxH              Int?
+  parentEtapeCircuitUuid String?
+  docs                   String? @db.VarChar(10)
+  state                  String? @db.VarChar(10)
+  condition              String? @db.VarChar(255)
+  roleUuid               String?
+
+  circuit                      Circuit                       @relation(fields: [circuitUuid], references: [uuid])
+  parentEtape                  EtapeCircuit?                 @relation("EtapeCircuitChain", fields: [parentEtapeCircuitUuid], references: [uuid])
+  childEtapes                  EtapeCircuit[]                @relation("EtapeCircuitChain")
+  role                         Role?                         @relation(fields: [roleUuid], references: [uuid])
+  roleLegacy                   Role[]                        @relation("RoleEtapeCircuitLegacy")
+  instancesCurrent             InstanceCircuit[]
+  etapeCircuitInstanceCircuits EtapeCircuitInstanceCircuit[]
+
+  @@map("etape_circuit")
+}
+
+model InstanceCircuit {
+  uuid      String      @id @default(uuid())
+  documentUuid      String
+  circuitUuid       String
+  etapeCircuitUuid  String
+  correspondantUuid String?
+
+  document                     Document                      @relation(fields: [documentUuid], references: [uuid])
+  circuit                      Circuit                       @relation(fields: [circuitUuid], references: [uuid])
+  etapeCourante                EtapeCircuit                  @relation(fields: [etapeCircuitUuid], references: [uuid])
+  correspondant                Correspondant?                @relation(fields: [correspondantUuid], references: [uuid])
+  etapesHistorique             EtapeCircuitInstanceCircuit[]
+  validatetions                Validatetion[]
+
+  @@map("instance_circuit")
+}
+
+model EtapeCircuitInstanceCircuit {
+  uuid      String      @id @default(uuid())
+  etapeCircuitUuid    String
+  instanceCircuitUuid String
+
+  etapeCircuit    EtapeCircuit    @relation(fields: [etapeCircuitUuid], references: [uuid])
+  instanceCircuit InstanceCircuit @relation(fields: [instanceCircuitUuid], references: [uuid])
+
+  @@map("etape_circuit_instance_circuit")
+}
