@@ -55,7 +55,6 @@ model User {
 
 enum UserStatus {
   ACTIF
-  INACTIF
   BLOCKED
 }
 
@@ -72,11 +71,9 @@ enum UserInstructionsStatus {
 }
 
 enum NotificationStatus {
-  PENDING
-  SENT
-  DELIVERED
+  NOT_READ
   READ
-  FAILED
+  ARCHIVED
 }
 
 model UserInstructions {
@@ -125,10 +122,9 @@ model AuditLog {
 model UserNotification {
   userId         String
   notificationId String
-  isRead          Boolean @default(false)
-
-  user         User         @relation(fields: [userId], references: [id])
-  notification Notification @relation(fields: [notificationId], references: [id])
+  statut         NotificationStatus
+  user           User             @relation(fields: [userId], references: [id])
+  notification   Notification     @relation(fields: [notificationId], references: [id])
 
   @@id([userId, notificationId])
   @@map("user_notification")
@@ -145,7 +141,6 @@ model Notification {
   documentId String?
   type       String  @db.VarChar(20)
   message    String?
-  statut     NotificationStatus
   canal      CanalType
 
   document          Document?          @relation(fields: [documentId], references: [id])
@@ -159,26 +154,20 @@ model Notification {
 
 
 enum DocumentStatus {
-  PENDING
-  SENT
-  DELIVERED
-  READ
-  FAILED
+  ARCHIVED
+  ACTIVE
+  REJECTED
 }
 
 model Document {
   id               String   @id @default(uuid())
-  documentType     String   @db.VarChar(10)
-  type             String?  @db.VarChar(10)
+  documentType     DocumentType
+  isDocument       Boolean @default(true)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
-  parentDocumentId String?
+  parentId String?
   categoryId       String?
   correspondantId  String?
-
-  // status/canal widened from VarChar(10): the BAD's actual vocabulary
-  // ("Enregistré", "En vérification", "Dépôt physique", ...) doesn't fit
-  // 10 chars — was an artifact of an earlier reasonable-default guess.
   status    DocumentStatus
   date      DateTime?
   label   String?   @db.VarChar(100)
@@ -188,9 +177,8 @@ model Document {
   copies    Int?
   version   Int?
 
-  // Courrier workflow fields (RG-COU-003..007) — see courrier.constants.ts
-  // for the status/action vocabulary these support.
-  direction              String?   @db.VarChar(10)
+  // ENTRANT OU SORTANT
+  direction              String?   @db.VarChar(10) 
   modificationAuthorized Boolean   @default(false)
   transmittedOn          DateTime?
   scanUrl                String?
@@ -201,18 +189,10 @@ model Document {
   dischargedById   String?
   dischargedStamp Boolean?
   receivedAt       DateTime?
-
-  // Dossier workflow fields (RG-DOS-001..008) — see dossier.constants.ts.
-  // numero: auto-generated reference number, set once at creation.
-  // priorite: reuses Instruction.priorite's vocabulary/length.
-  // siteId: was flagged unresolved (⚠) — added as a direct FK, the same
-  // way `direction` was added for Courrier, rather than derived through
-  // Assignment (no dossier "owner" user concept exists to derive it from).
   number   String? @unique @db.VarChar(30)
-  priority String? @db.VarChar(20)
   siteId   String?
 
-  parent   Document?  @relation("DocumentHierarchy", fields: [parentDocumentId], references: [id])
+  parent   Document?  @relation("DocumentHierarchy", fields: [parentId], references: [id])
   children Document[] @relation("DocumentHierarchy")
 
   category      Category?      @relation(fields: [categoryId], references: [id])
@@ -228,7 +208,6 @@ model Document {
 }
 
 enum InstructionStatus {
-  PENDING
   EXECUTED
   CANCELLED
 }
@@ -266,7 +245,6 @@ model Category {
   id                String    @id @default(uuid())
   label           String?   @db.VarChar(100)
   type              String?   @db.VarChar(10)
-  dureeConservation Int?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime? @updatedAt
 
@@ -279,8 +257,7 @@ model Correspondant {
   id        String   @id @default(uuid())
   name     String?  @db.VarChar(100)
   type      String?  @db.VarChar(10)
-  town     String?  @db.VarChar(100)
-  status    String?  @db.VarChar(10)
+  // town     String?  @db.VarChar(100)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -307,7 +284,7 @@ model Validation {
 
 enum SiteStatus {
   ACTIVE
-  INACTIVE
+  BLOCKED
 }
 
 model Site {
@@ -346,16 +323,11 @@ model Permission {
   @@map("permission")
 }
 
-enum RoleStatus {
-  ACTIVE
-  INACTIVE
-}
 
 model Role {
   id             String  @id @default(uuid())
   assignmentId   String
   circuitStepId String?
-  status         RoleStatus
   name           String? @db.VarChar(50)
 
   assignment      Assignment       @relation(fields: [assignmentId], references: [id])
@@ -391,15 +363,22 @@ model Circuit {
   @@map("circuit")
 }
 
+
+enum CircuitStateStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+
 model CircuitStep {
   id                   String  @id @default(uuid())
   circuitId            String
   order                Int
   actionType           String? @db.VarChar(100)
-  maxDelayHours        Int?
   parentCircuitStepId String?
-  docs                 String? @db.VarChar(10)
-  state                String? @db.VarChar(10)
+  state                CircuitStateStatus
   condition            String?
   roleId               String?
 
@@ -435,7 +414,6 @@ model CircuitStepInstanceCircuit {
   id                String @id @default(uuid())
   circuitStepId    String
   circuitInstanceId String
-
   circuitStep    CircuitStep    @relation(fields: [circuitStepId], references: [id])
   circuitInstance CircuitInstance @relation(fields: [circuitInstanceId], references: [id])
 
