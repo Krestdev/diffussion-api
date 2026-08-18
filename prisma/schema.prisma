@@ -181,7 +181,7 @@ model Document {
   // 10 chars — was an artifact of an earlier reasonable-default guess.
   status    DocumentStatus
   date      DateTime?
-  libelle   String?   @db.VarChar(100)
+  label   String?   @db.VarChar(100)
   directory Int?
   reference String?   @db.VarChar(30)
   canal     String?   @db.VarChar(30)
@@ -244,9 +244,9 @@ model Instruction {
   userId       String
   userId2      String?
   documentId   String
-  libelle      String    @db.VarChar(100)
+  label      String    @db.VarChar(100)
   priorite     InstructionPriorite
-  echeance     DateTime?
+  dateline     DateTime?
   statut       InstructionStatus
   createdAt    DateTime  @default(now())
   updatedAt    DateTime? @updatedAt
@@ -264,7 +264,7 @@ model Instruction {
 
 model Category {
   id                String    @id @default(uuid())
-  libelle           String?   @db.VarChar(100)
+  label           String?   @db.VarChar(100)
   type              String?   @db.VarChar(10)
   dureeConservation Int?
   createdAt         DateTime  @default(now())
@@ -279,7 +279,7 @@ model Correspondant {
   id        String   @id @default(uuid())
   name     String?  @db.VarChar(100)
   type      String?  @db.VarChar(10)
-  ville     String?  @db.VarChar(100)
+  town     String?  @db.VarChar(100)
   status    String?  @db.VarChar(10)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
