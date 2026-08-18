@@ -12,137 +12,185 @@ datasource db {
   provider = "postgresql"
 }
 
-
 model Service {
-  uuid      String      @id @default(uuid())
+  id        String   @id @default(uuid())
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  nom       String   @db.VarChar(100)
+  name      String   @db.VarChar(100)
 
-  utilisateurServices UtilisateurService[]
+  userServices UserService[]
 
   @@map("service")
 }
 
-model Utilisateur {
-  uuid         String      @id @default(uuid())
-  name         String   @db.VarChar(255)
-  email        String   @unique @db.VarChar(255)
-  password     String   @db.VarChar(255)
-  refreshToken String?  @db.VarChar(255)
-  status       String   @db.VarChar(10)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+model User {
+  // base attributes
+  id           String  @id @default(uuid())
+  name         String
+  email        String  @unique
+  password     String
+  refreshToken String?
 
-  utilisateurServices     UtilisateurService[]
-  affectations            Affectation[]
-  instructionsExecutees   Instruction[]        @relation("InstructionExecutant")
-  instructionsSupervisees Instruction[]        @relation("InstructionSuperviseur")
-  validatetions           Validatetion[]
-  notifications           Notification[]
-  auditLogs               AuditLog[]
-  dechargedDocuments      Document[]           @relation("DocumentDecharge")
+  // state attributes
+  status      UserStatus
+  isVerified  Boolean
+  isConnected Boolean
 
-  @@map("utilisateur")
+  // connected attributes
+  userServices       UserService[]
+  assignments        Assignment[]
+  validations        Validation[]
+  auditLogs          AuditLog[]
+  dechargedDocuments Document[]    @relation("DocumentDecharge")
+
+  // log trace attributes
+  lastConnexion     DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  userInstructions  UserInstructions[]
+  userNotifications UserNotification[]
+
+  @@map("user")
 }
 
-model UtilisateurService {
-  utilisateurUuid String
-  serviceUuid     String
-
-  utilisateur Utilisateur @relation(fields: [utilisateurUuid], references: [uuid])
-  service     Service     @relation(fields: [serviceUuid], references: [uuid])
-
-  @@id([utilisateurUuid, serviceUuid])
-  @@map("utilisateur_service")
+enum UserStatus {
+  ACTIF
+  INACTIF
+  BLOCKED
 }
 
+enum DocumentType {
+  DOSSIER
+  COURRIER
+  FILE
+}
+
+model UserInstructions {
+  userId        String
+  instructionId String
+
+  user        User        @relation(fields: [userId], references: [id])
+  instruction Instruction @relation(fields: [instructionId], references: [id])
+
+  action UserInstructionsActions
+
+  @@id([userId, instructionId])
+  @@map("user_instructions")
+}
+
+enum UserInstructionsActions {
+  EXECUTANT
+  SUPERVISEUR
+}
+
+model UserService {
+  userId    String
+  serviceId String
+
+  user    User    @relation(fields: [userId], references: [id])
+  service Service @relation(fields: [serviceId], references: [id])
+
+  @@id([userId, serviceId])
+  @@map("user_service")
+}
 
 model AuditLog {
-  uuid            String   @id @default(uuid())
-  utilisateurUuid String
-  actions         String   @db.VarChar(10)
-  datetime        DateTime
-  entityUuid      String?
-  entityType      String?  @db.VarChar(10)
-  createdAt       DateTime @default(now())
+  id         String   @id @default(uuid())
+  userId     String
+  actions    String   @db.VarChar(10)
+  datetime   DateTime
+  entityId   String?
+  entityType String?  @db.VarChar(10)
+  createdAt  DateTime @default(now())
 
-  utilisateur Utilisateur @relation(fields: [utilisateurUuid], references: [uuid])
+  user User @relation(fields: [userId], references: [id])
 
   @@map("audit_log")
 }
 
+model UserNotification {
+  userId         String
+  notificationId String
+  isRed          Boolean @default(false)
+
+  user         User         @relation(fields: [userId], references: [id])
+  notification Notification @relation(fields: [notificationId], references: [id])
+
+  @@id([userId, notificationId])
+  @@map("user_notification")
+}
 
 model Notification {
-  uuid            String    @id @default(uuid())
-  utilisateurUuid String
-  documentUuid    String?
-  type            String    @db.VarChar(20)
-  message         String?   @db.VarChar(255)
-  statut          String?   @db.VarChar(10)
-  canal           String?   @db.VarChar(10)
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime? @updatedAt
+  id         String  @id @default(uuid())
+  userId     String
+  documentId String?
+  type       String  @db.VarChar(20)
+  message    String?
+  statut     String? @db.VarChar(10)
+  canal      String? @db.VarChar(10)
 
-  utilisateur Utilisateur @relation(fields: [utilisateurUuid], references: [uuid])
-  document    Document?   @relation(fields: [documentUuid], references: [uuid])
+  document          Document?          @relation(fields: [documentId], references: [id])
+  userNotifications UserNotification[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
 
   @@map("notification")
 }
 
 model Document {
-  uuid               String    @id @default(uuid())
-  documentType       String    @db.VarChar(10)
-  type               String?   @db.VarChar(10)
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
-  parentDocumentUuid String?
-  categoryUuid       String?
-  correspondantUuid  String?
+  id               String   @id @default(uuid())
+  documentType     String   @db.VarChar(10)
+  type             String?  @db.VarChar(10)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  parentDocumentId String?
+  categoryId       String?
+  correspondantId  String?
+
   // status/canal widened from VarChar(10): the BAD's actual vocabulary
   // ("Enregistré", "En vérification", "Dépôt physique", ...) doesn't fit
   // 10 chars — was an artifact of an earlier reasonable-default guess.
-  status             String?   @db.VarChar(30)
-  date               DateTime?
-  libelle            String?   @db.VarChar(100)
-  directory          Int?
-  reference           String?  @db.VarChar(30)
-  canal               String?  @db.VarChar(30)
-  nombreExemplaires  Int?
-  parentVersionUuid  String?
-  numeroVersion      Int?
+  status    String?   @db.VarChar(30)
+  date      DateTime?
+  libelle   String?   @db.VarChar(100)
+  directory Int?
+  reference String?   @db.VarChar(30)
+  canal     String?   @db.VarChar(30)
+  copies    Int?
+  Version   Int?
 
   // Courrier workflow fields (RG-COU-003..007) — see courrier.constants.ts
   // for the status/action vocabulary these support.
   direction              String?   @db.VarChar(10)
   modificationAuthorized Boolean   @default(false)
-  transmittedAt          DateTime?
-  scanUrl                String?   @db.VarChar(255)
-  rejectionMotif         String?   @db.VarChar(255)
+  transmittedOn          DateTime?
+  scanUrl                String?
+
   // Décharge (§10.2.5): recorded independently of the status state machine
   // — it's proof of physical handover, not a lifecycle transition.
-  dechargeAt             DateTime?
-  dechargeByUuid         String?
-  dechargeCachet         Boolean?
-  dateReception          DateTime?
+  dechargeAt     DateTime?
+  dechargeById   String?
+  dechargeCachet Boolean?
+  dateReception  DateTime?
 
   // Dossier workflow fields (RG-DOS-001..008) — see dossier.constants.ts.
   // numero: auto-generated reference number, set once at creation.
   // priorite: reuses Instruction.priorite's vocabulary/length.
-  // siteUuid: was flagged unresolved (⚠) — added as a direct FK, the same
+  // siteId: was flagged unresolved (⚠) — added as a direct FK, the same
   // way `direction` was added for Courrier, rather than derived through
-  // Affectation (no dossier "owner" user concept exists to derive it from).
+  // Assignment (no dossier "owner" user concept exists to derive it from).
   numero   String? @unique @db.VarChar(30)
   priorite String? @db.VarChar(20)
-  siteUuid String?
+  siteId   String?
 
-  parent   Document?  @relation("DocumentHierarchy", fields: [parentDocumentUuid], references: [uuid])
+  parent   Document?  @relation("DocumentHierarchy", fields: [parentDocumentId], references: [id])
   children Document[] @relation("DocumentHierarchy")
 
-  category      Category?      @relation(fields: [categoryUuid], references: [uuid])
-  correspondant Correspondant? @relation(fields: [correspondantUuid], references: [uuid])
-  dechargeBy    Utilisateur?   @relation("DocumentDecharge", fields: [dechargeByUuid], references: [uuid])
-  site          Site?          @relation(fields: [siteUuid], references: [uuid])
+  category      Category?      @relation(fields: [categoryId], references: [id])
+  correspondant Correspondant? @relation(fields: [correspondantId], references: [id])
+  dechargeBy    User?          @relation("DocumentDecharge", fields: [dechargeById], references: [id])
+  site          Site?          @relation(fields: [siteId], references: [id])
 
   instructions     Instruction[]
   notifications    Notification[]
@@ -152,31 +200,30 @@ model Document {
 }
 
 model Instruction {
-  uuid      String      @id @default(uuid())
-  utilisateurUuid  String
-  utilisateurUuid2 String?
-  documentUuid     String
-  libelle          String    @db.VarChar(100)
-  priorite         String?   @db.VarChar(20)
-  echeance         DateTime?
-  statut           String    @db.VarChar(30)
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime? @updatedAt
-  dependsOnUuid    String?
-  validatetionUuid String?
+  id           String    @id @default(uuid())
+  userId       String
+  userId2      String?
+  documentId   String
+  libelle      String    @db.VarChar(100)
+  priorite     String?   @db.VarChar(20)
+  echeance     DateTime?
+  statut       String    @db.VarChar(30)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime? @updatedAt
+  parentId     String?
+  validationId String?
 
-  document     Document      @relation(fields: [documentUuid], references: [uuid])
-  executant    Utilisateur   @relation("InstructionExecutant", fields: [utilisateurUuid], references: [uuid])
-  superviseur  Utilisateur?  @relation("InstructionSuperviseur", fields: [utilisateurUuid2], references: [uuid])
-  dependsOn    Instruction?  @relation("InstructionDependency", fields: [dependsOnUuid], references: [uuid])
-  dependents   Instruction[] @relation("InstructionDependency")
-  validatetion Validatetion? @relation(fields: [validatetionUuid], references: [uuid])
+  document         Document           @relation(fields: [documentId], references: [id])
+  parent           Instruction?       @relation("InstructionDependency", fields: [parentId], references: [id])
+  children         Instruction[]      @relation("InstructionDependency")
+  validation       Validation?        @relation(fields: [validationId], references: [id])
+  userInstructions UserInstructions[]
 
   @@map("instruction")
 }
 
 model Category {
-  uuid      String      @id @default(uuid())
+  id                String    @id @default(uuid())
   libelle           String?   @db.VarChar(100)
   type              String?   @db.VarChar(10)
   dureeConservation Int?
@@ -189,8 +236,8 @@ model Category {
 }
 
 model Correspondant {
-  uuid      String      @id @default(uuid())
-  noms      String?  @db.VarChar(100)
+  id        String   @id @default(uuid())
+  names     String?  @db.VarChar(100)
   type      String?  @db.VarChar(10)
   ville     String?  @db.VarChar(100)
   status    String?  @db.VarChar(10)
@@ -203,51 +250,50 @@ model Correspondant {
   @@map("correspondant")
 }
 
-model Validatetion {
-  uuid      String      @id @default(uuid())
-  decision            String?   @db.VarChar(255)
-  instanceCircuitUuid String?
-  motif               String?   @db.VarChar(255)
-  dateDecision        DateTime?
-  utilisateurUuid     String
+model Validation {
+  id                String    @id @default(uuid())
+  decision          String?
+  instanceCircuitId String?
+  motif             String?
+  dateDecision      DateTime?
+  userId            String
 
-  utilisateur     Utilisateur       @relation(fields: [utilisateurUuid], references: [uuid])
-  instanceCircuit InstanceCircuit?  @relation(fields: [instanceCircuitUuid], references: [uuid])
+  user            User             @relation(fields: [userId], references: [id])
+  instanceCircuit InstanceCircuit? @relation(fields: [instanceCircuitId], references: [id])
   instructions    Instruction[]
 
-  @@map("validatetion")
+  @@map("validation")
 }
 
-
 model Site {
-  uuid      String      @id @default(uuid())
-  nom       String   @db.VarChar(100)
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(100)
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
 
-  affectations Affectation[]
-  documents    Document[]
+  assignments Assignment[]
+  documents   Document[]
 
   @@map("site")
 }
 
-model Affectation {
-  uuid      String      @id @default(uuid())
-  utilisateurUuid String
-  siteUuid        String
+model Assignment {
+  id     String @id @default(uuid())
+  userId String
+  siteId String
 
-  utilisateur Utilisateur @relation(fields: [utilisateurUuid], references: [uuid])
-  site        Site        @relation(fields: [siteUuid], references: [uuid])
-  roles       Role[]
+  user  User   @relation(fields: [userId], references: [id])
+  site  Site   @relation(fields: [siteId], references: [id])
+  roles Role[]
 
-  @@map("affectation")
+  @@map("assignment")
 }
 
 model Permission {
-  uuid      String      @id @default(uuid())
+  id        String    @id @default(uuid())
   createdAt DateTime  @default(now())
   updatedAt DateTime? @updatedAt
-  noms String?   @db.VarChar(10)
+  names     String?   @db.VarChar(10)
 
   rolePermissions RolePermission[]
 
@@ -255,41 +301,40 @@ model Permission {
 }
 
 model Role {
-  uuid      String      @id @default(uuid())
-  affectationUuid  String
-  etapeCircuitUuid String?
+  id             String  @id @default(uuid())
+  assignmentId   String
+  etapeCircuitId String?
   // Role had no name/label field at all — added for the RBAC skeleton so
   // roles are addressable (e.g. seeding/checking "Admin").
-  nom              String? @db.VarChar(50)
+  name           String? @db.VarChar(50)
 
-  affectation     Affectation      @relation(fields: [affectationUuid], references: [uuid])
+  assignment      Assignment       @relation(fields: [assignmentId], references: [id])
   rolePermissions RolePermission[]
-  etapesCircuit   EtapeCircuit[]   
-  etapeCircuit    EtapeCircuit?    @relation("RoleEtapeCircuitLegacy", fields: [etapeCircuitUuid], references: [uuid])
+  etapesCircuit   EtapeCircuit[]
+  etapeCircuit    EtapeCircuit?    @relation("RoleEtapeCircuitLegacy", fields: [etapeCircuitId], references: [id])
   circuits        Circuit[]
 
   @@map("role")
 }
 
 model RolePermission {
-  permissionUuid String
-  roleUuid       String
+  permissionId String
+  roleId       String
 
-  permission Permission @relation(fields: [permissionUuid], references: [uuid])
-  role       Role       @relation(fields: [roleUuid], references: [uuid])
+  permission Permission @relation(fields: [permissionId], references: [id])
+  role       Role       @relation(fields: [roleId], references: [id])
 
-  @@id([permissionUuid, roleUuid])
+  @@id([permissionId, roleId])
   @@map("role_permission")
 }
 
-
 model Circuit {
-  uuid      String      @id @default(uuid())
-  roleUuid        String?
-  nom             String? @db.VarChar(100)
-  typeDossierUuid Int?
+  id            String  @id @default(uuid())
+  roleId        String?
+  name          String? @db.VarChar(100)
+  typeDossierId Int?
 
-  role             Role?             @relation(fields: [roleUuid], references: [uuid])
+  role             Role?             @relation(fields: [roleId], references: [id])
   etapesCircuit    EtapeCircuit[]
   instanceCircuits InstanceCircuit[]
 
@@ -297,21 +342,21 @@ model Circuit {
 }
 
 model EtapeCircuit {
-  uuid      String      @id @default(uuid())
-  circuitUuid            String
-  order                  Int
-  typeAction             String? @db.VarChar(100)
-  delaiMaxH              Int?
-  parentEtapeCircuitUuid String?
-  docs                   String? @db.VarChar(10)
-  state                  String? @db.VarChar(10)
-  condition              String? @db.VarChar(255)
-  roleUuid               String?
+  id                   String  @id @default(uuid())
+  circuitId            String
+  order                Int
+  typeAction           String? @db.VarChar(100)
+  delaiMaxH            Int?
+  parentEtapeCircuitId String?
+  docs                 String? @db.VarChar(10)
+  state                String? @db.VarChar(10)
+  condition            String?
+  roleId               String?
 
-  circuit                      Circuit                       @relation(fields: [circuitUuid], references: [uuid])
-  parentEtape                  EtapeCircuit?                 @relation("EtapeCircuitChain", fields: [parentEtapeCircuitUuid], references: [uuid])
+  circuit                      Circuit                       @relation(fields: [circuitId], references: [id])
+  parentEtape                  EtapeCircuit?                 @relation("EtapeCircuitChain", fields: [parentEtapeCircuitId], references: [id])
   childEtapes                  EtapeCircuit[]                @relation("EtapeCircuitChain")
-  role                         Role?                         @relation(fields: [roleUuid], references: [uuid])
+  role                         Role?                         @relation(fields: [roleId], references: [id])
   roleLegacy                   Role[]                        @relation("RoleEtapeCircuitLegacy")
   instancesCurrent             InstanceCircuit[]
   etapeCircuitInstanceCircuits EtapeCircuitInstanceCircuit[]
@@ -320,29 +365,29 @@ model EtapeCircuit {
 }
 
 model InstanceCircuit {
-  uuid      String      @id @default(uuid())
-  documentUuid      String
-  circuitUuid       String
-  etapeCircuitUuid  String
-  correspondantUuid String?
+  id              String  @id @default(uuid())
+  documentId      String
+  circuitId       String
+  etapeCircuitId  String
+  correspondantId String?
 
-  document                     Document                      @relation(fields: [documentUuid], references: [uuid])
-  circuit                      Circuit                       @relation(fields: [circuitUuid], references: [uuid])
-  etapeCourante                EtapeCircuit                  @relation(fields: [etapeCircuitUuid], references: [uuid])
-  correspondant                Correspondant?                @relation(fields: [correspondantUuid], references: [uuid])
-  etapesHistorique             EtapeCircuitInstanceCircuit[]
-  validatetions                Validatetion[]
+  document         Document                      @relation(fields: [documentId], references: [id])
+  circuit          Circuit                       @relation(fields: [circuitId], references: [id])
+  etapeCourante    EtapeCircuit                  @relation(fields: [etapeCircuitId], references: [id])
+  correspondant    Correspondant?                @relation(fields: [correspondantId], references: [id])
+  etapesHistorique EtapeCircuitInstanceCircuit[]
+  validations      Validation[]
 
   @@map("instance_circuit")
 }
 
 model EtapeCircuitInstanceCircuit {
-  uuid      String      @id @default(uuid())
-  etapeCircuitUuid    String
-  instanceCircuitUuid String
+  id                String @id @default(uuid())
+  etapeCircuitId    String
+  instanceCircuitId String
 
-  etapeCircuit    EtapeCircuit    @relation(fields: [etapeCircuitUuid], references: [uuid])
-  instanceCircuit InstanceCircuit @relation(fields: [instanceCircuitUuid], references: [uuid])
+  etapeCircuit    EtapeCircuit    @relation(fields: [etapeCircuitId], references: [id])
+  instanceCircuit InstanceCircuit @relation(fields: [instanceCircuitId], references: [id])
 
   @@map("etape_circuit_instance_circuit")
 }
