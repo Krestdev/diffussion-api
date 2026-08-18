@@ -12,18 +12,15 @@ export class CreateCorrespondantDto implements CorrespondantCreateInput {
   @ApiPropertyOptional({ example: 'institution' })
   @IsOptional()
   @IsString()
-  @MaxLength(10)
   type?: string;
 
   @ApiPropertyOptional({ example: 'Yaoundé' })
   @IsOptional()
   @IsString()
-  @MaxLength(100)
   ville?: string;
 
   @ApiPropertyOptional({ example: 'actif' })
   @IsOptional()
   @IsString()
-  @MaxLength(10)
   status?: string;
 }

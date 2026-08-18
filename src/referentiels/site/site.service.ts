@@ -17,11 +17,11 @@ export class SiteService {
   }
 
   findAll() {
-    return this.database.site.findMany({ orderBy: { nom: 'asc' } });
+    return this.database.site.findMany({ orderBy: { name: 'asc' } });
   }
 
   async findOne(uuid: string) {
-    const site = await this.database.site.findUnique({ where: { uuid } });
+    const site = await this.database.site.findUnique({ where: { id: uuid } });
     if (!site) {
       throw new NotFoundException(`Site ${uuid} not found`);
     }
@@ -30,13 +30,13 @@ export class SiteService {
 
   async update(uuid: string, dto: UpdateSiteDto) {
     await this.findOne(uuid);
-    return this.database.site.update({ where: { uuid }, data: dto });
+    return this.database.site.update({ where: { id: uuid }, data: dto });
   }
 
   async remove(uuid: string) {
     await this.findOne(uuid);
     try {
-      await this.database.site.delete({ where: { uuid } });
+      await this.database.site.delete({ where: { id: uuid } });
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&

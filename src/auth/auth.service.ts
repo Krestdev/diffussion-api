@@ -9,6 +9,7 @@ import { DatabaseService } from '../database/database.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { AuthTokens, JwtPayload } from './types/jwt-payload.type';
+import { UserStatus } from 'generated/prisma/enums';
 
 const SALT_ROUNDS = 10;
 
@@ -20,7 +21,7 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto): Promise<AuthTokens> {
-    const existing = await this.database.utilisateur.findUnique({
+    const existing = await this.database.user.findUnique({
       where: { email: dto.email },
     });
     if (existing) {
@@ -28,20 +29,20 @@ export class AuthService {
     }
 
     const hashedPassword = await bcrypt.hash(dto.password, SALT_ROUNDS);
-    const user = await this.database.utilisateur.create({
+    const user = await this.database.user.create({
       data: {
         name: dto.name,
         email: dto.email,
         password: hashedPassword,
-        status: 'active',
+        status: UserStatus.ACTIF,
       },
     });
 
-    return this.issueTokens(user.uuid, user.email);
+    return this.issueTokens(user.id, user.email);
   }
 
   async login(dto: LoginDto): Promise<AuthTokens> {
-    const user = await this.database.utilisateur.findUnique({
+    const user = await this.database.user.findUnique({
       where: { email: dto.email },
     });
     if (!user) {
@@ -53,15 +54,15 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    return this.issueTokens(user.uuid, user.email);
+    return this.issueTokens(user.id, user.email);
   }
 
   async refreshTokens(
     userUuid: string,
     refreshToken: string,
   ): Promise<AuthTokens> {
-    const user = await this.database.utilisateur.findUnique({
-      where: { uuid: userUuid },
+    const user = await this.database.user.findUnique({
+      where: { id: userUuid },
     });
     if (!user?.refreshToken) {
       throw new UnauthorizedException('Access denied');
@@ -75,12 +76,12 @@ export class AuthService {
       throw new UnauthorizedException('Access denied');
     }
 
-    return this.issueTokens(user.uuid, user.email);
+    return this.issueTokens(user.id, user.email);
   }
 
   async logout(userUuid: string): Promise<void> {
-    await this.database.utilisateur.update({
-      where: { uuid: userUuid },
+    await this.database.user.update({
+      where: { id: userUuid },
       data: { refreshToken: null },
     });
   }
@@ -128,8 +129,8 @@ export class AuthService {
     ]);
 
     const hashedRefreshToken = await bcrypt.hash(refreshToken, SALT_ROUNDS);
-    await this.database.utilisateur.update({
-      where: { uuid: userUuid },
+    await this.database.user.update({
+      where: { id: userUuid },
       data: { refreshToken: hashedRefreshToken },
     });
 

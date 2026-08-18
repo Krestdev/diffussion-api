@@ -10,8 +10,8 @@ export class RbacService {
   // and returns the deduped set of permission codes the user holds across
   // every affectation/role they have.
   async getPermissionCodes(utilisateurUuid: string): Promise<string[]> {
-    const affectations = await this.database.affectation.findMany({
-      where: { utilisateurUuid },
+    const affectations = await this.database.assignment.findMany({
+      where: { userId: utilisateurUuid },
       include: {
         roles: {
           include: {
@@ -27,8 +27,8 @@ export class RbacService {
     for (const affectation of affectations) {
       for (const role of affectation.roles) {
         for (const rolePermission of role.rolePermissions) {
-          if (rolePermission.permission.noms) {
-            codes.add(rolePermission.permission.noms);
+          if (rolePermission.permission.name) {
+            codes.add(rolePermission.permission.name);
           }
         }
       }

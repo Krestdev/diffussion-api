@@ -22,7 +22,7 @@ export class CorrespondantService {
 
     return this.database.correspondant.findMany({
       where,
-      orderBy: { noms: 'asc' },
+      orderBy: { name: 'asc' },
       skip: query.skip ?? 0,
       take: query.take ?? 20,
     });
@@ -30,7 +30,7 @@ export class CorrespondantService {
 
   async findOne(uuid: string) {
     const correspondant = await this.database.correspondant.findUnique({
-      where: { uuid },
+      where: { id: uuid },
     });
     if (!correspondant) {
       throw new NotFoundException(`Correspondant ${uuid} not found`);
@@ -41,13 +41,13 @@ export class CorrespondantService {
   async update(uuid: string, dto: UpdateCorrespondantDto) {
     await this.findOne(uuid);
     return this.database.correspondant.update({
-      where: { uuid },
+      where: { id: uuid },
       data: dto,
     });
   }
 
   async remove(uuid: string) {
     await this.findOne(uuid);
-    await this.database.correspondant.delete({ where: { uuid } });
+    await this.database.correspondant.delete({ where: { id: uuid } });
   }
 }

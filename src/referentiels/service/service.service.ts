@@ -17,12 +17,12 @@ export class ServiceService {
   }
 
   findAll() {
-    return this.database.service.findMany({ orderBy: { nom: 'asc' } });
+    return this.database.service.findMany({ orderBy: { name: 'asc' } });
   }
 
   async findOne(uuid: string) {
     const service = await this.database.service.findUnique({
-      where: { uuid },
+      where: { id: uuid },
     });
     if (!service) {
       throw new NotFoundException(`Service ${uuid} not found`);
@@ -32,13 +32,13 @@ export class ServiceService {
 
   async update(uuid: string, dto: UpdateServiceDto) {
     await this.findOne(uuid);
-    return this.database.service.update({ where: { uuid }, data: dto });
+    return this.database.service.update({ where: { id: uuid }, data: dto });
   }
 
   async remove(uuid: string) {
     await this.findOne(uuid);
     try {
-      await this.database.service.delete({ where: { uuid } });
+      await this.database.service.delete({ where: { id: uuid } });
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString } from 'class-validator';
 
 export class UploadQueryDto {
   @ApiPropertyOptional({
@@ -8,6 +8,5 @@ export class UploadQueryDto {
   })
   @IsOptional()
   @IsString()
-  @MaxLength(200)
   prefix?: string;
 }
