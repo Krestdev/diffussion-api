@@ -33,8 +33,8 @@ model User {
 
   // state attributes
   status      UserStatus
-  isVerified  Boolean @default(false)
-  isConnected Boolean @default(false)
+  isVerified  Boolean    @default(false)
+  isConnected Boolean    @default(false)
 
   // connected attributes
   userServices       UserService[]
@@ -44,7 +44,7 @@ model User {
   dechargedDocuments Document[]    @relation("DischargedBy")
 
   // log trace attributes
-  lastlogin     DateTime?
+  lastlogin         DateTime?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   userInstructions  UserInstructions[]
@@ -80,8 +80,8 @@ model UserInstructions {
   userId        String
   instructionId String
 
-  user        User        @relation(fields: [userId], references: [id])
-  instruction Instruction @relation(fields: [instructionId], references: [id])
+  user        User                    @relation(fields: [userId], references: [id])
+  instruction Instruction             @relation(fields: [instructionId], references: [id])
   status      UserInstructionsStatus
   action      UserInstructionsActions
 
@@ -136,10 +136,10 @@ enum CanalType {
 }
 
 model Notification {
-  id         String  @id @default(uuid())
+  id         String             @id @default(uuid())
   userId     String
   documentId String?
-  type       String  @db.VarChar(20)
+  type       String             @db.VarChar(20)
   message    String?
   canal      CanalType
 
@@ -152,7 +152,7 @@ model Notification {
   @@map("notification")
 }
 
-
+// need Correction
 enum DocumentStatus {
   ARCHIVED
   ACTIVE
@@ -167,13 +167,14 @@ model Document {
   updatedAt        DateTime @updatedAt
   parentId String?
   categoryId       String?
+  // need Correction
   correspondantId  String?
   status    DocumentStatus
   date      DateTime?
-  label   String?   @db.VarChar(100)
+  label     String?        @db.VarChar(100)
   directory Int?
-  reference String?   @db.VarChar(30)
-  canal     String?   @db.VarChar(30)
+  reference String?        @db.VarChar(30)
+  canal     String?        @db.VarChar(30)
   copies    Int?
   version   Int?
 
@@ -185,8 +186,8 @@ model Document {
 
   // Décharge (§10.2.5): recorded independently of the status state machine
   // — it's proof of physical handover, not a lifecycle transition.
-  dischargedAt     DateTime?
-  dischargedById   String?
+  dischargedAt    DateTime?
+  dischargedById  String?
   dischargedStamp Boolean?
   receivedAt       DateTime?
   number   String? @unique @db.VarChar(30)
@@ -219,16 +220,16 @@ enum InstructionPriorite {
 }
 
 model Instruction {
-  id           String    @id @default(uuid())
+  id           String              @id @default(uuid())
   userId       String
   userId2      String?
   documentId   String
-  label      String    @db.VarChar(100)
+  label        String              @db.VarChar(100)
   priorite     InstructionPriorite
   dateline     DateTime?
   statut       InstructionStatus
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime? @updatedAt
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime?           @updatedAt
   parentId     String?
   validationId String?
 
@@ -243,7 +244,7 @@ model Instruction {
 
 model Category {
   id                String    @id @default(uuid())
-  label           String?   @db.VarChar(100)
+  label             String?   @db.VarChar(100)
   type              String?   @db.VarChar(10)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime? @updatedAt
@@ -255,7 +256,7 @@ model Category {
 
 model Correspondant {
   id        String   @id @default(uuid())
-  name     String?  @db.VarChar(100)
+  name      String?  @db.VarChar(100)
   type      String?  @db.VarChar(10)
   // town     String?  @db.VarChar(100)
   createdAt DateTime @default(now())
@@ -288,11 +289,11 @@ enum SiteStatus {
 }
 
 model Site {
-  id        String   @id @default(uuid())
-  name      String   @db.VarChar(100)
+  id        String     @id @default(uuid())
+  name      String     @db.VarChar(100)
   status    SiteStatus
-  updatedAt DateTime @updatedAt
-  createdAt DateTime @default(now())
+  updatedAt DateTime   @updatedAt
+  createdAt DateTime   @default(now())
 
   assignments Assignment[]
   documents   Document[]
@@ -316,7 +317,7 @@ model Permission {
   id        String    @id @default(uuid())
   createdAt DateTime  @default(now())
   updatedAt DateTime? @updatedAt
-  name     String?   @db.VarChar(10)
+  name      String?   @db.VarChar(10)
 
   rolePermissions RolePermission[]
 
@@ -325,15 +326,15 @@ model Permission {
 
 
 model Role {
-  id             String  @id @default(uuid())
-  assignmentId   String
+  id            String     @id @default(uuid())
+  assignmentId  String
   circuitStepId String?
   name           String? @db.VarChar(50)
 
   assignment      Assignment       @relation(fields: [assignmentId], references: [id])
   rolePermissions RolePermission[]
-  circuitSteps   CircuitStep[]
-  circuitStep    CircuitStep?    @relation("RoleEtapeCircuitLegacy", fields: [circuitStepId], references: [id])
+  circuitSteps    CircuitStep[]
+  circuitStep     CircuitStep?     @relation("RoleEtapeCircuitLegacy", fields: [circuitStepId], references: [id])
   circuits        Circuit[]
 
   @@map("role")
@@ -357,7 +358,7 @@ model Circuit {
   documentTypeId Int?
 
   role             Role?             @relation(fields: [roleId], references: [id])
-  circuitSteps    CircuitStep[]
+  circuitSteps     CircuitStep[]
   circuitInstances CircuitInstance[]
 
   @@map("circuit")
@@ -382,12 +383,12 @@ model CircuitStep {
   condition            String?
   roleId               String?
 
-  circuit                      Circuit                       @relation(fields: [circuitId], references: [id])
-  parentCircuitStep                  CircuitStep?                 @relation("CircuitStepChain", fields: [parentCircuitStepId], references: [id])
-  childCircuitSteps                  CircuitStep[]                @relation("CircuitStepChain")
-  role                         Role?                         @relation(fields: [roleId], references: [id])
-  roleLegacy                   Role[]                        @relation("RoleEtapeCircuitLegacy")
-  circuitInstancesCurrent             CircuitInstance[]
+  circuit                     Circuit                      @relation(fields: [circuitId], references: [id])
+  parentCircuitStep           CircuitStep?                 @relation("CircuitStepChain", fields: [parentCircuitStepId], references: [id])
+  childCircuitSteps           CircuitStep[]                @relation("CircuitStepChain")
+  role                        Role?                        @relation(fields: [roleId], references: [id])
+  roleLegacy                  Role[]                       @relation("RoleEtapeCircuitLegacy")
+  circuitInstancesCurrent     CircuitInstance[]
   circuitStepInstanceCircuits CircuitStepInstanceCircuit[]
 
   @@map("circuit_step")
@@ -397,22 +398,22 @@ model CircuitInstance {
   id              String  @id @default(uuid())
   documentId      String
   circuitId       String
-  circuitStepId  String
+  circuitStepId   String
   correspondantId String?
 
-  document          Document   @relation(fields: [documentId], references: [id])
-  circuit           Circuit    @relation(fields: [circuitId], references: [id])
-  currentCircuitStep CircuitStep @relation(fields: [circuitStepId], references: [id])
-  correspondant     Correspondant? @relation(fields: [correspondantId], references: [id])
-  circuitStepHistory  CircuitStepInstanceCircuit[]
-  validations         Validation[]
+  document           Document                     @relation(fields: [documentId], references: [id])
+  circuit            Circuit                      @relation(fields: [circuitId], references: [id])
+  currentCircuitStep CircuitStep                  @relation(fields: [circuitStepId], references: [id])
+  correspondant      Correspondant?               @relation(fields: [correspondantId], references: [id])
+  circuitStepHistory CircuitStepInstanceCircuit[]
+  validations        Validation[]
 
   @@map("instance_circuit")
 }
 
 model CircuitStepInstanceCircuit {
   id                String @id @default(uuid())
-  circuitStepId    String
+  circuitStepId     String
   circuitInstanceId String
   circuitStep    CircuitStep    @relation(fields: [circuitStepId], references: [id])
   circuitInstance CircuitInstance @relation(fields: [circuitInstanceId], references: [id])
