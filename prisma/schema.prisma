@@ -152,7 +152,6 @@ model Notification {
   @@map("notification")
 }
 
-// need Correction
 enum DocumentStatus {
   ARCHIVED
   ACTIVE
@@ -167,7 +166,6 @@ model Document {
   updatedAt        DateTime @updatedAt
   parentId String?
   categoryId       String?
-  // need Correction
   correspondantId  String?
   status    DocumentStatus
   date      DateTime?
