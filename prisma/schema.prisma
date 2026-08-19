@@ -166,7 +166,7 @@ model Document {
   updatedAt        DateTime @updatedAt
   parentId String?
   categoryId       String?
-  correspondantId  String?
+  correspondentId  String?
   status    DocumentStatus
   date      DateTime?
   label     String?        @db.VarChar(100)
@@ -188,14 +188,14 @@ model Document {
   dischargedById  String?
   dischargedStamp Boolean?
   receivedAt       DateTime?
-  number   String? @unique @db.VarChar(30)
+  identifier   String? @unique @db.VarChar(30)
   siteId   String?
 
   parent   Document?  @relation("DocumentHierarchy", fields: [parentId], references: [id])
   children Document[] @relation("DocumentHierarchy")
 
   category      Category?      @relation(fields: [categoryId], references: [id])
-  correspondant Correspondant? @relation(fields: [correspondantId], references: [id])
+  correspondent Correspondent? @relation(fields: [correspondentId], references: [id])
   site          Site?          @relation(fields: [siteId], references: [id])
   dischargedBy  User?          @relation("DischargedBy", fields: [dischargedById], references: [id])
 
@@ -252,7 +252,7 @@ model Category {
   @@map("category")
 }
 
-model Correspondant {
+model Correspondent {
   id        String   @id @default(uuid())
   name      String?  @db.VarChar(100)
   type      String?  @db.VarChar(10)
@@ -263,7 +263,7 @@ model Correspondant {
   documents        Document[]
   circuitInstances CircuitInstance[]
 
-  @@map("correspondant")
+  @@map("correspondent")
 }
 
 model Validation {
@@ -397,12 +397,12 @@ model CircuitInstance {
   documentId      String
   circuitId       String
   circuitStepId   String
-  correspondantId String?
+  correspondentId String?
 
   document           Document                     @relation(fields: [documentId], references: [id])
   circuit            Circuit                      @relation(fields: [circuitId], references: [id])
   currentCircuitStep CircuitStep                  @relation(fields: [circuitStepId], references: [id])
-  correspondant      Correspondant?               @relation(fields: [correspondantId], references: [id])
+  correspondent      Correspondent?               @relation(fields: [correspondentId], references: [id])
   circuitStepHistory CircuitStepInstanceCircuit[]
   validations        Validation[]
 

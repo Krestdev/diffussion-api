@@ -1,8 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
-import { CorrespondantCreateInput } from 'generated/prisma/models';
+import { CorrespondentCreateInput } from 'generated/prisma/models';
 
-export class CreateCorrespondantDto implements CorrespondantCreateInput {
+export class CreateCorrespondentDto implements CorrespondentCreateInput {
   @ApiPropertyOptional({ example: 'Mairie de Yaoundé' })
   @IsOptional()
   @IsString()

@@ -14,31 +14,31 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { CorrespondantService } from './correspondant.service';
-import { CreateCorrespondantDto } from './dto/create-correspondant.dto';
-import { FindCorrespondantsQueryDto } from './dto/find-correspondants.query.dto';
-import { UpdateCorrespondantDto } from './dto/update-correspondant.dto';
+import { CorrespondantService } from './correspondent.service';
+import { CreateCorrespondentDto } from './dto/create-correspondent.dto';
+import { FindCorrespondantsQueryDto } from './dto/find-correspondents.query.dto';
+import { UpdateCorrespondantDto } from './dto/update-correspondent.dto';
 
-@ApiTags('correspondants')
+@ApiTags('correspondents')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
-@Controller('correspondants')
+@Controller('correspondents')
 export class CorrespondantController {
-  constructor(private readonly correspondantService: CorrespondantService) {}
+  constructor(private readonly correspondentService: CorrespondantService) {}
 
   @Post()
-  create(@Body() dto: CreateCorrespondantDto) {
-    return this.correspondantService.create(dto);
+  create(@Body() dto: CreateCorrespondentDto) {
+    return 'create correspondent';
   }
 
   @Get()
   findAll(@Query() query: FindCorrespondantsQueryDto) {
-    return this.correspondantService.findAll(query);
+    return 'find all correspodent';
   }
 
   @Get(':uuid')
   findOne(@Param('uuid', ParseUUIDPipe) uuid: string) {
-    return this.correspondantService.findOne(uuid);
+    return 'find one correspodent';
   }
 
   @Patch(':uuid')
@@ -46,12 +46,12 @@ export class CorrespondantController {
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: UpdateCorrespondantDto,
   ) {
-    return this.correspondantService.update(uuid, dto);
+    return 'update correspondent';
   }
 
   @Delete(':uuid')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('uuid', ParseUUIDPipe) uuid: string) {
-    return this.correspondantService.remove(uuid);
+    return 'delete correspondent';
   }
 }

@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
-import { CorrespondantController } from './correspondant/correspondant.controller';
-import { CorrespondantService } from './correspondant/correspondant.service';
+import { CorrespondantController } from './correspondent/correspondent.controller';
+import { CorrespondantService } from './correspondent/correspondent.service';
 import { ServiceController } from './service/service.controller';
 import { ServiceService } from './service/service.service';
 import { SiteController } from './site/site.controller';
