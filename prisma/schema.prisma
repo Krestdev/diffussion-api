@@ -162,13 +162,11 @@ model Document {
   id              String         @id @default(uuid())
   documentType    DocumentType
   isDocument      Boolean        @default(true)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
+  status          DocumentStatus
   parentId        String?
+  date            DateTime?
   categoryId      String?
   correspondantId String?
-  status          DocumentStatus
-  date            DateTime?
   label           String?        @db.VarChar(100)
   directory       Int?
   reference       String?        @db.VarChar(30)
@@ -177,7 +175,7 @@ model Document {
   version         Int?
 
   // ENTRANT OU SORTANT
-  direction              String?   @db.VarChar(10)
+  direction              String?   @db.VarChar(10) //Depends on the flow connected
   modificationAuthorized Boolean   @default(false)
   transmittedOn          DateTime?
   scanUrl                String?
@@ -202,6 +200,9 @@ model Document {
   instructions     Instruction[]
   notifications    Notification[]
   circuitInstances CircuitInstance[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("document")
 }
