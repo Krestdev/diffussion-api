@@ -123,8 +123,8 @@ model UserNotification {
   userId         String
   notificationId String
   statut         NotificationStatus
-  user           User             @relation(fields: [userId], references: [id])
-  notification   Notification     @relation(fields: [notificationId], references: [id])
+  user           User               @relation(fields: [userId], references: [id])
+  notification   Notification       @relation(fields: [notificationId], references: [id])
 
   @@id([userId, notificationId])
   @@map("user_notification")
@@ -136,10 +136,10 @@ enum CanalType {
 }
 
 model Notification {
-  id         String             @id @default(uuid())
+  id         String    @id @default(uuid())
   userId     String
   documentId String?
-  type       String             @db.VarChar(20)
+  type       String    @db.VarChar(20)
   message    String?
   canal      CanalType
 
@@ -159,25 +159,25 @@ enum DocumentStatus {
 }
 
 model Document {
-  id               String   @id @default(uuid())
-  documentType     DocumentType
-  isDocument       Boolean @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  parentId String?
-  categoryId       String?
-  correspondantId  String?
-  status    DocumentStatus
-  date      DateTime?
-  label     String?        @db.VarChar(100)
-  directory Int?
-  reference String?        @db.VarChar(30)
-  canal     String?        @db.VarChar(30)
-  copies    Int?
-  version   Int?
+  id              String         @id @default(uuid())
+  documentType    DocumentType
+  isDocument      Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  parentId        String?
+  categoryId      String?
+  correspondantId String?
+  status          DocumentStatus
+  date            DateTime?
+  label           String?        @db.VarChar(100)
+  directory       Int?
+  reference       String?        @db.VarChar(30)
+  canal           String?        @db.VarChar(30)
+  copies          Int?
+  version         Int?
 
   // ENTRANT OU SORTANT
-  direction              String?   @db.VarChar(10) 
+  direction              String?   @db.VarChar(10)
   modificationAuthorized Boolean   @default(false)
   transmittedOn          DateTime?
   scanUrl                String?
@@ -187,9 +187,9 @@ model Document {
   dischargedAt    DateTime?
   dischargedById  String?
   dischargedStamp Boolean?
-  receivedAt       DateTime?
-  number   String? @unique @db.VarChar(30)
-  siteId   String?
+  receivedAt      DateTime?
+  number          String?   @unique @db.VarChar(30)
+  siteId          String?
 
   parent   Document?  @relation("DocumentHierarchy", fields: [parentId], references: [id])
   children Document[] @relation("DocumentHierarchy")
@@ -241,11 +241,11 @@ model Instruction {
 }
 
 model Category {
-  id                String    @id @default(uuid())
-  label             String?   @db.VarChar(100)
-  type              String?   @db.VarChar(10)
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime? @updatedAt
+  id        String    @id @default(uuid())
+  label     String?   @db.VarChar(100)
+  type      String?   @db.VarChar(10)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
 
   documents Document[]
 
@@ -322,12 +322,11 @@ model Permission {
   @@map("permission")
 }
 
-
 model Role {
-  id            String     @id @default(uuid())
+  id            String  @id @default(uuid())
   assignmentId  String
   circuitStepId String?
-  name           String? @db.VarChar(50)
+  name          String? @db.VarChar(50)
 
   assignment      Assignment       @relation(fields: [assignmentId], references: [id])
   rolePermissions RolePermission[]
@@ -362,7 +361,6 @@ model Circuit {
   @@map("circuit")
 }
 
-
 enum CircuitStateStatus {
   NOT_STARTED
   IN_PROGRESS
@@ -370,16 +368,15 @@ enum CircuitStateStatus {
   CANCELLED
 }
 
-
 model CircuitStep {
-  id                   String  @id @default(uuid())
-  circuitId            String
-  order                Int
-  actionType           String? @db.VarChar(100)
+  id                  String             @id @default(uuid())
+  circuitId           String
+  order               Int
+  actionType          String?            @db.VarChar(100)
   parentCircuitStepId String?
-  state                CircuitStateStatus
-  condition            String?
-  roleId               String?
+  state               CircuitStateStatus
+  condition           String?
+  roleId              String?
 
   circuit                     Circuit                      @relation(fields: [circuitId], references: [id])
   parentCircuitStep           CircuitStep?                 @relation("CircuitStepChain", fields: [parentCircuitStepId], references: [id])
@@ -410,11 +407,11 @@ model CircuitInstance {
 }
 
 model CircuitStepInstanceCircuit {
-  id                String @id @default(uuid())
+  id                String          @id @default(uuid())
   circuitStepId     String
   circuitInstanceId String
-  circuitStep    CircuitStep    @relation(fields: [circuitStepId], references: [id])
-  circuitInstance CircuitInstance @relation(fields: [circuitInstanceId], references: [id])
+  circuitStep       CircuitStep     @relation(fields: [circuitStepId], references: [id])
+  circuitInstance   CircuitInstance @relation(fields: [circuitInstanceId], references: [id])
 
   @@map("circuit_step_instance_circuit")
 }
