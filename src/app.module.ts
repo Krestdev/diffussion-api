@@ -9,15 +9,13 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { RbacModule } from './auth/rbac/rbac.module';
 import { DatabaseModule } from './database/database.module';
-// import { DocumentModule } from './document/document.module';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { AuthMiddleware } from './common/middleware/auth.middleware';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
-import { ReferentielsModule } from './referentiels/referentiels.module';
+import { ReferentialsModule } from './referentials/referentials.module';
 import { DocumentModule } from './document/document.module';
 import { InstructionsModule } from './instructions/instructions.module';
-// import { LivrablesModule } from './livrables/livrables.module';
 
 @Module({
   imports: [
@@ -33,7 +31,7 @@ import { InstructionsModule } from './instructions/instructions.module';
     DatabaseModule,
     AuthModule,
     RbacModule,
-    ReferentielsModule,
+    ReferentialsModule,
     InstructionsModule,
     DocumentModule,
   ],

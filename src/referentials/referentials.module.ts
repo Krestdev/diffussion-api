@@ -11,4 +11,4 @@ import { SiteService } from './site/site.service';
   providers: [SiteService, ServiceService, CorrespondantService],
   exports: [SiteService, ServiceService, CorrespondantService],
 })
-export class ReferentielsModule {}
+export class ReferentialsModule {}
