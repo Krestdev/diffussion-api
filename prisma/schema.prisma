@@ -109,10 +109,11 @@ model AuditLog {
   id         String   @id @default(uuid())
   userId     String
   actions    String   @db.VarChar(10)
-  datetime   DateTime
   entityId   String?
   entityType String?  @db.VarChar(10)
+  metadata   Json?
   createdAt  DateTime @default(now())
+  
 
   user User @relation(fields: [userId], references: [id])
 

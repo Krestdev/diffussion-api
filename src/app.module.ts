@@ -16,6 +16,8 @@ import { BullModule } from '@nestjs/bullmq';
 import { ReferentialsModule } from './referentials/referentials.module';
 import { DocumentModule } from './document/document.module';
 import { InstructionsModule } from './instructions/instructions.module';
+import { AuditModule } from './audit/audit.module';
+import { AuditLogMiddleware } from './common/middleware/audit-log.middleware';
 
 @Module({
   imports: [
@@ -34,13 +36,14 @@ import { InstructionsModule } from './instructions/instructions.module';
     ReferentialsModule,
     InstructionsModule,
     DocumentModule,
+    AuditModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
-    consumer.apply(LoggerMiddleware).forRoutes('*');
+    consumer.apply(LoggerMiddleware, AuditLogMiddleware).forRoutes('*');
     consumer
       .apply(AuthMiddleware)
       .exclude(
