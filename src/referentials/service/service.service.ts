@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
@@ -24,6 +25,7 @@ export class ServiceService {
     const service = await this.database.service.findUnique({
       where: { id: uuid },
     });
+    Logger.debug(service, 'service findOne');
     if (!service) {
       throw new NotFoundException(`Service ${uuid} not found`);
     }

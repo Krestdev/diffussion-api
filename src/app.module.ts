@@ -18,6 +18,7 @@ import { DocumentModule } from './document/document.module';
 import { InstructionsModule } from './instructions/instructions.module';
 import { AuditModule } from './audit/audit.module';
 import { AuditLogMiddleware } from './common/middleware/audit-log.middleware';
+import { DbLogger } from './logging/db.logger';
 
 @Module({
   imports: [
@@ -39,17 +40,17 @@ import { AuditLogMiddleware } from './common/middleware/audit-log.middleware';
     AuditModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, DbLogger],
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(LoggerMiddleware, AuditLogMiddleware).forRoutes('*');
-    consumer
-      .apply(AuthMiddleware)
-      .exclude(
-        { path: 'auth/login', method: RequestMethod.POST },
-        { path: 'auth/register', method: RequestMethod.POST },
-      )
-      .forRoutes('*');
+    // consumer
+    //   .apply(AuthMiddleware)
+    //   .exclude(
+    //     { path: 'auth/login', method: RequestMethod.POST },
+    //     { path: 'auth/register', method: RequestMethod.POST },
+    //   )
+    //   .forRoutes('*');
   }
 }

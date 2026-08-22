@@ -1,13 +1,21 @@
-import { Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  Controller,
+  Delete,
+  Get,
+  Logger,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
 import { DeliverableService } from './deliverable.service';
 
 @Controller('deliverables')
-
 export class DeliverableController {
   constructor(private readonly DeliverableService: DeliverableService) {}
 
   @Post()
   createDeliverable() {
+    Logger.debug('create deliverable');
     return 'create deliverable';
   }
 

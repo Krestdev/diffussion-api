@@ -419,3 +419,14 @@ model CircuitStepInstanceCircuit {
 
   @@map("circuit_step_instance_circuit")
 }
+
+model SystemLog {
+  id        String   @id @default(uuid())
+  level     String   @db.VarChar(20)
+  message   String   @db.Text
+  context   Json
+  stack     String?  @db.Text
+  createdAt DateTime @default(now())
+
+  @@map("system_log")
+}
