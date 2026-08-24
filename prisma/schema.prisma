@@ -311,17 +311,12 @@ model Assignment {
   @@map("assignment")
 }
 
-model Permission {
-  id        String    @id @default(uuid())
-  createdAt DateTime  @default(now())
-  updatedAt DateTime? @updatedAt
-  name      String?   @db.VarChar(10)
-
-  rolePermissions RolePermission[]
-
-  @@map("permission")
-}
-
+/**
+ * **
+ * Role template
+ * for users
+ * **
+ */
 model Role {
   id            String  @id @default(uuid())
   assignmentId  String
@@ -348,6 +343,25 @@ model RolePermission {
   @@map("role_permission")
 }
 
+model Permission {
+  id        String    @id @default(uuid())
+  createdAt DateTime  @default(now())
+  updatedAt DateTime? @updatedAt
+  name      String?   @db.VarChar(10)
+
+  rolePermissions RolePermission[]
+
+  @@map("permission")
+}
+
+/**
+ * **
+ * circuit template
+ * for document circuits
+ * materialisation
+ * **
+ */
+
 model Circuit {
   id             String  @id @default(uuid())
   roleId         String?
@@ -367,6 +381,14 @@ enum CircuitStateStatus {
   COMPLETED
   CANCELLED
 }
+
+/**
+ * **
+ * circuit steps template
+ * for document circuits
+ * materialisation
+ * **
+ */
 
 model CircuitStep {
   id                  String             @id @default(uuid())
@@ -389,6 +411,16 @@ model CircuitStep {
   @@map("circuit_step")
 }
 
+/**
+ * **
+ * circuit instance
+ * for document circuits
+ * materialisation
+ * sticks a circuit to
+ * a document even after
+ * the parent circuit is modified
+ * **
+ */
 model CircuitInstance {
   id              String  @id @default(uuid())
   documentId      String
