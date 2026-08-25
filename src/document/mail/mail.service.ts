@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   CourrierDirection,
   CourrierStatus,
@@ -133,7 +137,12 @@ export class MailService {
 
   // Sortant: EN_VALIDATION -> VALIDE (approved) | A_CORRIGER, and records the
   // decision (10.6 / RG-VAL-*).
-  async validateCourrier(id: string, approved: boolean, validatorId: string, motif?: string) {
+  async validateCourrier(
+    id: string,
+    approved: boolean,
+    validatorId: string,
+    motif?: string,
+  ) {
     const courrier = await this.requireStatus(id, [
       CourrierStatus.EN_VALIDATION,
     ]);

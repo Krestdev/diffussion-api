@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { DossierController } from './dossier.controller';
 import { DossierService } from './dossier.service';
 
@@ -25,7 +26,10 @@ describe('DossierController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [DossierController],
       providers: [{ provide: DossierService, useValue: service }],
-    }).compile();
+    })
+      .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<DossierController>(DossierController);
   });
@@ -35,11 +39,14 @@ describe('DossierController', () => {
   });
 
   it('create() forwards the authenticated user as createdById', () => {
-    controller.create({ title: 'X', siteId: 's-1' } as never, {
-      sub: 'u-1',
-      email: 'u@x.com',
-      refreshToken: 'r',
-    });
+    controller.create(
+      { title: 'X', siteId: 's-1' },
+      {
+        sub: 'u-1',
+        email: 'u@x.com',
+        refreshToken: 'r',
+      },
+    );
     expect(service.create).toHaveBeenCalledWith(
       { title: 'X', siteId: 's-1' },
       'u-1',

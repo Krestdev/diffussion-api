@@ -20,7 +20,8 @@ export class CreateCategoryDto {
 
   @ApiPropertyOptional({
     example: 60,
-    description: 'RG-ARC-001: retention duration in months, inherited by dossiers of this category',
+    description:
+      'RG-ARC-001: retention duration in months, inherited by dossiers of this category',
   })
   @IsOptional()
   @IsInt()

@@ -49,7 +49,10 @@ export class DossierController {
 
   @Patch(':id')
   @RequirePermission(PermissionCode.DossierUpdate)
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDossierDto) {
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateDossierDto,
+  ) {
     return this.dossierService.update(id, dto);
   }
 

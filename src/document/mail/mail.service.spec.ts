@@ -27,7 +27,10 @@ describe('MailService', () => {
     };
 
     const module: TestingModule = await Test.createTestingModule({
-      providers: [MailService, { provide: DatabaseService, useValue: database }],
+      providers: [
+        MailService,
+        { provide: DatabaseService, useValue: database },
+      ],
     }).compile();
 
     service = module.get<MailService>(MailService);

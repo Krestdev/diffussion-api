@@ -27,7 +27,9 @@ export class CorrespondantService {
   async findAll(query: FindCorrespondantsQueryDto) {
     const where: Prisma.CorrespondentWhereInput = {
       typeId: query.typeId,
-      city: query.city ? { contains: query.city, mode: 'insensitive' } : undefined,
+      city: query.city
+        ? { contains: query.city, mode: 'insensitive' }
+        : undefined,
       status: query.status,
       name: query.search
         ? { contains: query.search, mode: 'insensitive' }

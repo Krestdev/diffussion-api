@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { DossierService } from './dossier.service';
 import { DatabaseService } from '../../database/database.service';
-import { DossierStatus, InstructionStatus } from '../../../generated/prisma/client';
+import { DossierStatus } from '../../../generated/prisma/client';
 
 describe('DossierService', () => {
   let service: DossierService;

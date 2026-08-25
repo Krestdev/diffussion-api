@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   InstructionStatus,
   LivrableStatus,
@@ -53,7 +57,11 @@ export class InstructionsService {
           ? InstructionStatus.AFFECTEE
           : InstructionStatus.A_AFFECTER,
         assignees: hasAssignees
-          ? { createMany: { data: assignmentRows({ executantIds, superviseurId }) } }
+          ? {
+              createMany: {
+                data: assignmentRows({ executantIds, superviseurId }),
+              },
+            }
           : undefined,
       },
       include: instructionInclude,

@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { MailController } from './mail.controller';
 import { MailService } from './mail.service';
 
@@ -25,7 +26,10 @@ describe('MailController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [MailController],
       providers: [{ provide: MailService, useValue: service }],
-    }).compile();
+    })
+      .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<MailController>(MailController);
   });

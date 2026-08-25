@@ -18,6 +18,9 @@ const userInclude = {
 } satisfies Prisma.UserInclude;
 
 function toView(user: Prisma.UserGetPayload<{ include: typeof userInclude }>) {
+  // password/refreshToken destructured solely to exclude them from `rest`
+  // before it goes out over the API.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { userRoles, assignments, password, refreshToken, ...rest } = user;
   return {
     ...rest,
@@ -85,7 +88,9 @@ export class UsersService {
       where: { id },
       data: {
         ...data,
-        password: password ? await bcrypt.hash(password, SALT_ROUNDS) : undefined,
+        password: password
+          ? await bcrypt.hash(password, SALT_ROUNDS)
+          : undefined,
         // Replace-set semantics, matching the "Rôle" chip picker on the
         // frontend which always sends the desired full list.
         userRoles:

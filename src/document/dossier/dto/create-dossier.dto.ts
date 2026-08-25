@@ -48,7 +48,10 @@ export class CreateDossierDto {
   @IsUUID()
   responsibleId?: string;
 
-  @ApiPropertyOptional({ enum: DossierPriority, default: DossierPriority.NORMAL })
+  @ApiPropertyOptional({
+    enum: DossierPriority,
+    default: DossierPriority.NORMAL,
+  })
   @IsOptional()
   @IsEnum(DossierPriority)
   priority?: DossierPriority;

@@ -86,7 +86,6 @@ model User {
   userRoles         UserRole[]
   userInstructions  UserInstructions[]
   userNotifications UserNotification[]
-  notifications     Notification[]
   auditLogs         AuditLog[]
   validations       Validation[]
 
@@ -736,9 +735,12 @@ enum NotificationStatus {
   ARCHIVED
 }
 
+/// A notifiable event (RG-NOT-*). Deliberately has no direct `userId`: it
+/// may be fanned out to several recipients at once (e.g. RG-NOT-003 — a
+/// missed deadline notifies "l'ensemble des acteurs concernés"), each
+/// tracked individually through UserNotification.
 model Notification {
   id         String            @id @default(uuid())
-  userId     String
   dossierId  String?
   courrierId String?
   type       String            @db.VarChar(50)
@@ -746,11 +748,10 @@ model Notification {
   canal      NotificationCanal
   createdAt  DateTime          @default(now())
 
-  user     User      @relation(fields: [userId], references: [id])
   dossier  Dossier?  @relation(fields: [dossierId], references: [id])
   courrier Courrier? @relation(fields: [courrierId], references: [id])
 
-  userNotifications UserNotification[]
+  recipients UserNotification[]
 
   @@map("notification")
 }

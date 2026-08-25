@@ -20,7 +20,7 @@ export class AuditLogService {
       await this.database.auditLog.create({
         data: {
           user: { connect: { id: entry.userId } },
-          actions: entry.actions ?? 'unknown',
+          action: entry.action ?? 'unknown',
           entityId: entry.entityId,
           entityType: entry.entityType,
           metadata: entry.metadata ?? {},

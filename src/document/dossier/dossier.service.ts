@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   DossierStatus,
   InstructionStatus,
@@ -96,10 +100,13 @@ export class DossierService {
   // RG-DOS-005: a dossier can only close once every instruction attached to
   // it is terminated (validated) or cancelled.
   async close(id: string) {
-    const dossier = await this.ensureMutable(id);
+    await this.ensureMutable(id);
 
     const pending = await this.database.instruction.count({
-      where: { dossierId: id, status: { notIn: TERMINAL_INSTRUCTION_STATUSES } },
+      where: {
+        dossierId: id,
+        status: { notIn: TERMINAL_INSTRUCTION_STATUSES },
+      },
     });
     if (pending > 0) {
       throw new BadRequestException(

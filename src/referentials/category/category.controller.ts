@@ -45,7 +45,10 @@ export class CategoryController {
 
   @Patch(':id')
   @RequirePermission(PermissionCode.AdminManageCategories)
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCategoryDto) {
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCategoryDto,
+  ) {
     return this.categoryService.update(id, dto);
   }
 

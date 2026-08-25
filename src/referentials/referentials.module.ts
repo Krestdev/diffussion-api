@@ -15,6 +15,12 @@ import { CorrespondentTypeModule } from './correspondent-type/correspondent-type
   controllers: [SiteController, ServiceController, CorrespondantController],
   providers: [SiteService, ServiceService, CorrespondantService],
   exports: [SiteService, ServiceService, CorrespondantService],
-  imports: [CategoryModule, DossierTypeModule, CourrierNatureModule, CanalModule, CorrespondentTypeModule],
+  imports: [
+    CategoryModule,
+    DossierTypeModule,
+    CourrierNatureModule,
+    CanalModule,
+    CorrespondentTypeModule,
+  ],
 })
 export class ReferentialsModule {}

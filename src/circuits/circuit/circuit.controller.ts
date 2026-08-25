@@ -1,15 +1,36 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { CircuitService } from './circuit.service';
 import { CreateCircuitDto } from './dto/create-circuit.dto';
 import { UpdateCircuitDto } from './dto/update-circuit.dto';
 
-@Controller('circuit')
+@ApiTags('circuits')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard, PermissionGuard)
+@RequirePermission(PermissionCode.AdminManageCircuits)
+@Controller('circuits')
 export class CircuitController {
   constructor(private readonly circuitService: CircuitService) {}
 
   @Post()
-  create(@Body() createCircuitDto: CreateCircuitDto) {
-    return this.circuitService.create(createCircuitDto);
+  create(@Body() dto: CreateCircuitDto) {
+    return this.circuitService.create(dto);
   }
 
   @Get()
@@ -18,17 +39,21 @@ export class CircuitController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.circuitService.findOne(+id);
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.circuitService.findOne(id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateCircuitDto: UpdateCircuitDto) {
-    return this.circuitService.update(+id, updateCircuitDto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCircuitDto,
+  ) {
+    return this.circuitService.update(id, dto);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.circuitService.remove(+id);
+  @HttpCode(HttpStatus.NO_CONTENT)
+  remove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.circuitService.remove(id);
   }
 }

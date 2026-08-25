@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { PermissionGuard } from '../auth/rbac/permission.guard';
 import { InstructionsController } from './instructions.controller';
 import { InstructionsService } from './instructions.service';
 
@@ -22,7 +23,10 @@ describe('InstructionsController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [InstructionsController],
       providers: [{ provide: InstructionsService, useValue: service }],
-    }).compile();
+    })
+      .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<InstructionsController>(InstructionsController);
   });

@@ -1,26 +1,49 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '../../../generated/prisma/client';
+import { DatabaseService } from '../../database/database.service';
 import { CreateCircuitStepDto } from './dto/create-circuit-step.dto';
 import { UpdateCircuitStepDto } from './dto/update-circuit-step.dto';
 
+const include = { role: true } satisfies Prisma.CircuitStepInclude;
+
 @Injectable()
 export class CircuitStepService {
-  create(createCircuitStepDto: CreateCircuitStepDto) {
-    return 'This action adds a new circuitStep';
+  constructor(private readonly database: DatabaseService) {}
+
+  create(dto: CreateCircuitStepDto) {
+    return this.database.circuitStep.create({ data: dto, include });
   }
 
-  findAll() {
-    return `This action returns all circuitStep`;
+  findAll(circuitId?: string) {
+    return this.database.circuitStep.findMany({
+      where: { circuitId },
+      orderBy: { order: 'asc' },
+      include,
+    });
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} circuitStep`;
+  async findOne(id: string) {
+    const step = await this.database.circuitStep.findUnique({
+      where: { id },
+      include,
+    });
+    if (!step) {
+      throw new NotFoundException(`Circuit step ${id} not found`);
+    }
+    return step;
   }
 
-  update(id: number, updateCircuitStepDto: UpdateCircuitStepDto) {
-    return `This action updates a #${id} circuitStep`;
+  async update(id: string, dto: UpdateCircuitStepDto) {
+    await this.findOne(id);
+    return this.database.circuitStep.update({
+      where: { id },
+      data: dto,
+      include,
+    });
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} circuitStep`;
+  async remove(id: string) {
+    await this.findOne(id);
+    await this.database.circuitStep.delete({ where: { id } });
   }
 }

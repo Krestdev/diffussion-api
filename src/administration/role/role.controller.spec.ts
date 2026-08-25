@@ -1,4 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { DatabaseService } from '../../database/database.service';
 import { RoleController } from './role.controller';
 import { RoleService } from './role.service';
 
@@ -8,8 +10,11 @@ describe('RoleController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [RoleController],
-      providers: [RoleService],
-    }).compile();
+      providers: [RoleService, { provide: DatabaseService, useValue: {} }],
+    })
+      .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<RoleController>(RoleController);
   });
