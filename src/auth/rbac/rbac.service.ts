@@ -6,14 +6,16 @@ import { PermissionCode } from './rbac.constants';
 export class RbacService {
   constructor(private readonly database: DatabaseService) {}
 
-  // Walks Utilisateur -> Affectation -> Role -> RolePermission -> Permission
-  // and returns the deduped set of permission codes the user holds across
-  // every affectation/role they have.
-  async getPermissionCodes(utilisateurUuid: string): Promise<string[]> {
-    const affectations = await this.database.assignment.findMany({
-      where: { userId: utilisateurUuid },
+  // Walks User -> UserRole -> Role -> RolePermission -> Permission and
+  // returns the deduped set of permission codes the user holds. Roles are
+  // held directly by the user (RG-ORG-003: a user may exercise several
+  // responsibilities at once) rather than scoped to a single site
+  // assignment, so this no longer goes through Assignment.
+  async getPermissionCodes(userUuid: string): Promise<string[]> {
+    const userRoles = await this.database.userRole.findMany({
+      where: { userId: userUuid },
       include: {
-        roles: {
+        role: {
           include: {
             rolePermissions: {
               include: { permission: true },
@@ -24,13 +26,9 @@ export class RbacService {
     });
 
     const codes = new Set<string>();
-    for (const affectation of affectations) {
-      for (const role of affectation.roles) {
-        for (const rolePermission of role.rolePermissions) {
-          if (rolePermission.permission.name) {
-            codes.add(rolePermission.permission.name);
-          }
-        }
+    for (const userRole of userRoles) {
+      for (const rolePermission of userRole.role.rolePermissions) {
+        codes.add(rolePermission.permission.code);
       }
     }
 
@@ -38,10 +36,10 @@ export class RbacService {
   }
 
   async hasPermission(
-    utilisateurUuid: string,
+    userUuid: string,
     permission: PermissionCode,
   ): Promise<boolean> {
-    const codes = await this.getPermissionCodes(utilisateurUuid);
+    const codes = await this.getPermissionCodes(userUuid);
     return codes.includes(permission);
   }
 }

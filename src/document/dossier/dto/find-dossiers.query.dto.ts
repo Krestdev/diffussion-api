@@ -1,44 +1,33 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString } from 'class-validator';
-import { DocumentStatus } from 'generated/prisma/enums';
+import { IsEnum, IsInt, IsOptional, IsString, IsUUID } from 'class-validator';
+import { DossierPriority, DossierStatus } from 'generated/prisma/enums';
 
 export class FindDossiersQueryDto {
-  @ApiPropertyOptional({
-    example: 'Pont Sanaga',
-    description: 'Matches against libelle, type, and numero',
-  })
+  @ApiPropertyOptional({ description: 'Search in title/number' })
   @IsOptional()
   @IsString()
   search?: string;
 
-  @ApiPropertyOptional({ enum: DocumentStatus })
+  @ApiPropertyOptional({ enum: DossierStatus })
   @IsOptional()
-  @IsEnum(DocumentStatus)
-  status?: DocumentStatus;
+  @IsEnum(DossierStatus)
+  status?: DossierStatus;
+
+  @ApiPropertyOptional({ enum: DossierPriority })
+  @IsOptional()
+  @IsEnum(DossierPriority)
+  priority?: DossierPriority;
 
   @ApiPropertyOptional()
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  categoryUuid?: number;
+  @IsUUID()
+  siteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  siteUuid?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  correspondentUuid?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  priorite?: string;
+  @IsUUID()
+  responsibleId?: string;
 
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()

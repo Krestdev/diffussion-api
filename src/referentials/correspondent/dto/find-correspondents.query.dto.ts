@@ -1,22 +1,28 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, IsUUID } from 'class-validator';
+import { CorrespondentStatus } from 'generated/prisma/enums';
 
 export class FindCorrespondantsQueryDto {
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'Search in name/email' })
   @IsOptional()
   @IsString()
-  type?: string;
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'CorrespondentType id' })
+  @IsOptional()
+  @IsUUID()
+  typeId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  ville?: string;
+  city?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: CorrespondentStatus })
   @IsOptional()
-  @IsString()
-  status?: string;
+  @IsEnum(CorrespondentStatus)
+  status?: CorrespondentStatus;
 
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()

@@ -19,6 +19,10 @@ import { InstructionsModule } from './instructions/instructions.module';
 import { AuditModule } from './audit/audit.module';
 import { AuditLogMiddleware } from './common/middleware/audit-log.middleware';
 import { DbLogger } from './logging/db.logger';
+import { AdministrationModule } from './administration/administration.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { DocumentsModule } from './documents/documents.module';
+import { CircuitsModule } from './circuits/circuits.module';
 
 @Module({
   imports: [
@@ -38,6 +42,10 @@ import { DbLogger } from './logging/db.logger';
     InstructionsModule,
     DocumentModule,
     AuditModule,
+    AdministrationModule,
+    NotificationsModule,
+    DocumentsModule,
+    CircuitsModule,
   ],
   controllers: [AppController],
   providers: [AppService, DbLogger],

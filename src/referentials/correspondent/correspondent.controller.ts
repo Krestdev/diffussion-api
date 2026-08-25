@@ -28,17 +28,17 @@ export class CorrespondantController {
 
   @Post()
   create(@Body() dto: CreateCorrespondentDto) {
-    return 'create correspondent';
+    return this.correspondentService.create(dto);
   }
 
   @Get()
   findAll(@Query() query: FindCorrespondantsQueryDto) {
-    return 'find all correspodent';
+    return this.correspondentService.findAll(query);
   }
 
   @Get(':uuid')
   findOne(@Param('uuid', ParseUUIDPipe) uuid: string) {
-    return 'find one correspodent';
+    return this.correspondentService.findOne(uuid);
   }
 
   @Patch(':uuid')
@@ -46,12 +46,12 @@ export class CorrespondantController {
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: UpdateCorrespondantDto,
   ) {
-    return 'update correspondent';
+    return this.correspondentService.update(uuid, dto);
   }
 
   @Delete(':uuid')
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('uuid', ParseUUIDPipe) uuid: string) {
-    return 'delete correspondent';
+    return this.correspondentService.remove(uuid);
   }
 }

@@ -1,4 +1,6 @@
-import { PartialType } from '@nestjs/swagger';
-import { CreateDossierDto } from './create-deliverable.dto';
+import { PartialType, OmitType } from '@nestjs/swagger';
+import { CreateDeliverableDto } from './create-deliverable.dto';
 
-export class UpdateDossierDto extends PartialType(CreateDossierDto) {}
+export class UpdateDeliverableDto extends PartialType(
+  OmitType(CreateDeliverableDto, ['instructionId'] as const),
+) {}

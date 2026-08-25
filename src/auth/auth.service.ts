@@ -34,7 +34,7 @@ export class AuthService {
         name: dto.name,
         email: dto.email,
         password: hashedPassword,
-        status: UserStatus.ACTIF,
+        status: UserStatus.ACTIVE,
       },
     });
 

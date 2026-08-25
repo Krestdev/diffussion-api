@@ -1,44 +1,18 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString } from 'class-validator';
-import { DocumentStatus } from 'generated/prisma/enums';
+import { IsEnum, IsInt, IsOptional, IsUUID } from 'class-validator';
+import { LivrableStatus } from 'generated/prisma/enums';
 
-export class FindDossiersQueryDto {
-  @ApiPropertyOptional({
-    example: 'Pont Sanaga',
-    description: 'Matches against libelle, type, and numero',
-  })
-  @IsOptional()
-  @IsString()
-  search?: string;
-
-  @ApiPropertyOptional({ enum: DocumentStatus })
-  @IsOptional()
-  @IsEnum(DocumentStatus)
-  status?: DocumentStatus;
-
+export class FindDeliverableQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  categoryUuid?: number;
+  @IsUUID()
+  instructionId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ enum: LivrableStatus })
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  siteUuid?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  correspondentUuid?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  priorite?: string;
+  @IsEnum(LivrableStatus)
+  status?: LivrableStatus;
 
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()

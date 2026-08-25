@@ -3,7 +3,7 @@ import {
   Controller,
   Get,
   Param,
-  ParseIntPipe,
+  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -12,6 +12,9 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
 import { DossierService } from './dossier.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
@@ -20,84 +23,77 @@ import { UpdateDossierDto } from './dto/update-dossier.dto';
 
 @ApiTags('dossiers')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 @Controller('dossiers')
 export class DossierController {
   constructor(private readonly dossierService: DossierService) {}
 
   @Get()
   findAll(@Query() query: FindDossiersQueryDto) {
-    return 'findAll';
+    return this.dossierService.findAll(query);
   }
 
   @Post()
+  @RequirePermission(PermissionCode.DossierCreate)
   create(
     @Body() dto: CreateDossierDto,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
-    return 'create';
+    return this.dossierService.create(dto, user.sub);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseIntPipe) id: number) {
-    return 'findOne';
+  findOne(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.findOne(id);
   }
 
   @Patch(':id')
-  update(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateDossierDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
-  ) {
-    return 'update';
+  @RequirePermission(PermissionCode.DossierUpdate)
+  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDossierDto) {
+    return this.dossierService.update(id, dto);
   }
 
   @Post(':id/close')
-  close(
-    @Param('id', ParseIntPipe) id: number,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
-  ) {
-    return 'close';
+  @RequirePermission(PermissionCode.DossierClose)
+  close(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.close(id);
   }
 
   @Post(':id/reopen')
-  reopen(
-    @Param('id', ParseIntPipe) id: number,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
-  ) {
-    return 'reopen';
+  @RequirePermission(PermissionCode.DossierReopen)
+  reopen(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.reopen(id);
   }
 
   @Post(':id/archive')
-  archive(
-    @Param('id', ParseIntPipe) id: number,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
-  ) {
-    return 'archive';
+  @RequirePermission(PermissionCode.DossierArchive)
+  archive(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.archive(id);
   }
 
   @Get(':id/courriers')
-  getCourriers(@Param('id', ParseIntPipe) id: number) {
-    return 'getCourriers';
+  getCourriers(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.getCourriers(id);
   }
 
   @Get(':id/instructions')
-  getInstructions(@Param('id', ParseIntPipe) id: number) {
-    return 'getInstructions';
+  getInstructions(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.getInstructions(id);
   }
 
   @Get(':id/livrables')
-  getLivrables(@Param('id', ParseIntPipe) id: number) {
-    return 'getLivrables';
+  getLivrables(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.getLivrables(id);
   }
 
   @Get(':id/historique')
-  getHistorique(@Param('id', ParseIntPipe) id: number) {
-    return 'getHistorique';
+  @RequirePermission(PermissionCode.AuditRead)
+  getHistorique(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.getHistorique(id);
   }
 
   @Get(':id/progression')
-  getProgression(@Param('id', ParseIntPipe) id: number) {
-    return 'getProgression';
+  getProgression(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.getProgression(id);
   }
 }

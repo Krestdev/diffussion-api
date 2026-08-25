@@ -1,135 +1,66 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsDate, IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  InstructionCreateInput,
-  InstructionCreateNestedManyWithoutParentInput,
-  InstructionCreateNestedOneWithoutChildrenInput,
-  UserInstructionsCreateNestedManyWithoutInstructionInput,
-  ValidationCreateNestedOneWithoutInstructionsInput,
-  DocumentCreateNestedOneWithoutInstructionsInput,
-} from 'generated/prisma/models';
-import { InstructionPriorite, InstructionStatus } from 'generated/prisma/enums';
+  ArrayUnique,
+  IsArray,
+  IsDateString,
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
+import { InstructionPriority } from 'generated/prisma/enums';
 
-export class CreateInstructionsDto implements InstructionCreateInput {
-  @ApiProperty({
-    description: 'The instruction user id',
-    example: 'uuid-user-1',
+export class CreateInstructionsDto {
+  @ApiProperty({ description: 'Dossier this instruction belongs to (7.3)' })
+  @IsUUID()
+  dossierId: string;
+
+  @ApiPropertyOptional({
+    description: 'Courrier that triggered this instruction, if any',
   })
+  @IsOptional()
+  @IsUUID()
+  courrierId?: string;
+
+  @ApiProperty({ example: 'Rédiger le rapport de conformité' })
   @IsString()
-  @IsNotEmpty()
-  userId: string;
+  @MaxLength(200)
+  title: string;
 
-  @ApiProperty({
-    description: 'The instruction user id 2',
-    example: 'uuid-user-2',
-  })
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  userId2?: string | undefined;
+  description?: string;
 
-  documentId?: string;
-  @ApiProperty({
-    description: 'The instruction label',
-    example: 'transfert',
+  @ApiPropertyOptional({
+    enum: InstructionPriority,
+    default: InstructionPriority.NORMAL,
   })
-  @IsString()
-  @IsNotEmpty()
-  label: string;
+  @IsOptional()
+  @IsEnum(InstructionPriority)
+  priority?: InstructionPriority;
 
-  @ApiProperty({
-    description: 'The instruction priorite',
-    enum: InstructionPriorite,
-    example: InstructionPriorite.LOW,
-  })
-  @IsNotEmpty()
-  @IsEnum(InstructionPriorite)
-  priorite: InstructionPriorite;
+  @ApiPropertyOptional({ example: '2026-09-01' })
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string;
 
-  @ApiProperty({
-    description: 'The instruction statut',
-    enum: InstructionStatus,
-    example: InstructionStatus.EXECUTED,
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'RG-INS-002: assigned directly to one or more executants',
   })
-  @IsNotEmpty()
-  @IsEnum(InstructionStatus)
-  statut: InstructionStatus;
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  executantIds?: string[];
 
-  @ApiProperty({
-    description: 'The instruction type',
-    enum: InstructionPriorite,
-    example: InstructionPriorite.LOW,
+  @ApiPropertyOptional({
+    description:
+      'RG-INS-002: or to a superviseur responsible for designating executants',
   })
-  @IsNotEmpty()
-  @IsEnum(InstructionPriorite)
-  type: InstructionPriorite;
-
-  @ApiProperty({
-    description: 'The instruction dateline',
-    example: new Date(),
-  })
-  @IsNotEmpty()
-  @IsDate()
-  dateline: Date;
-
-  @ApiProperty({
-    description: 'The instruction parent id',
-    example: 'uuid-instruction-1',
-  })
-  @IsString()
-  @IsNotEmpty()
-  parentId?: string | undefined;
-
-  @ApiProperty({
-    description: 'The instruction validation id',
-    example: 'uuid-validation-1',
-  })
-  @IsString()
-  @IsNotEmpty()
-  validationId?: string;
-
-  @ApiProperty({
-    description: 'The instruction document',
-    example: {
-      id: 'uuid-document-1',
-    },
-  })
-  @IsNotEmpty()
-  document: DocumentCreateNestedOneWithoutInstructionsInput;
-
-  @ApiProperty({
-    description: 'The instruction parent',
-    example: {
-      id: 'uuid-instruction-1',
-    },
-  })
-  parent?: InstructionCreateNestedOneWithoutChildrenInput | undefined;
-
-  @ApiProperty({
-    description: 'The instruction children',
-    example: [
-      {
-        id: 'uuid-instruction-1',
-      },
-    ],
-  })
-  children?: InstructionCreateNestedManyWithoutParentInput | undefined;
-
-  @ApiProperty({
-    description: 'The instruction validation',
-    example: {
-      id: 'uuid-validation-1',
-    },
-  })
-  validation?: ValidationCreateNestedOneWithoutInstructionsInput | undefined;
-
-  @ApiProperty({
-    description: 'The instruction user instructions',
-    example: [
-      {
-        id: 'uuid-user-instruction-1',
-      },
-    ],
-  })
-  userInstructions?:
-    UserInstructionsCreateNestedManyWithoutInstructionInput | undefined;
+  @IsOptional()
+  @IsUUID()
+  superviseurId?: string;
 }

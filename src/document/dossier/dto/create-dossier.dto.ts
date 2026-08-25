@@ -1,51 +1,70 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsDateString,
-  IsInt,
+  ArrayUnique,
+  IsArray,
+  IsEnum,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
 } from 'class-validator';
+import {
+  DossierConfidentiality,
+  DossierPriority,
+} from 'generated/prisma/enums';
 
 export class CreateDossierDto {
-  @ApiPropertyOptional({ example: 'Étude technique' })
+  @ApiProperty({ example: 'Communauté urbaine de Douala' })
+  @IsString()
+  @MaxLength(200)
+  title: string;
+
+  @ApiPropertyOptional()
   @IsOptional()
   @IsString()
-  @MaxLength(10)
-  type?: string;
+  description?: string;
 
-  @ApiPropertyOptional({ example: 'Subventions communales 2026' })
+  @ApiPropertyOptional({ description: 'DossierType id' })
   @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  libelle?: string;
+  @IsUUID()
+  typeId?: string;
 
-  @ApiPropertyOptional({ example: 1 })
+  @ApiPropertyOptional({ description: 'Category id' })
   @IsOptional()
-  @IsInt()
-  categoryUuid?: number;
+  @IsUUID()
+  categoryId?: string;
 
-  @ApiPropertyOptional({ example: 1 })
-  @IsOptional()
-  @IsInt()
-  correspondentUuid?: number;
+  @ApiProperty({
+    description: 'Owning site (RG-DOS-003 — exactly one, mandatory)',
+  })
+  @IsUUID()
+  siteId: string;
 
   @ApiPropertyOptional({
-    example: 2,
-    description: 'Site that owns this dossier (RG-DOS-003)',
+    description:
+      'Responsible user (RG-DOS-004). Defaults to the creator when omitted.',
   })
   @IsOptional()
-  @IsInt()
-  siteUuid?: number;
+  @IsUUID()
+  responsibleId?: string;
 
-  @ApiPropertyOptional({ example: 'Normale' })
+  @ApiPropertyOptional({ enum: DossierPriority, default: DossierPriority.NORMAL })
   @IsOptional()
-  @IsString()
-  @MaxLength(20)
-  priorite?: string;
+  @IsEnum(DossierPriority)
+  priority?: DossierPriority;
 
-  @ApiPropertyOptional({ example: '2026-08-14' })
+  @ApiPropertyOptional({
+    enum: DossierConfidentiality,
+    default: DossierConfidentiality.PUBLIC,
+  })
   @IsOptional()
-  @IsDateString()
-  date?: string;
+  @IsEnum(DossierConfidentiality)
+  confidentiality?: DossierConfidentiality;
+
+  @ApiPropertyOptional({ type: [String], example: ['subvention', 'communal'] })
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsString({ each: true })
+  keywords?: string[];
 }
