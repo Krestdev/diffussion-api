@@ -420,13 +420,38 @@ model CircuitStepInstanceCircuit {
   @@map("circuit_step_instance_circuit")
 }
 
-model SystemLog {
-  id        String   @id @default(uuid())
-  level     String   @db.VarChar(20)
-  message   String   @db.Text
-  context   Json
-  stack     String?  @db.Text
-  createdAt DateTime @default(now())
+enum ActivitySource {
+  USER
+  SYSTEM
+}
 
-  @@map("system_log")
+enum ActivityLevel {
+  info
+  warn
+  error
+}
+
+model ActivityLog {
+  id          String         @id @default(uuid())
+  createdAt   DateTime       @default(now())
+  parentLogId String?
+  userId      String?
+  actorLabel  String?        @db.VarChar(100)
+  source      ActivitySource
+  level       ActivityLevel
+  action      String         @db.VarChar(100)
+  entityType  String?        @db.VarChar(50)
+  entityId    String?
+  message     String?        @db.Text
+  stack       String?        @db.Text
+  metadata    Json?
+
+  parent   ActivityLog?  @relation("ActivityLogTree", fields: [parentLogId], references: [id])
+  children ActivityLog[] @relation("ActivityLogTree")
+
+  @@index([parentLogId])
+  @@index([entityType, entityId])
+  @@index([userId, createdAt])
+  @@index([source, createdAt])
+  @@map("activity_log")
 }

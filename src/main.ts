@@ -5,10 +5,16 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { DatabaseService } from './database/database.service';
 import { DbLogger } from './logging/db.logger';
+import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { ClsService } from 'nestjs-cls';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   app.useLogger(app.get(DbLogger));
+
+  app.useGlobalFilters(
+    new AllExceptionsFilter(app.get(ClsService), app.get(DbLogger)),
+  );
 
   app.useGlobalPipes(
     new ValidationPipe({

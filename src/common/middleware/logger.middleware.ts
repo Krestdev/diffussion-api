@@ -1,20 +1,23 @@
 import { Injectable, NestMiddleware, Logger } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
+import { ClsService } from 'nestjs-cls';
+import { AppClsStore } from '../../cls.store';
 
 @Injectable()
 export class LoggerMiddleware implements NestMiddleware {
-  private logger = new Logger('HTTP');
+  private readonly logger = new Logger('HTTP');
 
-  use(request: Request, response: Response, next: NextFunction): void {
-    const { ip, method, originalUrl } = request;
+  constructor(private readonly cls: ClsService<AppClsStore>) {}
 
-    response.on('finish', () => {
-      const { statusCode } = response;
-      const contentLength = response.get('content-length') || 0;
+  use(req: Request, res: Response, next: NextFunction): void {
+    const requestId = (req as any).__requestId;
+    if (requestId) this.cls.set('requestId', requestId);
 
-      this.logger.log(
-        `${method} ${originalUrl} ${statusCode} ${contentLength}  - ${ip}`,
-      );
+    const { ip, method, originalUrl } = req;
+    res.on('finish', () => {
+      const { statusCode } = res;
+      const contentLength = res.get('content-length') || 0;
+      this.logger.log(`${method} ${originalUrl} ${statusCode} ${contentLength} - ${ip} [${requestId}]`);
     });
 
     next();
