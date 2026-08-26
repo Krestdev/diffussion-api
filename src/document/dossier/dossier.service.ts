@@ -180,11 +180,12 @@ export class DossierService {
   }
 
   // RG-AUD-*: full trail of everything recorded against this dossier.
+  // `userId`/`actorLabel` on ActivityLog are loose references rather than a
+  // relation (see schema), so there's no join to include here.
   async getHistorique(id: string) {
     await this.findOne(id);
-    return this.database.auditLog.findMany({
+    return this.database.activityLog.findMany({
       where: { entityType: 'Dossier', entityId: id },
-      include: { user: { select: { id: true, name: true } } },
       orderBy: { createdAt: 'desc' },
     });
   }

@@ -11,7 +11,7 @@ describe('DossierService', () => {
     instruction: Record<string, jest.Mock>;
     courrier: Record<string, jest.Mock>;
     livrable: Record<string, jest.Mock>;
-    auditLog: Record<string, jest.Mock>;
+    activityLog: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
 
@@ -27,7 +27,7 @@ describe('DossierService', () => {
       instruction: { count: jest.fn(), findMany: jest.fn() },
       courrier: { findMany: jest.fn() },
       livrable: { findMany: jest.fn() },
-      auditLog: { findMany: jest.fn() },
+      activityLog: { findMany: jest.fn() },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
     };
 

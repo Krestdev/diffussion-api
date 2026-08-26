@@ -86,7 +86,6 @@ model User {
   userRoles         UserRole[]
   userInstructions  UserInstructions[]
   userNotifications UserNotification[]
-  auditLogs         AuditLog[]
   validations       Validation[]
 
   managedSites        Site[]        @relation("SiteManager")
@@ -769,33 +768,48 @@ model UserNotification {
 }
 
 // ---------------------------------------------------------------------------
-// Administration domain — Audit (BAD RG-AUD-*)
+// Administration domain — Activity log (BAD RG-AUD-*)
 // ---------------------------------------------------------------------------
 
-/// Every action taken on the platform (RG-AUD-001/002): who, when, what,
-/// on which object. `entityId`/`entityType` is a polymorphic pointer since a
-/// single audit trail must span every entity in the system.
-model AuditLog {
-  id         String   @id @default(uuid())
-  userId     String
-  action     String   @db.VarChar(50)
-  entityId   String?
-  entityType String?  @db.VarChar(50)
-  metadata   Json?
-  createdAt  DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id])
-
-  @@map("audit_log")
+enum ActivitySource {
+  USER
+  SYSTEM
 }
 
-model SystemLog {
-  id        String   @id @default(uuid())
-  level     String   @db.VarChar(20)
-  message   String   @db.Text
-  context   Json?
-  stack     String?  @db.Text
-  createdAt DateTime @default(now())
+enum ActivityLevel {
+  info
+  warn
+  error
+}
 
-  @@map("system_log")
+/// Every action taken on the platform (RG-AUD-001/002 + free-form system
+/// events — supersedes the earlier separate AuditLog/SystemLog models):
+/// who (or what system process), when, what, on which object. `userId` is
+/// deliberately a loose reference (no FK) so logging never fails or blocks
+/// on a broken relation, and so SYSTEM-sourced entries (no user) fit the
+/// same table. `parentLogId` correlates a chain of related events (e.g. one
+/// request producing several entity-level entries).
+model ActivityLog {
+  id          String         @id @default(uuid())
+  createdAt   DateTime       @default(now())
+  parentLogId String?
+  userId      String?
+  actorLabel  String?        @db.VarChar(100)
+  source      ActivitySource
+  level       ActivityLevel
+  action      String         @db.VarChar(100)
+  entityType  String?        @db.VarChar(50)
+  entityId    String?
+  message     String?        @db.Text
+  stack       String?        @db.Text
+  metadata    Json?
+
+  parent   ActivityLog?  @relation("ActivityLogTree", fields: [parentLogId], references: [id])
+  children ActivityLog[] @relation("ActivityLogTree")
+
+  @@index([parentLogId])
+  @@index([entityType, entityId])
+  @@index([userId, createdAt])
+  @@index([source, createdAt])
+  @@map("activity_log")
 }
