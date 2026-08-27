@@ -9,6 +9,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Put,
   Query,
   UploadedFile,
   UseGuards,
@@ -20,6 +21,7 @@ import { memoryStorage } from 'multer';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { JwtPayloadWithRefreshToken } from '../auth/types/jwt-payload.type';
+import { SetAccessDto } from '../common/dto/access.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents.query.dto';
 import { DocumentsService } from './documents.service';
@@ -83,5 +85,15 @@ export class DocumentsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.documentsService.remove(id);
+  }
+
+  @Get(':id/access')
+  getAccess(@Param('id', ParseUUIDPipe) id: string) {
+    return this.documentsService.getAccess(id);
+  }
+
+  @Put(':id/access')
+  setAccess(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetAccessDto) {
+    return this.documentsService.setAccess(id, dto);
   }
 }

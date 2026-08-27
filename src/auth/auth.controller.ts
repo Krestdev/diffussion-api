@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
@@ -12,6 +13,7 @@ import { CurrentUser } from './decorators/current-user.decorator';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { JwtRefreshGuard } from './guards/jwt-refresh.guard';
 import { JwtPayloadWithRefreshToken } from './types/jwt-payload.type';
 
 @ApiTags('auth')
@@ -30,13 +32,13 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
-  // @UseGuards(JwtRefreshGuard)
-  // @ApiBearerAuth()
-  // @Post('refresh')
-  // @HttpCode(HttpStatus.OK)
-  // refresh(@CurrentUser() user: JwtPayloadWithRefreshToken) {
-  //   return this.authService.refreshTokens(user.sub, user.refreshToken);
-  // }
+  @UseGuards(JwtRefreshGuard)
+  @ApiBearerAuth()
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  refresh(@CurrentUser() user: JwtPayloadWithRefreshToken) {
+    return this.authService.refreshTokens(user.sub, user.refreshToken);
+  }
 
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -46,10 +48,10 @@ export class AuthController {
     await this.authService.logout(user.sub);
   }
 
-  // @UseGuards(JwtAuthGuard)
-  // @ApiBearerAuth()
-  // @Get('me')
-  // me(@CurrentUser() user: JwtPayloadWithRefreshToken) {
-  //   return this.authService.me(user.sub);
-  // }
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @Get('me')
+  me(@CurrentUser() user: JwtPayloadWithRefreshToken) {
+    return this.authService.me(user.sub);
+  }
 }

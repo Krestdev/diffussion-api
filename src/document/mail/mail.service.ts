@@ -9,6 +9,7 @@ import {
   Prisma,
   ValidationDecision,
 } from '../../../generated/prisma/client';
+import { SetAccessDto } from '../../common/dto/access.dto';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
 import { CreateMailDto } from './dto/create-mail.dto';
@@ -19,8 +20,14 @@ const mailInclude = {
   correspondent: true,
   nature: true,
   canal: true,
-  dossier: { select: { id: true, number: true, title: true } },
+  // `priority` is included so the frontend can show a courrier's urgency —
+  // Courrier has no priority of its own, it inherits its dossier's.
+  dossier: { select: { id: true, number: true, title: true, priority: true } },
 } satisfies Prisma.CourrierInclude;
+
+const courrierAccessInclude = {
+  user: { select: { id: true, name: true, email: true } },
+} satisfies Prisma.CourrierAccessInclude;
 
 // States in which the courrier can still be freely edited or deleted by the
 // person who registered/drafted it (RG-COU-003/004).
@@ -29,6 +36,23 @@ const EDITABLE_STATUSES: CourrierStatus[] = [
   CourrierStatus.ENREGISTRE,
   CourrierStatus.BROUILLON,
   CourrierStatus.A_CORRIGER,
+];
+
+// Entrant workflow: statuses before the courrier has been fully treated —
+// cancellable, and the only ones `close()` can be called from.
+const ENTRANT_OPEN_STATUSES: CourrierStatus[] = [
+  CourrierStatus.RECU,
+  CourrierStatus.ENREGISTRE,
+  CourrierStatus.TRANSMIS,
+  CourrierStatus.EN_TRAITEMENT,
+];
+
+// Sortant workflow: statuses before it's been sent — cancellable.
+const SORTANT_OPEN_STATUSES: CourrierStatus[] = [
+  CourrierStatus.BROUILLON,
+  CourrierStatus.EN_VERIFICATION,
+  CourrierStatus.A_CORRIGER,
+  CourrierStatus.EN_VALIDATION,
 ];
 
 @Injectable()
@@ -179,12 +203,29 @@ export class MailService {
 
   async cancel(id: string) {
     const courrier = await this.requireStatus(id, [
-      CourrierStatus.BROUILLON,
-      CourrierStatus.EN_VERIFICATION,
-      CourrierStatus.A_CORRIGER,
-      CourrierStatus.EN_VALIDATION,
+      ...SORTANT_OPEN_STATUSES,
+      ...ENTRANT_OPEN_STATUSES,
     ]);
     return this.setStatus(courrier.id, CourrierStatus.ANNULE);
+  }
+
+  // Entrant: mark a received courrier as fully treated (10.2.4.8).
+  async close(id: string) {
+    const courrier = await this.requireStatus(id, ENTRANT_OPEN_STATUSES);
+    return this.setStatus(courrier.id, CourrierStatus.CLOTURE);
+  }
+
+  // Entrant: a treated courrier can be archived, mirroring Dossier's
+  // close-before-archive rule.
+  async archive(id: string) {
+    const courrier = await this.requireStatus(id, [CourrierStatus.CLOTURE]);
+    return this.setStatus(courrier.id, CourrierStatus.ARCHIVE);
+  }
+
+  // Inverse of archive() — back to CLOTURE, mirroring Dossier.unarchive().
+  async unarchive(id: string) {
+    const courrier = await this.requireStatus(id, [CourrierStatus.ARCHIVE]);
+    return this.setStatus(courrier.id, CourrierStatus.CLOTURE);
   }
 
   // RG-COU-007: decharge can only be handed once the courrier is actually
@@ -205,6 +246,48 @@ export class MailService {
       },
       include: mailInclude,
     });
+  }
+
+  // Independent from the dossier's own access list (see CourrierAccess in
+  // schema.prisma) — a user with access to the dossier is not automatically
+  // granted access to this courrier, and vice versa.
+  async getAccess(id: string) {
+    await this.findOne(id);
+    return this.database.courrierAccess.findMany({
+      where: { courrierId: id },
+      include: courrierAccessInclude,
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async setAccess(id: string, dto: SetAccessDto) {
+    await this.findOne(id);
+    const userIds = dto.entries.map((entry) => entry.userId);
+
+    await this.database.$transaction([
+      this.database.courrierAccess.deleteMany({
+        where: {
+          courrierId: id,
+          userId: { notIn: userIds.length > 0 ? userIds : ['__none__'] },
+        },
+      }),
+      ...dto.entries.map((entry) =>
+        this.database.courrierAccess.upsert({
+          where: {
+            courrierId_userId: { courrierId: id, userId: entry.userId },
+          },
+          create: {
+            courrierId: id,
+            userId: entry.userId,
+            canView: entry.canView,
+            canEdit: entry.canEdit,
+          },
+          update: { canView: entry.canView, canEdit: entry.canEdit },
+        }),
+      ),
+    ]);
+
+    return this.getAccess(id);
   }
 
   private async requireStatus(id: string, allowed: CourrierStatus[]) {

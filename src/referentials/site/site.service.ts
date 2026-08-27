@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, SiteStatus } from '../../../generated/prisma/client';
+import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
@@ -19,10 +20,12 @@ export class SiteService {
   constructor(private readonly database: DatabaseService) {}
 
   create(dto: CreateSiteDto) {
-    return this.database.site.create({
-      data: dto,
-      include: includeResponsible,
-    });
+    return createWithUniqueReference('ST', (code) =>
+      this.database.site.create({
+        data: { ...dto, code },
+        include: includeResponsible,
+      }),
+    );
   }
 
   findAll() {

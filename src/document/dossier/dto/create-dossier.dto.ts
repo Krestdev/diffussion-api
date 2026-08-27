@@ -34,6 +34,13 @@ export class CreateDossierDto {
   @IsUUID()
   categoryId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Optional wider project/programme this dossier belongs to',
+  })
+  @IsOptional()
+  @IsUUID()
+  projectId?: string;
+
   @ApiProperty({
     description: 'Owning site (RG-DOS-003 — exactly one, mandatory)',
   })

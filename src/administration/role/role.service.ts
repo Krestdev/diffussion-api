@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
@@ -28,15 +29,22 @@ export class RoleService {
 
   async create(dto: CreateRoleDto) {
     const { permissionIds, ...data } = dto;
-    const role = await this.database.role.create({
-      data: {
-        ...data,
-        rolePermissions: permissionIds
-          ? { create: permissionIds.map((permissionId) => ({ permissionId })) }
-          : undefined,
-      },
-      include: roleInclude,
-    });
+    const role = await createWithUniqueReference('RO', (code) =>
+      this.database.role.create({
+        data: {
+          ...data,
+          code,
+          rolePermissions: permissionIds
+            ? {
+                create: permissionIds.map((permissionId) => ({
+                  permissionId,
+                })),
+              }
+            : undefined,
+        },
+        include: roleInclude,
+      }),
+    );
     return toView(role);
   }
 

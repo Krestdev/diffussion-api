@@ -39,6 +39,7 @@ async function seedAdminRole(allPermissionCodes: string[]) {
     where: { name: ADMIN_ROLE_NAME },
     update: {},
     create: {
+      code: 'RO-ADMIN',
       name: ADMIN_ROLE_NAME,
       description: 'Accès complet — tous les droits, pour les tests',
     },
@@ -68,7 +69,7 @@ async function seedSite() {
   if (existing) return existing;
 
   const site = await prisma.site.create({
-    data: { name: DEFAULT_SITE_NAME, city: 'Douala' },
+    data: { code: 'ST-001', name: DEFAULT_SITE_NAME, city: 'Douala' },
   });
   console.log(`✓ Site "${DEFAULT_SITE_NAME}" created`);
   return site;

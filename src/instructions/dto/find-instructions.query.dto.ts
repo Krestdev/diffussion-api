@@ -12,6 +12,11 @@ export class FindInstructionsQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()
+  courrierId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
   assigneeId?: string;
 
   @ApiPropertyOptional({ enum: InstructionStatus })

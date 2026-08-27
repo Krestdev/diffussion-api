@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -19,6 +20,7 @@ import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
+import { SetAccessDto } from '../../common/dto/access.dto';
 import { CreateMailDto } from './dto/create-mail.dto';
 import { FindMailsQueryDto } from './dto/find-mails.query.dto';
 import { UpdateMailDto } from './dto/update-mail.dto';
@@ -104,11 +106,41 @@ export class MailController {
     return this.mailService.cancel(id);
   }
 
+  @Post(':id/close')
+  @RequirePermission(PermissionCode.CourrierRead)
+  close(@Param('id', ParseUUIDPipe) id: string) {
+    return this.mailService.close(id);
+  }
+
+  @Post(':id/archive')
+  @RequirePermission(PermissionCode.CourrierRead)
+  archive(@Param('id', ParseUUIDPipe) id: string) {
+    return this.mailService.archive(id);
+  }
+
+  @Post(':id/unarchive')
+  @RequirePermission(PermissionCode.CourrierRead)
+  unarchive(@Param('id', ParseUUIDPipe) id: string) {
+    return this.mailService.unarchive(id);
+  }
+
   @Post(':id/discharge')
   discharge(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
     return this.mailService.discharge(id, user.sub);
+  }
+
+  @Get(':id/access')
+  @RequirePermission(PermissionCode.CourrierRead)
+  getAccess(@Param('id', ParseUUIDPipe) id: string) {
+    return this.mailService.getAccess(id);
+  }
+
+  @Put(':id/access')
+  @RequirePermission(PermissionCode.CourrierRead)
+  setAccess(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetAccessDto) {
+    return this.mailService.setAccess(id, dto);
   }
 }

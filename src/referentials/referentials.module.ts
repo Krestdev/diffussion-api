@@ -10,6 +10,7 @@ import { DossierTypeModule } from './dossier-type/dossier-type.module';
 import { CourrierNatureModule } from './courrier-nature/courrier-nature.module';
 import { CanalModule } from './canal/canal.module';
 import { CorrespondentTypeModule } from './correspondent-type/correspondent-type.module';
+import { ProjectModule } from './project/project.module';
 
 @Module({
   controllers: [SiteController, ServiceController, CorrespondantController],
@@ -21,6 +22,7 @@ import { CorrespondentTypeModule } from './correspondent-type/correspondent-type
     CourrierNatureModule,
     CanalModule,
     CorrespondentTypeModule,
+    ProjectModule,
   ],
 })
 export class ReferentialsModule {}

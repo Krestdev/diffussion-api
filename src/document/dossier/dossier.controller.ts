@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -16,6 +17,7 @@ import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
+import { SetAccessDto } from '../../common/dto/access.dto';
 import { DossierService } from './dossier.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
 import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
@@ -74,6 +76,12 @@ export class DossierController {
     return this.dossierService.archive(id);
   }
 
+  @Post(':id/unarchive')
+  @RequirePermission(PermissionCode.DossierArchive)
+  unarchive(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.unarchive(id);
+  }
+
   @Get(':id/courriers')
   getCourriers(@Param('id', ParseUUIDPipe) id: string) {
     return this.dossierService.getCourriers(id);
@@ -98,5 +106,17 @@ export class DossierController {
   @Get(':id/progression')
   getProgression(@Param('id', ParseUUIDPipe) id: string) {
     return this.dossierService.getProgression(id);
+  }
+
+  @Get(':id/access')
+  @RequirePermission(PermissionCode.DossierRead)
+  getAccess(@Param('id', ParseUUIDPipe) id: string) {
+    return this.dossierService.getAccess(id);
+  }
+
+  @Put(':id/access')
+  @RequirePermission(PermissionCode.DossierUpdate)
+  setAccess(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetAccessDto) {
+    return this.dossierService.setAccess(id, dto);
   }
 }

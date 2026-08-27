@@ -88,16 +88,19 @@ model User {
   userNotifications UserNotification[]
   validations       Validation[]
 
-  managedSites        Site[]        @relation("SiteManager")
-  responsibleDossiers Dossier[]     @relation("DossierResponsible")
-  createdDossiers     Dossier[]     @relation("DossierCreatedBy")
-  createdCourriers    Courrier[]    @relation("CourrierCreatedBy")
-  dischargedCourriers Courrier[]    @relation("CourrierDischargedBy")
-  createdInstructions Instruction[] @relation("InstructionCreatedBy")
-  createdLivrables    Livrable[]    @relation("LivrableCreatedBy")
-  uploadedDocuments   Document[]    @relation("DocumentUploadedBy")
-  delegationsGiven    Delegation[]  @relation("DelegationDelegant")
-  delegationsReceived Delegation[]  @relation("DelegationDelegataire")
+  managedSites        Site[]           @relation("SiteManager")
+  responsibleDossiers Dossier[]        @relation("DossierResponsible")
+  createdDossiers     Dossier[]        @relation("DossierCreatedBy")
+  createdCourriers    Courrier[]       @relation("CourrierCreatedBy")
+  dischargedCourriers Courrier[]       @relation("CourrierDischargedBy")
+  createdInstructions Instruction[]    @relation("InstructionCreatedBy")
+  createdLivrables    Livrable[]       @relation("LivrableCreatedBy")
+  uploadedDocuments   Document[]       @relation("DocumentUploadedBy")
+  delegationsGiven    Delegation[]     @relation("DelegationDelegant")
+  delegationsReceived Delegation[]     @relation("DelegationDelegataire")
+  dossierAccesses     DossierAccess[]
+  courrierAccesses    CourrierAccess[]
+  documentAccesses    DocumentAccess[]
 
   @@map("user")
 }
@@ -122,6 +125,7 @@ enum SiteStatus {
 /// "site propriétaire" (RG-DOS-003) and has a responsible user.
 model Site {
   id            String     @id @default(uuid())
+  code          String     @unique @db.VarChar(30)
   name          String     @db.VarChar(100)
   city          String?    @db.VarChar(100)
   status        SiteStatus @default(ACTIVE)
@@ -156,6 +160,7 @@ model Assignment {
 /// Held directly by users (RG-ORG-003: cumulative, not site-scoped).
 model Role {
   id          String   @id @default(uuid())
+  code        String   @unique @db.VarChar(30)
   name        String   @unique @db.VarChar(50)
   description String?
   createdAt   DateTime @default(now())
@@ -298,6 +303,7 @@ enum CorrespondentStatus {
 /// Referential of external parties (7.5). May be sender, recipient, or both.
 model Correspondent {
   id          String              @id @default(uuid())
+  code        String              @unique @db.VarChar(30)
   name        String              @db.VarChar(150)
   typeId      String?
   address     String?
@@ -351,6 +357,8 @@ model Dossier {
   description     String?
   typeId          String?
   categoryId      String?
+  /// Optional grouping of dossiers under a wider project/programme.
+  projectId       String?
   /// RG-DOS-003: exactly one owning site.
   siteId          String
   /// RG-DOS-004: always has a responsible at any instant.
@@ -371,6 +379,7 @@ model Dossier {
 
   type        DossierType? @relation(fields: [typeId], references: [id])
   category    Category?    @relation(fields: [categoryId], references: [id])
+  project     Project?     @relation(fields: [projectId], references: [id])
   site        Site         @relation(fields: [siteId], references: [id])
   responsible User?        @relation("DossierResponsible", fields: [responsibleId], references: [id])
   createdBy   User?        @relation("DossierCreatedBy", fields: [createdById], references: [id])
@@ -380,8 +389,42 @@ model Dossier {
   documents        Document[]
   notifications    Notification[]
   circuitInstances CircuitInstance[]
+  /// Per-user view/edit access on top of `confidentiality` (RESTRICTED
+  /// dossiers are otherwise only visible to their responsible/creator).
+  accesses         DossierAccess[]
 
   @@map("dossier")
+}
+
+/// A wider project/programme a dossier can optionally be tagged under —
+/// purely organisational, carries no workflow of its own.
+model Project {
+  id        String   @id @default(uuid())
+  name      String   @unique @db.VarChar(200)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dossiers Dossier[]
+
+  @@map("project")
+}
+
+/// Explicit per-user grant on a dossier, on top of its `confidentiality`.
+/// One row per (dossier, user); absence of a row means no explicit grant.
+model DossierAccess {
+  id        String   @id @default(uuid())
+  dossierId String
+  userId    String
+  canView   Boolean  @default(true)
+  canEdit   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dossier Dossier @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([dossierId, userId])
+  @@map("dossier_access")
 }
 
 enum CourrierDirection {
@@ -452,8 +495,31 @@ model Courrier {
   instructions     Instruction[]
   notifications    Notification[]
   circuitInstances CircuitInstance[]
+  /// Independent from the dossier's own access list — a user with access to
+  /// the dossier is not automatically granted access to every courrier
+  /// inside it, and vice versa.
+  accesses         CourrierAccess[]
 
   @@map("courrier")
+}
+
+/// Explicit per-user grant on a courrier — mirrors DossierAccess, but is a
+/// wholly separate list: courrier access does not inherit from, or feed
+/// into, its parent dossier's.
+model CourrierAccess {
+  id         String   @id @default(uuid())
+  courrierId String
+  userId     String
+  canView    Boolean  @default(true)
+  canEdit    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  courrier Courrier @relation(fields: [courrierId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([courrierId, userId])
+  @@map("courrier_access")
 }
 
 // ---------------------------------------------------------------------------
@@ -488,6 +554,8 @@ enum UserInstructionRole {
 /// the courrier that triggered it.
 model Instruction {
   id            String              @id @default(uuid())
+  /// System-generated, human-readable reference (matches Dossier/Courrier).
+  number        String              @unique @db.VarChar(30)
   dossierId     String
   courrierId    String?
   title         String              @db.VarChar(200)
@@ -628,7 +696,29 @@ model Document {
   livrable   Livrable? @relation(fields: [livrableId], references: [id])
   uploadedBy User?     @relation("DocumentUploadedBy", fields: [uploadedById], references: [id])
 
+  /// Independent from its dossier's/courrier's own access list, same
+  /// reasoning as CourrierAccess.
+  accesses DocumentAccess[]
+
   @@map("document")
+}
+
+/// Explicit per-user grant on a single document — mirrors DossierAccess and
+/// CourrierAccess, each level's list independent of the others.
+model DocumentAccess {
+  id         String   @id @default(uuid())
+  documentId String
+  userId     String
+  canView    Boolean  @default(true)
+  canEdit    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+  @@map("document_access")
 }
 
 // ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { Prisma } from '../../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
 import { AppClsStore } from '../cls.store';
+import { FindActivityLogsQueryDto } from './dto/find-activity-logs.query.dto';
 
 export interface ActivityPayload {
   action: string;
@@ -60,5 +61,49 @@ export class ActivityService {
     const id = await this.record(payload);
     this.cls.set('parentLogId', id);
     return id;
+  }
+
+  /**
+   * Paginated, filterable listing for the Journal d'audit admin screen.
+   * Root logs only (parentLogId: null) — the request-scoped child/grandchild
+   * entries recorded by ActivityInterceptor/activity.record() are traceable
+   * detail, not separate rows in the top-level audit list.
+   */
+  async findAll(query: FindActivityLogsQueryDto) {
+    const where: Prisma.ActivityLogWhereInput = {
+      parentLogId: null,
+      source: query.source,
+      level: query.level,
+      entityType: query.entityType,
+      entityId: query.entityId,
+      userId: query.userId,
+      OR: query.search
+        ? [
+            { action: { contains: query.search, mode: 'insensitive' } },
+            { message: { contains: query.search, mode: 'insensitive' } },
+          ]
+        : undefined,
+    };
+
+    const [data, total] = await this.db.$transaction([
+      this.db.activityLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: query.skip ?? 0,
+        take: query.take ?? 20,
+      }),
+      this.db.activityLog.count({ where }),
+    ]);
+
+    return { data, total, skip: query.skip ?? 0, take: query.take ?? 20 };
+  }
+
+  async findOne(id: string) {
+    const log = await this.db.activityLog.findUnique({
+      where: { id },
+      include: { children: { orderBy: { createdAt: 'asc' } } },
+    });
+    if (!log) throw new NotFoundException(`Activity log ${id} not found`);
+    return log;
   }
 }

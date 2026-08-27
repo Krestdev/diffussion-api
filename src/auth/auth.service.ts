@@ -86,20 +86,42 @@ export class AuthService {
     });
   }
 
-  // async me(userUuid: number) {
-  //   const user = await this.database.utilisateur.findUniqueOrThrow({
-  //     where: { uuid: userUuid },
-  //     select: {
-  //       uuid: true,
-  //       name: true,
-  //       email: true,
-  //       status: true,
-  //       createdAt: true,
-  //       updatedAt: true,
-  //     },
-  //   });
-  //   return user;
-  // }
+  // The current user's own profile, including the roles/sites the frontend
+  // needs to render the sidebar and gate UI without a separate call into
+  // the (permission-gated) administration/users endpoints.
+  async me(userUuid: string) {
+    const user = await this.database.user.findUniqueOrThrow({
+      where: { id: userUuid },
+      include: {
+        userRoles: {
+          include: {
+            role: {
+              include: { rolePermissions: { include: { permission: true } } },
+            },
+          },
+        },
+        assignments: { include: { site: true } },
+      },
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { password, refreshToken, userRoles, assignments, ...rest } = user;
+    const roles = userRoles.map((ur) => ur.role.name);
+    const permissions = [
+      ...new Set(
+        userRoles.flatMap((ur) =>
+          ur.role.rolePermissions.map((rp) => rp.permission.code),
+        ),
+      ),
+    ];
+
+    return {
+      ...rest,
+      roles,
+      permissions,
+      sites: assignments.map((a) => a.site),
+    };
+  }
 
   private requireEnv(name: string): string {
     const value = process.env[name];

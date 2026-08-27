@@ -8,6 +8,7 @@ import {
   InstructionStatus,
   Prisma,
 } from '../../../generated/prisma/client';
+import { SetAccessDto } from '../../common/dto/access.dto';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
@@ -18,10 +19,15 @@ const dossierInclude = {
   site: true,
   type: true,
   category: true,
+  project: true,
   responsible: { select: { id: true, name: true, email: true } },
   createdBy: { select: { id: true, name: true, email: true } },
   _count: { select: { courriers: true, instructions: true } },
 } satisfies Prisma.DossierInclude;
+
+const dossierAccessInclude = {
+  user: { select: { id: true, name: true, email: true } },
+} satisfies Prisma.DossierAccessInclude;
 
 const TERMINAL_INSTRUCTION_STATUSES: InstructionStatus[] = [
   InstructionStatus.TERMINEE,
@@ -153,6 +159,21 @@ export class DossierService {
     });
   }
 
+  // Inverse of archive() — brings a dossier back to CLOSED (not straight to
+  // IN_PROGRESS: archiving only ever happens from CLOSED, so this undoes
+  // exactly that step; a further reopen() can resume active work from there).
+  async unarchive(id: string) {
+    const dossier = await this.findOne(id);
+    if (dossier.status !== DossierStatus.ARCHIVED) {
+      throw new BadRequestException('Only an archived dossier can be restored');
+    }
+    return this.database.dossier.update({
+      where: { id },
+      data: { status: DossierStatus.CLOSED, archivedAt: null },
+      include: dossierInclude,
+    });
+  }
+
   async getCourriers(id: string) {
     await this.findOne(id);
     return this.database.courrier.findMany({
@@ -205,6 +226,47 @@ export class DossierService {
     await this.database.dossier.update({ where: { id }, data: { progress } });
 
     return { total, done, progress };
+  }
+
+  // RG-DOS-*: explicit per-user grants on top of `confidentiality` — a
+  // RESTRICTED dossier is otherwise only visible to its responsible/creator.
+  async getAccess(id: string) {
+    await this.findOne(id);
+    return this.database.dossierAccess.findMany({
+      where: { dossierId: id },
+      include: dossierAccessInclude,
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  // Full-replace: the entries given become the complete grant set for this
+  // dossier — any existing grant for a user not listed is dropped.
+  async setAccess(id: string, dto: SetAccessDto) {
+    await this.findOne(id);
+    const userIds = dto.entries.map((entry) => entry.userId);
+
+    await this.database.$transaction([
+      this.database.dossierAccess.deleteMany({
+        where: {
+          dossierId: id,
+          userId: { notIn: userIds.length > 0 ? userIds : ['__none__'] },
+        },
+      }),
+      ...dto.entries.map((entry) =>
+        this.database.dossierAccess.upsert({
+          where: { dossierId_userId: { dossierId: id, userId: entry.userId } },
+          create: {
+            dossierId: id,
+            userId: entry.userId,
+            canView: entry.canView,
+            canEdit: entry.canEdit,
+          },
+          update: { canView: entry.canView, canEdit: entry.canEdit },
+        }),
+      ),
+    ]);
+
+    return this.getAccess(id);
   }
 
   private async ensureMutable(id: string) {

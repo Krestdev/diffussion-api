@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCorrespondentDto } from './dto/create-correspondent.dto';
 import { FindCorrespondantsQueryDto } from './dto/find-correspondents.query.dto';
@@ -18,10 +19,12 @@ export class CorrespondantService {
   constructor(private readonly database: DatabaseService) {}
 
   create(dto: CreateCorrespondentDto) {
-    return this.database.correspondent.create({
-      data: dto,
-      include: includeType,
-    });
+    return createWithUniqueReference('CP', (code) =>
+      this.database.correspondent.create({
+        data: { ...dto, code },
+        include: includeType,
+      }),
+    );
   }
 
   async findAll(query: FindCorrespondantsQueryDto) {

@@ -9,6 +9,7 @@ import {
   Prisma,
   UserInstructionRole,
 } from '../../generated/prisma/client';
+import { createWithUniqueReference } from '../common/utils/generate-reference';
 import { DatabaseService } from '../database/database.service';
 import { AssignInstructionDto } from './dto/assign-instruction.dto';
 import { CreateInstructionsDto } from './dto/create-instruction.dto';
@@ -48,29 +49,47 @@ export class InstructionsService {
     const { executantIds, superviseurId, dueDate, ...data } = dto;
     const hasAssignees = Boolean(executantIds?.length || superviseurId);
 
-    return this.database.instruction.create({
-      data: {
-        ...data,
-        dueDate: dueDate ? new Date(dueDate) : undefined,
-        createdById,
-        status: hasAssignees
-          ? InstructionStatus.AFFECTEE
-          : InstructionStatus.A_AFFECTER,
-        assignees: hasAssignees
-          ? {
-              createMany: {
-                data: assignmentRows({ executantIds, superviseurId }),
-              },
-            }
-          : undefined,
-      },
-      include: instructionInclude,
-    });
+    const instruction = await createWithUniqueReference('T', (number) =>
+      this.database.instruction.create({
+        data: {
+          ...data,
+          number,
+          dueDate: dueDate ? new Date(dueDate) : undefined,
+          createdById,
+          status: hasAssignees
+            ? InstructionStatus.AFFECTEE
+            : InstructionStatus.A_AFFECTER,
+          assignees: hasAssignees
+            ? {
+                createMany: {
+                  data: assignmentRows({ executantIds, superviseurId }),
+                },
+              }
+            : undefined,
+        },
+        include: instructionInclude,
+      }),
+    );
+
+    if (hasAssignees) {
+      await this.ensureViewAccess(
+        [...(executantIds ?? []), superviseurId].filter(
+          (userId): userId is string => Boolean(userId),
+        ),
+        {
+          dossierId: instruction.dossierId,
+          courrierId: instruction.courrierId,
+        },
+      );
+    }
+
+    return instruction;
   }
 
   async findAll(query: FindInstructionsQueryDto) {
     const where: Prisma.InstructionWhereInput = {
       dossierId: query.dossierId,
+      courrierId: query.courrierId,
       status: query.status,
       assignees: query.assigneeId
         ? { some: { userId: query.assigneeId } }
@@ -125,7 +144,7 @@ export class InstructionsService {
       );
     }
 
-    return this.database.instruction.update({
+    const updated = await this.database.instruction.update({
       where: { id: instruction.id },
       data: {
         status: InstructionStatus.AFFECTEE,
@@ -136,6 +155,15 @@ export class InstructionsService {
       },
       include: instructionInclude,
     });
+
+    await this.ensureViewAccess(
+      [...(dto.executantIds ?? []), dto.superviseurId].filter(
+        (userId): userId is string => Boolean(userId),
+      ),
+      { dossierId: instruction.dossierId, courrierId: instruction.courrierId },
+    );
+
+    return updated;
   }
 
   // RG-INS-003: the executant accepts.
@@ -245,6 +273,50 @@ export class InstructionsService {
       data: { status },
       include: instructionInclude,
     });
+  }
+
+  // RG-INS-002 + access grants: assigning someone a task they couldn't
+  // otherwise see must not leave them unable to open it. Dossier and
+  // Courrier each have their own independent access list (see
+  // DossierAccess/CourrierAccess in schema.prisma — a grant on one is never
+  // inherited from, or propagated to, the other), so an assignee needs a
+  // grant on *both* the instruction's dossier and, if it has one, the
+  // courrier it was raised from. Never touches `canEdit`, so this only ever
+  // widens, never narrows, access.
+  private async ensureViewAccess(
+    userIds: string[],
+    target: { dossierId: string; courrierId: string | null },
+  ) {
+    const uniqueIds = [...new Set(userIds)];
+    if (uniqueIds.length === 0) {
+      return;
+    }
+    await this.database.$transaction([
+      ...uniqueIds.map((userId) =>
+        this.database.dossierAccess.upsert({
+          where: {
+            dossierId_userId: { dossierId: target.dossierId, userId },
+          },
+          create: { dossierId: target.dossierId, userId, canView: true },
+          update: { canView: true },
+        }),
+      ),
+      ...(target.courrierId
+        ? uniqueIds.map((userId) =>
+            this.database.courrierAccess.upsert({
+              where: {
+                courrierId_userId: { courrierId: target.courrierId!, userId },
+              },
+              create: {
+                courrierId: target.courrierId!,
+                userId,
+                canView: true,
+              },
+              update: { canView: true },
+            }),
+          )
+        : []),
+    ]);
   }
 
   private async ensureNotTerminal(id: string) {

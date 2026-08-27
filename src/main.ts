@@ -12,6 +12,14 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   app.useLogger(app.get(DbLogger));
 
+  // The Next.js frontend runs on a different origin (localhost:3000) and
+  // sends the JWT as an Authorization header, not a cookie, but the
+  // preflight still needs an explicit allow-list.
+  app.enableCors({
+    origin: (process.env.CORS_ORIGINS ?? 'http://localhost:3000').split(','),
+    credentials: true,
+  });
+
   app.useGlobalFilters(
     new AllExceptionsFilter(app.get(ClsService), app.get(DbLogger)),
   );
