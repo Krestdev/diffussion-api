@@ -63,4 +63,14 @@ export class CreateMailDto {
   @IsOptional()
   @IsString()
   scanUrl?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Circuit owner (10.6) — typically chosen among the users returned by ' +
+      "GET /circuit-instances/eligible-owners?dossierId=. Can be left " +
+      "unset and completed later (see MailService.setOwner).",
+  })
+  @IsOptional()
+  @IsUUID()
+  ownerId?: string;
 }

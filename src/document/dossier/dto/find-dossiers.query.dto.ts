@@ -29,6 +29,11 @@ export class FindDossiersQueryDto {
   @IsUUID()
   responsibleId?: string;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  typeId?: string;
+
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()
   @Type(() => Number)

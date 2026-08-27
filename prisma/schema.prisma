@@ -93,9 +93,11 @@ model User {
   createdDossiers     Dossier[]        @relation("DossierCreatedBy")
   createdCourriers    Courrier[]       @relation("CourrierCreatedBy")
   dischargedCourriers Courrier[]       @relation("CourrierDischargedBy")
+  ownedCourriers      Courrier[]       @relation("CourrierOwner")
   createdInstructions Instruction[]    @relation("InstructionCreatedBy")
   createdLivrables    Livrable[]       @relation("LivrableCreatedBy")
   uploadedDocuments   Document[]       @relation("DocumentUploadedBy")
+  ownedDocuments      Document[]       @relation("DocumentOwner")
   delegationsGiven    Delegation[]     @relation("DelegationDelegant")
   delegationsReceived Delegation[]     @relation("DelegationDelegataire")
   dossierAccesses     DossierAccess[]
@@ -442,9 +444,11 @@ enum CourrierStatus {
   EN_TRAITEMENT
   EN_ATTENTE
   BROUILLON
-  EN_VERIFICATION
+  /// Progressing through its dossier type's validation Circuit — replaces
+  /// the old fixed EN_VERIFICATION/EN_VALIDATION pair now that the number
+  /// of approval steps is driven by a CircuitInstance (BAD 10.6 / RG-VAL-*).
+  EN_CIRCUIT
   A_CORRIGER
-  EN_VALIDATION
   VALIDE
   PRET_A_ENVOYER
   ENVOYE
@@ -480,6 +484,14 @@ model Courrier {
   dischargedById     String?
   dischargedStamp    Boolean   @default(false)
 
+  /// Circuit owner (10.6): chosen at creation from among the holders of the
+  /// role the courrier's circuit will require, or left unset and completed
+  /// later by the creator, the owning site's responsible, or a platform
+  /// admin. Can decide any step of this courrier's CircuitInstance
+  /// regardless of that step's own role/site gate — see
+  /// CircuitInstanceService.
+  ownerId String?
+
   createdById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -490,6 +502,7 @@ model Courrier {
   canal         Canal?          @relation(fields: [canalId], references: [id])
   createdBy     User?           @relation("CourrierCreatedBy", fields: [createdById], references: [id])
   dischargedBy  User?           @relation("CourrierDischargedBy", fields: [dischargedById], references: [id])
+  owner         User?           @relation("CourrierOwner", fields: [ownerId], references: [id])
 
   documents        Document[]
   instructions     Instruction[]
@@ -691,14 +704,20 @@ model Document {
   uploadedById String?
   createdAt    DateTime @default(now())
 
+  /// Circuit owner (10.6) — same semantics as Courrier.ownerId, for a
+  /// circuit started directly on this document rather than on its courrier.
+  ownerId String?
+
   dossier    Dossier?  @relation(fields: [dossierId], references: [id])
   courrier   Courrier? @relation(fields: [courrierId], references: [id])
   livrable   Livrable? @relation(fields: [livrableId], references: [id])
   uploadedBy User?     @relation("DocumentUploadedBy", fields: [uploadedById], references: [id])
+  owner      User?     @relation("DocumentOwner", fields: [ownerId], references: [id])
 
   /// Independent from its dossier's/courrier's own access list, same
   /// reasoning as CourrierAccess.
-  accesses DocumentAccess[]
+  accesses         DocumentAccess[]
+  circuitInstances CircuitInstance[]
 
   @@map("document")
 }
@@ -773,19 +792,33 @@ model CircuitStep {
   @@map("circuit_step")
 }
 
+enum CircuitInstanceStatus {
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
 /// A circuit template "materialized" against one dossier/courrier — the
 /// instance keeps following its own path even if the template later changes.
 model CircuitInstance {
-  id              String  @id @default(uuid())
+  id              String                @id @default(uuid())
   circuitId       String
+  /// Derived from courrierId/documentId's own dossier — kept only so a
+  /// dossier's circuits can be listed in one query (see
+  /// CircuitInstanceService.findAll). Never itself a valid start target: a
+  /// circuit must attach to a courrier or a document, never a bare dossier.
   dossierId       String?
   courrierId      String?
+  documentId      String?
   currentStepId   String
   correspondentId String?
+  status          CircuitInstanceStatus @default(IN_PROGRESS)
+  completedAt     DateTime?
 
   circuit       Circuit        @relation(fields: [circuitId], references: [id])
   dossier       Dossier?       @relation(fields: [dossierId], references: [id])
   courrier      Courrier?      @relation(fields: [courrierId], references: [id])
+  document      Document?      @relation(fields: [documentId], references: [id])
   currentStep   CircuitStep    @relation(fields: [currentStepId], references: [id])
   correspondent Correspondent? @relation(fields: [correspondentId], references: [id])
 

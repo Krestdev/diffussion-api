@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,11 +8,14 @@ import {
   CourrierDirection,
   CourrierStatus,
   Prisma,
-  ValidationDecision,
 } from '../../../generated/prisma/client';
 import { SetAccessDto } from '../../common/dto/access.dto';
+import { SetOwnerDto } from '../../common/dto/set-owner.dto';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
+import { RbacService } from '../../auth/rbac/rbac.service';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { CircuitInstanceService } from '../../circuits/circuit-instance/circuit-instance.service';
 import { CreateMailDto } from './dto/create-mail.dto';
 import { FindMailsQueryDto } from './dto/find-mails.query.dto';
 import { UpdateMailDto } from './dto/update-mail.dto';
@@ -20,6 +24,7 @@ const mailInclude = {
   correspondent: true,
   nature: true,
   canal: true,
+  owner: { select: { id: true, name: true, email: true } },
   // `priority` is included so the frontend can show a courrier's urgency —
   // Courrier has no priority of its own, it inherits its dossier's.
   dossier: { select: { id: true, number: true, title: true, priority: true } },
@@ -50,15 +55,36 @@ const ENTRANT_OPEN_STATUSES: CourrierStatus[] = [
 // Sortant workflow: statuses before it's been sent — cancellable.
 const SORTANT_OPEN_STATUSES: CourrierStatus[] = [
   CourrierStatus.BROUILLON,
-  CourrierStatus.EN_VERIFICATION,
+  CourrierStatus.EN_CIRCUIT,
   CourrierStatus.A_CORRIGER,
-  CourrierStatus.EN_VALIDATION,
 ];
+
+// Statuses submitForVerification() may start a circuit from, per direction
+// (BAD 10.6 applies to entrant treatment as much as sortant drafting — the
+// circuit itself and the CourrierStatus it moves through are already
+// shared between both, see the CourrierStatus enum comment).
+const CIRCUIT_ELIGIBLE_STATUSES: Record<CourrierDirection, CourrierStatus[]> = {
+  [CourrierDirection.SORTANT]: [
+    CourrierStatus.BROUILLON,
+    CourrierStatus.A_CORRIGER,
+  ],
+  [CourrierDirection.ENTRANT]: [
+    CourrierStatus.TRANSMIS,
+    CourrierStatus.EN_TRAITEMENT,
+    CourrierStatus.A_CORRIGER,
+  ],
+};
 
 @Injectable()
 export class MailService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly circuitInstanceService: CircuitInstanceService,
+    private readonly rbac: RbacService,
+  ) {}
 
+  // (dto already carries ownerId straight through via `...data` below —
+  // Prisma accepts the scalar FK field directly on CourrierCreateInput.)
   create(dto: CreateMailDto, createdById: string) {
     const { receivedAt, ...data } = dto;
     return createWithUniqueReference('M', (number) =>
@@ -139,56 +165,55 @@ export class MailService {
     return this.setStatus(courrier.id, CourrierStatus.TRANSMIS);
   }
 
-  // Sortant: BROUILLON | A_CORRIGER -> EN_VERIFICATION.
-  async submitForVerification(id: string) {
-    const courrier = await this.requireStatus(id, [
-      CourrierStatus.BROUILLON,
-      CourrierStatus.A_CORRIGER,
-    ]);
-    return this.setStatus(courrier.id, CourrierStatus.EN_VERIFICATION);
+  // Sortant: BROUILLON | A_CORRIGER -> EN_CIRCUIT. Entrant: TRANSMIS |
+  // EN_TRAITEMENT | A_CORRIGER -> EN_CIRCUIT — both directions share the
+  // same CircuitInstance mechanics and the same EN_CIRCUIT/VALIDE/
+  // A_CORRIGER statuses (10.6 / RG-VAL-*). Starts a CircuitInstance
+  // resolved from the courrier's dossier type — the number of approval
+  // steps is whatever that Circuit template defines. Throws if the
+  // dossier's type has no circuit configured; see
+  // CircuitInstanceService.start().
+  async submitForVerification(id: string, userId: string) {
+    const courrier = await this.findOne(id);
+    const allowed = CIRCUIT_ELIGIBLE_STATUSES[courrier.direction];
+    if (!allowed.includes(courrier.status)) {
+      throw new BadRequestException(
+        `Courrier is ${courrier.status}, expected one of: ${allowed.join(', ')}`,
+      );
+    }
+    await this.circuitInstanceService.start({ courrierId: id }, userId);
+    return this.findOne(id);
   }
 
-  // Sortant: EN_VERIFICATION -> EN_VALIDATION (approved) | A_CORRIGER.
-  async verify(id: string, approved: boolean) {
-    const courrier = await this.requireStatus(id, [
-      CourrierStatus.EN_VERIFICATION,
-    ]);
-    return this.setStatus(
-      courrier.id,
-      approved ? CourrierStatus.EN_VALIDATION : CourrierStatus.A_CORRIGER,
+  // Circuit owner (10.6): can decide any step of this courrier's circuit
+  // regardless of role/site gating. Settable at creation (CreateMailDto) or
+  // — since it can be left unset — completed/reassigned later, but only by
+  // the courrier's creator, the responsible of the dossier's owning site,
+  // or a platform admin (ADMIN_MANAGE_CIRCUITS).
+  async setOwner(id: string, dto: SetOwnerDto, actingUserId: string) {
+    const courrier = await this.database.courrier.findUnique({
+      where: { id },
+      include: { dossier: { select: { site: true } } },
+    });
+    if (!courrier) {
+      throw new NotFoundException(`Courrier ${id} not found`);
+    }
+    const isCreator = courrier.createdById === actingUserId;
+    const isSiteAdmin = courrier.dossier.site.responsibleId === actingUserId;
+    const isPlatformAdmin = await this.rbac.hasPermission(
+      actingUserId,
+      PermissionCode.AdminManageCircuits,
     );
-  }
-
-  // Sortant: EN_VALIDATION -> VALIDE (approved) | A_CORRIGER, and records the
-  // decision (10.6 / RG-VAL-*).
-  async validateCourrier(
-    id: string,
-    approved: boolean,
-    validatorId: string,
-    motif?: string,
-  ) {
-    const courrier = await this.requireStatus(id, [
-      CourrierStatus.EN_VALIDATION,
-    ]);
-    const [updated] = await this.database.$transaction([
-      this.database.courrier.update({
-        where: { id: courrier.id },
-        data: {
-          status: approved ? CourrierStatus.VALIDE : CourrierStatus.A_CORRIGER,
-        },
-        include: mailInclude,
-      }),
-      this.database.validation.create({
-        data: {
-          validatorId,
-          decision: approved
-            ? ValidationDecision.VALIDE
-            : ValidationDecision.CORRECTIONS_DEMANDEES,
-          motif,
-        },
-      }),
-    ]);
-    return updated;
+    if (!isCreator && !isSiteAdmin && !isPlatformAdmin) {
+      throw new ForbiddenException(
+        'Only the creator, the site responsible, or a platform admin can assign this courrier\'s circuit owner',
+      );
+    }
+    return this.database.courrier.update({
+      where: { id },
+      data: { ownerId: dto.ownerId },
+      include: mailInclude,
+    });
   }
 
   // Sortant: VALIDE -> ENVOYE.

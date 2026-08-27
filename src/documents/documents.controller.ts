@@ -8,6 +8,7 @@ import {
   HttpStatus,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Query,
@@ -22,6 +23,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { JwtPayloadWithRefreshToken } from '../auth/types/jwt-payload.type';
 import { SetAccessDto } from '../common/dto/access.dto';
+import { SetOwnerDto } from '../common/dto/set-owner.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents.query.dto';
 import { DocumentsService } from './documents.service';
@@ -85,6 +87,17 @@ export class DocumentsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.documentsService.remove(id);
+  }
+
+  // Authorization (uploader / site responsible / platform admin) is
+  // enforced inside DocumentsService.setOwner.
+  @Patch(':id/owner')
+  setOwner(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetOwnerDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.setOwner(id, dto, user.sub);
   }
 
   @Get(':id/access')

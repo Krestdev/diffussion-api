@@ -6,11 +6,13 @@ import {
 import {
   InstructionStatus,
   LivrableStatus,
+  NotificationCanal,
   Prisma,
   UserInstructionRole,
 } from '../../generated/prisma/client';
 import { createWithUniqueReference } from '../common/utils/generate-reference';
 import { DatabaseService } from '../database/database.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { AssignInstructionDto } from './dto/assign-instruction.dto';
 import { CreateInstructionsDto } from './dto/create-instruction.dto';
 import { FindInstructionsQueryDto } from './dto/find-instructions.query.dto';
@@ -43,7 +45,56 @@ function assignmentRows(dto: {
 
 @Injectable()
 export class InstructionsService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly notifications: NotificationsService,
+  ) {}
+
+  private notifyInstruction(
+    instruction: { id: string; dossierId: string; courrierId: string | null },
+    userIds: (string | null | undefined)[],
+    event: { type: string; message: string },
+    excludeUserId?: string,
+  ) {
+    const recipientIds = [
+      ...new Set(
+        userIds.filter(
+          (id): id is string => Boolean(id) && id !== excludeUserId,
+        ),
+      ),
+    ];
+    if (recipientIds.length === 0) return;
+    // Fire-and-forget: a notification failing to write must never fail the
+    // instruction change it's about.
+    this.notifications
+      .create({
+        recipientIds,
+        type: event.type,
+        message: event.message,
+        canal: NotificationCanal.IN_APP,
+        dossierId: instruction.dossierId,
+        courrierId: instruction.courrierId ?? undefined,
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to create instruction notification', error);
+      });
+  }
+
+  private notifyAssignment(
+    instruction: { id: string; title: string; dossierId: string; courrierId: string | null },
+    userIds: (string | null | undefined)[],
+    excludeUserId?: string,
+  ) {
+    this.notifyInstruction(
+      instruction,
+      userIds,
+      {
+        type: 'TASK_ASSIGNED',
+        message: `La tâche « ${instruction.title} » vous a été assignée.`,
+      },
+      excludeUserId,
+    );
+  }
 
   async create(dto: CreateInstructionsDto, createdById: string) {
     const { executantIds, superviseurId, dueDate, ...data } = dto;
@@ -72,15 +123,14 @@ export class InstructionsService {
     );
 
     if (hasAssignees) {
-      await this.ensureViewAccess(
-        [...(executantIds ?? []), superviseurId].filter(
-          (userId): userId is string => Boolean(userId),
-        ),
-        {
-          dossierId: instruction.dossierId,
-          courrierId: instruction.courrierId,
-        },
+      const assigneeIds = [...(executantIds ?? []), superviseurId].filter(
+        (userId): userId is string => Boolean(userId),
       );
+      await this.ensureViewAccess(assigneeIds, {
+        dossierId: instruction.dossierId,
+        courrierId: instruction.courrierId,
+      });
+      this.notifyAssignment(instruction, assigneeIds, createdById);
     }
 
     return instruction;
@@ -156,12 +206,14 @@ export class InstructionsService {
       include: instructionInclude,
     });
 
-    await this.ensureViewAccess(
-      [...(dto.executantIds ?? []), dto.superviseurId].filter(
-        (userId): userId is string => Boolean(userId),
-      ),
-      { dossierId: instruction.dossierId, courrierId: instruction.courrierId },
+    const assigneeIds = [...(dto.executantIds ?? []), dto.superviseurId].filter(
+      (userId): userId is string => Boolean(userId),
     );
+    await this.ensureViewAccess(assigneeIds, {
+      dossierId: instruction.dossierId,
+      courrierId: instruction.courrierId,
+    });
+    this.notifyAssignment(updated, assigneeIds);
 
     return updated;
   }
@@ -250,11 +302,20 @@ export class InstructionsService {
       where: { instructionId: instruction.id, status: LivrableStatus.SOUMIS },
       data: { status: LivrableStatus.REJETE },
     });
-    return this.database.instruction.update({
+    const updated = await this.database.instruction.update({
       where: { id: instruction.id },
       data: { status: InstructionStatus.A_CORRIGER, refusalReason: motif },
       include: instructionInclude,
     });
+    this.notifyInstruction(
+      updated,
+      updated.assignees.map((assignee) => assignee.user.id),
+      {
+        type: 'TASK_CORRECTIONS_REQUESTED',
+        message: `Des corrections sont demandées sur la tâche « ${updated.title} ».`,
+      },
+    );
+    return updated;
   }
 
   private async requireStatus(id: string, allowed: InstructionStatus[]) {

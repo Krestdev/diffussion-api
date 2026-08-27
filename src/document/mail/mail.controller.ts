@@ -21,6 +21,7 @@ import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
 import { SetAccessDto } from '../../common/dto/access.dto';
+import { SetOwnerDto } from '../../common/dto/set-owner.dto';
 import { CreateMailDto } from './dto/create-mail.dto';
 import { FindMailsQueryDto } from './dto/find-mails.query.dto';
 import { UpdateMailDto } from './dto/update-mail.dto';
@@ -69,30 +70,17 @@ export class MailController {
     return this.mailService.transmit(id);
   }
 
+  // Starts the courrier's validation Circuit — see
+  // CircuitInstanceService.start() / MailService.submitForVerification().
+  // Actual step-by-step decisions happen on the CircuitInstance resource
+  // (POST /circuit-instances/:id/decide), not here.
   @Post(':id/submit-for-verification')
   @RequirePermission(PermissionCode.CourrierWriteSortant)
-  submitForVerification(@Param('id', ParseUUIDPipe) id: string) {
-    return this.mailService.submitForVerification(id);
-  }
-
-  @Post(':id/verify')
-  @RequirePermission(PermissionCode.ValidationVerify)
-  verify(
+  submitForVerification(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body('approved') approved: boolean,
-  ) {
-    return this.mailService.verify(id, approved);
-  }
-
-  @Post(':id/validate')
-  @RequirePermission(PermissionCode.ValidationApprove)
-  validate(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body('approved') approved: boolean,
-    @Body('motif') motif: string | undefined,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
-    return this.mailService.validateCourrier(id, approved, user.sub, motif);
+    return this.mailService.submitForVerification(id, user.sub);
   }
 
   @Post(':id/send')
@@ -130,6 +118,17 @@ export class MailController {
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
     return this.mailService.discharge(id, user.sub);
+  }
+
+  // Authorization (creator / site responsible / platform admin) is enforced
+  // inside MailService.setOwner — no blanket @RequirePermission here.
+  @Patch(':id/owner')
+  setOwner(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetOwnerDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.setOwner(id, dto, user.sub);
   }
 
   @Get(':id/access')

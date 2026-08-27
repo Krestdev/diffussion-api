@@ -60,6 +60,7 @@ export class DossierService {
       priority: query.priority,
       siteId: query.siteId,
       responsibleId: query.responsibleId,
+      typeId: query.typeId,
       OR: query.search
         ? [
             { title: { contains: query.search, mode: 'insensitive' } },

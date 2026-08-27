@@ -1,12 +1,16 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { SetAccessDto } from '../common/dto/access.dto';
+import { SetOwnerDto } from '../common/dto/set-owner.dto';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
+import { RbacService } from '../auth/rbac/rbac.service';
+import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { FindDocumentsQueryDto } from './dto/find-documents.query.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 
@@ -19,6 +23,7 @@ export class DocumentsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly storage: StorageService,
+    private readonly rbac: RbacService,
   ) {}
 
   async upload(
@@ -61,6 +66,7 @@ export class DocumentsService {
         dossierId: dto.dossierId,
         courrierId: dto.courrierId,
         livrableId: dto.livrableId,
+        ownerId: dto.ownerId,
         uploadedById,
       },
     });
@@ -98,6 +104,39 @@ export class DocumentsService {
     const document = await this.findOne(id);
     await this.storage.delete(document.storageKey);
     await this.database.document.delete({ where: { id } });
+  }
+
+  // Circuit owner (10.6) — same semantics/authorization as
+  // MailService.setOwner: the uploader, the responsible of the owning
+  // site (resolved through the document's dossier, or failing that its
+  // courrier's dossier), or a platform admin (ADMIN_MANAGE_CIRCUITS).
+  async setOwner(id: string, dto: SetOwnerDto, actingUserId: string) {
+    const document = await this.database.document.findUnique({
+      where: { id },
+      include: {
+        dossier: { select: { site: true } },
+        courrier: { select: { dossier: { select: { site: true } } } },
+      },
+    });
+    if (!document) {
+      throw new NotFoundException(`Document ${id} not found`);
+    }
+    const site = document.dossier?.site ?? document.courrier?.dossier.site;
+    const isUploader = document.uploadedById === actingUserId;
+    const isSiteAdmin = site?.responsibleId === actingUserId;
+    const isPlatformAdmin = await this.rbac.hasPermission(
+      actingUserId,
+      PermissionCode.AdminManageCircuits,
+    );
+    if (!isUploader && !isSiteAdmin && !isPlatformAdmin) {
+      throw new ForbiddenException(
+        "Only the uploader, the site responsible, or a platform admin can assign this document's circuit owner",
+      );
+    }
+    return this.database.document.update({
+      where: { id },
+      data: { ownerId: dto.ownerId },
+    });
   }
 
   // Independent from its dossier's/courrier's own access list (see

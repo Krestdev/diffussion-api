@@ -2,10 +2,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { InstructionsService } from './instructions.service';
 import { DatabaseService } from '../database/database.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { InstructionStatus } from '../../generated/prisma/client';
 
 describe('InstructionsService', () => {
   let service: InstructionsService;
+  let notifications: { create: jest.Mock };
   let database: {
     instruction: Record<string, jest.Mock>;
     livrable: Record<string, jest.Mock>;
@@ -28,11 +30,13 @@ describe('InstructionsService', () => {
       courrierAccess: { upsert: jest.fn() },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
     };
+    notifications = { create: jest.fn().mockResolvedValue({}) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         InstructionsService,
         { provide: DatabaseService, useValue: database },
+        { provide: NotificationsService, useValue: notifications },
       ],
     }).compile();
 

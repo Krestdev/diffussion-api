@@ -1,8 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { MailService } from './mail.service';
 import { DatabaseService } from '../../database/database.service';
-import { CourrierStatus } from '../../../generated/prisma/client';
+import { CircuitInstanceService } from '../../circuits/circuit-instance/circuit-instance.service';
+import { RbacService } from '../../auth/rbac/rbac.service';
+import {
+  CourrierDirection,
+  CourrierStatus,
+} from '../../../generated/prisma/client';
 
 describe('MailService', () => {
   let service: MailService;
@@ -11,6 +16,8 @@ describe('MailService', () => {
     validation: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
+  let circuitInstanceService: Record<string, jest.Mock>;
+  let rbac: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     database = {
@@ -25,11 +32,15 @@ describe('MailService', () => {
       validation: { create: jest.fn() },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
     };
+    circuitInstanceService = { start: jest.fn() };
+    rbac = { hasPermission: jest.fn().mockResolvedValue(false) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MailService,
         { provide: DatabaseService, useValue: database },
+        { provide: CircuitInstanceService, useValue: circuitInstanceService },
+        { provide: RbacService, useValue: rbac },
       ],
     }).compile();
 
@@ -41,35 +52,125 @@ describe('MailService', () => {
   });
 
   describe('submitForVerification', () => {
-    it('refuses when the courrier is not a draft', async () => {
+    it('refuses a sortant courrier that is not a draft', async () => {
       database.courrier.findUnique.mockResolvedValue({
         id: 'c-1',
+        direction: CourrierDirection.SORTANT,
         status: CourrierStatus.ENVOYE,
       });
 
-      await expect(service.submitForVerification('c-1')).rejects.toBeInstanceOf(
-        BadRequestException,
+      await expect(
+        service.submitForVerification('c-1', 'u-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(circuitInstanceService.start).not.toHaveBeenCalled();
+    });
+
+    it('starts a circuit instance for a sortant courrier and returns it', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        direction: CourrierDirection.SORTANT,
+        status: CourrierStatus.BROUILLON,
+      });
+      circuitInstanceService.start.mockResolvedValue({ id: 'ci-1' });
+
+      const result = await service.submitForVerification('c-1', 'u-1');
+
+      expect(circuitInstanceService.start).toHaveBeenCalledWith(
+        { courrierId: 'c-1' },
+        'u-1',
+      );
+      expect(result.id).toBe('c-1');
+    });
+
+    it('refuses an entrant courrier still awaiting transmission', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        direction: CourrierDirection.ENTRANT,
+        status: CourrierStatus.RECU,
+      });
+
+      await expect(
+        service.submitForVerification('c-1', 'u-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(circuitInstanceService.start).not.toHaveBeenCalled();
+    });
+
+    it('starts a circuit instance for an entrant courrier once transmitted', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        direction: CourrierDirection.ENTRANT,
+        status: CourrierStatus.TRANSMIS,
+      });
+      circuitInstanceService.start.mockResolvedValue({ id: 'ci-1' });
+
+      const result = await service.submitForVerification('c-1', 'u-1');
+
+      expect(circuitInstanceService.start).toHaveBeenCalledWith(
+        { courrierId: 'c-1' },
+        'u-1',
+      );
+      expect(result.id).toBe('c-1');
+    });
+  });
+
+  describe('setOwner', () => {
+    function withActingUser(actingId: string | null) {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        createdById: actingId,
+        dossier: { site: { responsibleId: null } },
+      });
+    }
+
+    it('allows the courrier creator', async () => {
+      withActingUser('u-1');
+      database.courrier.update.mockResolvedValue({ id: 'c-1', ownerId: 'u-2' });
+
+      await service.setOwner('c-1', { ownerId: 'u-2' }, 'u-1');
+
+      expect(database.courrier.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { ownerId: 'u-2' } }),
       );
     });
 
-    it('moves a draft to EN_VERIFICATION', async () => {
+    it('allows the owning site\'s responsible', async () => {
       database.courrier.findUnique.mockResolvedValue({
         id: 'c-1',
-        status: CourrierStatus.BROUILLON,
+        createdById: 'someone-else',
+        dossier: { site: { responsibleId: 'u-1' } },
       });
-      database.courrier.update.mockResolvedValue({
+      database.courrier.update.mockResolvedValue({ id: 'c-1' });
+
+      await expect(
+        service.setOwner('c-1', { ownerId: 'u-2' }, 'u-1'),
+      ).resolves.toBeDefined();
+    });
+
+    it('allows a platform admin', async () => {
+      database.courrier.findUnique.mockResolvedValue({
         id: 'c-1',
-        status: CourrierStatus.EN_VERIFICATION,
+        createdById: 'someone-else',
+        dossier: { site: { responsibleId: 'someone-else-too' } },
+      });
+      rbac.hasPermission.mockResolvedValue(true);
+      database.courrier.update.mockResolvedValue({ id: 'c-1' });
+
+      await expect(
+        service.setOwner('c-1', { ownerId: 'u-2' }, 'u-1'),
+      ).resolves.toBeDefined();
+    });
+
+    it('refuses anyone else', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        createdById: 'someone-else',
+        dossier: { site: { responsibleId: 'someone-else-too' } },
       });
 
-      const result = await service.submitForVerification('c-1');
-
-      expect(database.courrier.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: { status: CourrierStatus.EN_VERIFICATION },
-        }),
-      );
-      expect(result.status).toBe(CourrierStatus.EN_VERIFICATION);
+      await expect(
+        service.setOwner('c-1', { ownerId: 'u-2' }, 'u-1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(database.courrier.update).not.toHaveBeenCalled();
     });
   });
 
