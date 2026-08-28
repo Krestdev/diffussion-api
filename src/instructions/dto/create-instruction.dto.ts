@@ -63,4 +63,11 @@ export class CreateInstructionsDto {
   @IsOptional()
   @IsUUID()
   superviseurId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Parent task this one depends on (sub-task)',
+  })
+  @IsOptional()
+  @IsUUID()
+  dependsOnId?: string;
 }

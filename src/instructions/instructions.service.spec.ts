@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { InstructionsService } from './instructions.service';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -48,7 +48,7 @@ describe('InstructionsService', () => {
   });
 
   describe('create', () => {
-    it('starts AFFECTEE when assignees are provided up front', async () => {
+    it('starts EN_COURS when assignees are provided up front — no separate acceptance gate', async () => {
       database.instruction.create.mockResolvedValue({
         id: 'i-1',
         dossierId: 'd-1',
@@ -61,7 +61,7 @@ describe('InstructionsService', () => {
 
       expect(database.instruction.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ status: InstructionStatus.AFFECTEE }),
+          data: expect.objectContaining({ status: InstructionStatus.EN_COURS }),
         }),
       );
     });
@@ -153,6 +153,39 @@ describe('InstructionsService', () => {
 
       expect(database.courrierAccess.upsert).not.toHaveBeenCalled();
     });
+
+    it('creates the sub-task dependency when dependsOnId is given', async () => {
+      database.instruction.findUnique.mockResolvedValue({ id: 'parent-1' });
+      database.instruction.create.mockResolvedValue({
+        id: 'i-1',
+        dossierId: 'd-1',
+      });
+
+      await service.create(
+        { dossierId: 'd-1', title: 'X', dependsOnId: 'parent-1' },
+        'creator-1',
+      );
+
+      expect(database.instruction.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            dependsOn: { create: { dependsOnId: 'parent-1' } },
+          }),
+        }),
+      );
+    });
+
+    it('refuses when the parent task does not exist', async () => {
+      database.instruction.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.create(
+          { dossierId: 'd-1', title: 'X', dependsOnId: 'missing' },
+          'creator-1',
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(database.instruction.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('assign', () => {
@@ -165,7 +198,7 @@ describe('InstructionsService', () => {
       database.instruction.update.mockResolvedValue({
         id: 'i-1',
         dossierId: 'd-1',
-        status: InstructionStatus.AFFECTEE,
+        status: InstructionStatus.EN_COURS,
       });
 
       await service.assign('i-1', { executantIds: ['u-3'] });
@@ -180,24 +213,38 @@ describe('InstructionsService', () => {
   });
 
   describe('refuse', () => {
-    it('requires a motif and records it (RG-INS-004)', async () => {
+    it('records the motif and reassigns to the new executant (RG-INS-003/004)', async () => {
       database.instruction.findUnique.mockResolvedValue({
         id: 'i-1',
-        status: InstructionStatus.AFFECTEE,
+        dossierId: 'd-1',
+        status: InstructionStatus.EN_COURS,
       });
       database.instruction.update.mockResolvedValue({
         id: 'i-1',
-        status: InstructionStatus.REFUSEE,
+        dossierId: 'd-1',
+        status: InstructionStatus.EN_COURS,
       });
 
-      await service.refuse('i-1', { motif: 'Trop de charge' });
+      await service.refuse('i-1', {
+        motif: 'Trop de charge',
+        newAssigneeId: 'u-9',
+      });
 
       expect(database.instruction.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            status: InstructionStatus.REFUSEE,
+            status: InstructionStatus.EN_COURS,
             refusalReason: 'Trop de charge',
+            assignees: {
+              deleteMany: { role: 'EXECUTANT' },
+              create: { userId: 'u-9', role: 'EXECUTANT' },
+            },
           }),
+        }),
+      );
+      expect(database.dossierAccess.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { dossierId_userId: { dossierId: 'd-1', userId: 'u-9' } },
         }),
       );
     });

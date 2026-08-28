@@ -110,6 +110,7 @@ export class MailService {
       direction: query.direction,
       status: query.status,
       correspondentId: query.correspondentId,
+      ownerId: query.ownerId,
     };
 
     const [data, total] = await this.database.$transaction([

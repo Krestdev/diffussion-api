@@ -19,11 +19,18 @@ import { FindInstructionsQueryDto } from './dto/find-instructions.query.dto';
 import { RefuseInstructionDto } from './dto/refuse-instruction.dto';
 import { UpdateInstructionDto } from './dto/update-instruction.dto';
 
+const dependencyRefSelect = { id: true, number: true, title: true } as const;
+
 const instructionInclude = {
   assignees: { include: { user: { select: { id: true, name: true } } } },
   livrables: true,
   dossier: { select: { id: true, number: true, title: true } },
   courrier: { select: { id: true, number: true, subject: true } },
+  // Sub-tasks (parentTask in the frontend's AddTaskDialog): the parent
+  // task(s) this one depends on, and the task(s) that depend on it — a
+  // plain many-to-many join, no blocking/gating logic is enforced from it.
+  dependsOn: { include: { dependsOn: { select: dependencyRefSelect } } },
+  dependents: { include: { instruction: { select: dependencyRefSelect } } },
 } satisfies Prisma.InstructionInclude;
 
 function assignmentRows(dto: {
@@ -97,8 +104,17 @@ export class InstructionsService {
   }
 
   async create(dto: CreateInstructionsDto, createdById: string) {
-    const { executantIds, superviseurId, dueDate, ...data } = dto;
+    const { executantIds, superviseurId, dueDate, dependsOnId, ...data } = dto;
     const hasAssignees = Boolean(executantIds?.length || superviseurId);
+
+    if (dependsOnId) {
+      const parent = await this.database.instruction.findUnique({
+        where: { id: dependsOnId },
+      });
+      if (!parent) {
+        throw new NotFoundException(`Instruction ${dependsOnId} not found`);
+      }
+    }
 
     const instruction = await createWithUniqueReference('T', (number) =>
       this.database.instruction.create({
@@ -107,8 +123,12 @@ export class InstructionsService {
           number,
           dueDate: dueDate ? new Date(dueDate) : undefined,
           createdById,
+          // No separate "awaiting the executant's acceptance" gate — being
+          // assigned means the task is immediately actionable. The only
+          // decision an executant makes is to reject it (see refuse()),
+          // which reassigns rather than parking it in a REFUSEE queue.
           status: hasAssignees
-            ? InstructionStatus.AFFECTEE
+            ? InstructionStatus.EN_COURS
             : InstructionStatus.A_AFFECTER,
           assignees: hasAssignees
             ? {
@@ -116,6 +136,12 @@ export class InstructionsService {
                   data: assignmentRows({ executantIds, superviseurId }),
                 },
               }
+            : undefined,
+          // Sub-tasks: a single parent picked at creation (the frontend's
+          // AddTaskDialog exposes one "Tâche parent" field) — the schema
+          // itself allows several, this just doesn't expose that yet.
+          dependsOn: dependsOnId
+            ? { create: { dependsOnId } }
             : undefined,
         },
         include: instructionInclude,
@@ -197,7 +223,7 @@ export class InstructionsService {
     const updated = await this.database.instruction.update({
       where: { id: instruction.id },
       data: {
-        status: InstructionStatus.AFFECTEE,
+        status: InstructionStatus.EN_COURS,
         assignees: {
           deleteMany: {},
           createMany: { data: assignmentRows(dto) },
@@ -218,27 +244,34 @@ export class InstructionsService {
     return updated;
   }
 
-  // RG-INS-003: the executant accepts.
-  async accept(id: string) {
-    const instruction = await this.requireStatus(id, [
-      InstructionStatus.AFFECTEE,
-    ]);
-    return this.setStatus(instruction.id, InstructionStatus.EN_COURS);
-  }
-
-  // RG-INS-003/004: the executant refuses, and must motivate it.
+  // RG-INS-003/004: the executant refuses and must motivate it — rejecting
+  // reassigns the task to a different executant in the same step (there's
+  // no separate "unassigned, waiting to be picked up" queue to fall back
+  // to), so the task stays immediately actionable for its new assignee.
+  // Only the executant role is replaced — an existing superviseur, if any,
+  // isn't touched by one executant declining.
   async refuse(id: string, dto: RefuseInstructionDto) {
     const instruction = await this.requireStatus(id, [
-      InstructionStatus.AFFECTEE,
+      InstructionStatus.EN_COURS,
     ]);
-    return this.database.instruction.update({
+    const updated = await this.database.instruction.update({
       where: { id: instruction.id },
       data: {
-        status: InstructionStatus.REFUSEE,
+        status: InstructionStatus.EN_COURS,
         refusalReason: dto.motif,
+        assignees: {
+          deleteMany: { role: UserInstructionRole.EXECUTANT },
+          create: { userId: dto.newAssigneeId, role: UserInstructionRole.EXECUTANT },
+        },
       },
       include: instructionInclude,
     });
+    await this.ensureViewAccess([dto.newAssigneeId], {
+      dossierId: updated.dossierId,
+      courrierId: updated.courrierId,
+    });
+    this.notifyAssignment(updated, [dto.newAssigneeId]);
+    return updated;
   }
 
   // 10.4.4.7: closing requires every livrable attached to the instruction to

@@ -66,12 +66,6 @@ export class InstructionsController {
     return this.instructionsService.assign(id, dto);
   }
 
-  @Patch(':id/accept')
-  @RequirePermission(PermissionCode.InstructionAccept)
-  accept(@Param('id', ParseUUIDPipe) id: string) {
-    return this.instructionsService.accept(id);
-  }
-
   @Patch(':id/refuse')
   @RequirePermission(PermissionCode.InstructionRefuse)
   refuse(

@@ -14,7 +14,6 @@ describe('InstructionsController', () => {
       findOne: jest.fn(),
       update: jest.fn(),
       assign: jest.fn(),
-      accept: jest.fn(),
       refuse: jest.fn(),
       close: jest.fn(),
       cancel: jest.fn(),
@@ -36,9 +35,13 @@ describe('InstructionsController', () => {
   });
 
   it('refuse() forwards id and dto to the service', () => {
-    controller.refuse('i-1', { motif: 'Non disponible' });
+    controller.refuse('i-1', {
+      motif: 'Non disponible',
+      newAssigneeId: 'u-2',
+    });
     expect(service.refuse).toHaveBeenCalledWith('i-1', {
       motif: 'Non disponible',
+      newAssigneeId: 'u-2',
     });
   });
 });
