@@ -1,0 +1,162 @@
+{
+  "rootId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+  "targetId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+  "tree": {
+    "id": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+    "createdAt": "2026-08-25T09:05:59.402Z",
+    "parentLogId": null,
+    "userId": null,
+    "actorLabel": null,
+    "source": "SYSTEM",
+    "level": "info",
+    "action": "GET /activity-test/user-action",
+    "entityType": null,
+    "entityId": null,
+    "message": "Request: GET /activity-test/user-action",
+    "stack": null,
+    "metadata": null,
+    "children": [
+      {
+        "id": "ae41965e-a9b3-46f7-a893-52bea6fa4e14",
+        "createdAt": "2026-08-25T09:05:59.447Z",
+        "parentLogId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+        "userId": null,
+        "actorLabel": null,
+        "source": "USER",
+        "level": "info",
+        "action": "document.created",
+        "entityType": "document",
+        "entityId": "doc-fake-001",
+        "message": "User created a new document",
+        "stack": null,
+        "metadata": {
+          "changes": {
+            "label": [
+              null,
+              "Test Document"
+            ],
+            "status": [
+              null,
+              "ACTIVE"
+            ]
+          }
+        }
+      },
+      {
+        "id": "25662501-a601-4340-8af1-7550ef43d0f3",
+        "createdAt": "2026-08-25T09:05:59.455Z",
+        "parentLogId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+        "userId": null,
+        "actorLabel": null,
+        "source": "SYSTEM",
+        "level": "info",
+        "action": "notification.sent",
+        "entityType": "notification",
+        "entityId": "notif-fake-001",
+        "message": "System sent notification for new document",
+        "stack": null,
+        "metadata": {
+          "channel": "EMAIL",
+          "recipientCount": 3
+        }
+      },
+      {
+        "id": "88ecc695-750a-4e00-bfac-b0db38c4e0de",
+        "createdAt": "2026-08-25T09:05:59.469Z",
+        "parentLogId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+        "userId": null,
+        "actorLabel": null,
+        "source": "SYSTEM",
+        "level": "info",
+        "action": "search-index.updated",
+        "entityType": "search-index",
+        "entityId": null,
+        "message": "Search index updated after document creation",
+        "stack": null,
+        "metadata": null
+      }
+    ]
+  }
+}
+
+
+{
+  "rootId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+  "targetId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+  "tree": {
+    "id": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+    "createdAt": "2026-08-25T09:05:59.402Z",
+    "parentLogId": null,
+    "userId": null,
+    "actorLabel": null,
+    "source": "SYSTEM",
+    "level": "info",
+    "action": "GET /activity-test/user-action",
+    "entityType": null,
+    "entityId": null,
+    "message": "Request: GET /activity-test/user-action",
+    "stack": null,
+    "metadata": null,
+    "children": [
+      {
+        "id": "ae41965e-a9b3-46f7-a893-52bea6fa4e14",
+        "createdAt": "2026-08-25T09:05:59.447Z",
+        "parentLogId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+        "userId": null,
+        "actorLabel": null,
+        "source": "USER",
+        "level": "info",
+        "action": "document.created",
+        "entityType": "document",
+        "entityId": "doc-fake-001",
+        "message": "User created a new document",
+        "stack": null,
+        "metadata": {
+          "changes": {
+            "label": [
+              null,
+              "Test Document"
+            ],
+            "status": [
+              null,
+              "ACTIVE"
+            ]
+          }
+        }
+      },
+      {
+        "id": "25662501-a601-4340-8af1-7550ef43d0f3",
+        "createdAt": "2026-08-25T09:05:59.455Z",
+        "parentLogId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+        "userId": null,
+        "actorLabel": null,
+        "source": "SYSTEM",
+        "level": "info",
+        "action": "notification.sent",
+        "entityType": "notification",
+        "entityId": "notif-fake-001",
+        "message": "System sent notification for new document",
+        "stack": null,
+        "metadata": {
+          "channel": "EMAIL",
+          "recipientCount": 3
+        }
+      },
+      {
+        "id": "88ecc695-750a-4e00-bfac-b0db38c4e0de",
+        "createdAt": "2026-08-25T09:05:59.469Z",
+        "parentLogId": "d59f0ae0-d8d9-4a38-ab12-8089a562466a",
+        "userId": null,
+        "actorLabel": null,
+        "source": "SYSTEM",
+        "level": "info",
+        "action": "search-index.updated",
+        "entityType": "search-index",
+        "entityId": null,
+        "message": "Search index updated after document creation",
+        "stack": null,
+        "metadata": null
+      }
+    ]
+  }
+}

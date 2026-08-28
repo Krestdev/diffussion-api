@@ -32,4 +32,18 @@ export default tseslint.config(
       "prettier/prettier": ["error", { endOfLine: "auto" }],
     },
   },
+  {
+    // Spec files legitimately deal with loosely-typed jest mocks
+    // (jest.fn(), mockResolvedValue(...)) — the "unsafe" family of rules
+    // exists to catch real `any` leaks in production code, not to force
+    // full Prisma-shaped typings onto test doubles.
+    files: ['**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-floating-promises': 'off',
+    },
+  },
 );

@@ -1,7 +1,35 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Diffusion — domain model
+//
+// Refined against docs/BUSINESS ANALYSIS DOCUMENT - DIFFUSION.pdf (BAD) and the
+// Entity Relationship Diagram. Organized around the BAD's five sub-domains:
+// Organisation, Dossiers, Correspondance, Collaboration, Administration.
+//
+// Corrections made vs the previous schema (kept here for review traceability):
+// - Dossier and Courrier are split into first-class models (were a single
+//   `Document` table discriminated by `documentType`). BAD 6.3.1/6.5/7.2 treat
+//   them as distinct aggregates with different lifecycles and attributes, and
+//   the dossier controller already assumed `/dossiers/:id/courriers` — a
+//   sub-collection, not a self-join filtered by type.
+// - `Livrable` did not exist as a model at all (7.4) despite a `deliverable`
+//   module already scaffolded on the API — added, versioned (RG-LIV-007).
+// - `Role` was owned by a single `Assignment` (one bespoke role per
+//   site-assignment). BAD 6.1.1/9.7 and RG-ORG-003 describe roles as reusable,
+//   named templates a user can hold several of at once — switched to a plain
+//   User<->Role many-to-many (`UserRole`).
+// - Several free-text fields were capped at `VarChar(10)`, too short for real
+//   values already in use ("Administration publique", "DOSSIER_TRANSMIT",
+//   "Modification") — widened or left unbounded.
+// - `Category` was missing `retentionMonths` despite RG-ARC-001 ("chaque
+//   catégorie de dossier peut être associée à une durée de conservation").
+// - `Correspondent` was missing address/contact fields listed in 7.5.3.
+// - `Site` had no responsible user despite RG the frontend already models
+//   ("Responsable du site").
+// - Instruction dependency (RG-LIV-006) is "one or more", modeled as a
+//   self many-to-many instead of a single `parentId`.
+// - Added `Delegation` (7.6.6) and a small set of admin referentials
+//   (DossierType, CorrespondentType, CourrierNature, Canal) that the BAD lists
+//   under "Référentiels métier" (6.4) and that the frontend already routes to
+//   under Administration > Paramètres.
 
 generator client {
   provider = "prisma-client"
@@ -12,86 +40,71 @@ datasource db {
   provider = "postgresql"
 }
 
+// ---------------------------------------------------------------------------
+// Organisation domain (BAD 6.1.1 / 9)
+// ---------------------------------------------------------------------------
+
 model Service {
   id        String   @id @default(uuid())
+  name      String   @db.VarChar(100)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  name      String   @db.VarChar(100)
 
   userServices UserService[]
 
   @@map("service")
 }
 
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
 model User {
-  // base attributes
   id           String  @id @default(uuid())
   name         String
   email        String  @unique
   password     String
   refreshToken String?
 
-  // state attributes
-  status      UserStatus
+  /// Matricule (9.2.2)
+  registrationNumber String? @unique @db.VarChar(30)
+  /// Fonction — job title, informational only, does not grant rights (9.3)
+  function           String?
+  phone              String? @db.VarChar(30)
+
+  status      UserStatus @default(ACTIVE)
   isVerified  Boolean    @default(false)
   isConnected Boolean    @default(false)
+  lastLogin   DateTime?
 
-  // connected attributes
-  userServices       UserService[]
-  assignments        Assignment[]
-  validations        Validation[]
-  auditLogs          AuditLog[]
-  dechargedDocuments Document[]    @relation("DischargedBy")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  // log trace attributes
-  lastlogin         DateTime?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  userServices      UserService[]
+  assignments       Assignment[]
+  userRoles         UserRole[]
   userInstructions  UserInstructions[]
   userNotifications UserNotification[]
+  validations       Validation[]
+
+  managedSites        Site[]           @relation("SiteManager")
+  responsibleDossiers Dossier[]        @relation("DossierResponsible")
+  createdDossiers     Dossier[]        @relation("DossierCreatedBy")
+  createdCourriers    Courrier[]       @relation("CourrierCreatedBy")
+  dischargedCourriers Courrier[]       @relation("CourrierDischargedBy")
+  ownedCourriers      Courrier[]       @relation("CourrierOwner")
+  createdInstructions Instruction[]    @relation("InstructionCreatedBy")
+  createdLivrables    Livrable[]       @relation("LivrableCreatedBy")
+  uploadedDocuments   Document[]       @relation("DocumentUploadedBy")
+  ownedDocuments      Document[]       @relation("DocumentOwner")
+  delegationsGiven    Delegation[]     @relation("DelegationDelegant")
+  delegationsReceived Delegation[]     @relation("DelegationDelegataire")
+  dossierAccesses     DossierAccess[]
+  courrierAccesses    CourrierAccess[]
+  documentAccesses    DocumentAccess[]
 
   @@map("user")
-}
-
-enum UserStatus {
-  ACTIF
-  BLOCKED
-}
-
-enum DocumentType {
-  DOSSIER
-  COURRIER
-  FILE
-}
-
-enum UserInstructionsStatus {
-  PENDING
-  EXECUTED
-  CANCELLED
-}
-
-enum NotificationStatus {
-  NOT_READ
-  READ
-  ARCHIVED
-}
-
-model UserInstructions {
-  userId        String
-  instructionId String
-
-  user        User                    @relation(fields: [userId], references: [id])
-  instruction Instruction             @relation(fields: [instructionId], references: [id])
-  status      UserInstructionsStatus
-  action      UserInstructionsActions
-
-  @@id([userId, instructionId])
-  @@map("user_instructions")
-}
-
-enum UserInstructionsActions {
-  EXECUTANT
-  SUPERVISEUR
 }
 
 model UserService {
@@ -105,231 +118,86 @@ model UserService {
   @@map("user_service")
 }
 
-model AuditLog {
-  id         String   @id @default(uuid())
-  userId     String
-  actions    String   @db.VarChar(10)
-  datetime   DateTime
-  entityId   String?
-  entityType String?  @db.VarChar(10)
-  createdAt  DateTime @default(now())
-
-  user User @relation(fields: [userId], references: [id])
-
-  @@map("audit_log")
-}
-
-model UserNotification {
-  userId         String
-  notificationId String
-  statut         NotificationStatus
-  user           User               @relation(fields: [userId], references: [id])
-  notification   Notification       @relation(fields: [notificationId], references: [id])
-
-  @@id([userId, notificationId])
-  @@map("user_notification")
-}
-
-enum CanalType {
-  EMAIL
-  NOTIFICATION
-}
-
-model Notification {
-  id         String    @id @default(uuid())
-  userId     String
-  documentId String?
-  type       String    @db.VarChar(20)
-  message    String?
-  canal      CanalType
-
-  document          Document?          @relation(fields: [documentId], references: [id])
-  userNotifications UserNotification[]
-
-  createdAt DateTime  @default(now())
-  updatedAt DateTime? @updatedAt
-
-  @@map("notification")
-}
-
-enum DocumentStatus {
-  ARCHIVED
-  ACTIVE
-  REJECTED
-}
-
-model Document {
-  id              String         @id @default(uuid())
-  documentType    DocumentType
-  isDocument      Boolean        @default(true)
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  parentId        String?
-  categoryId      String?
-  correspondantId String?
-  status          DocumentStatus
-  date            DateTime?
-  label           String?        @db.VarChar(100)
-  directory       Int?
-  reference       String?        @db.VarChar(30)
-  canal           String?        @db.VarChar(30)
-  copies          Int?
-  version         Int?
-
-  // ENTRANT OU SORTANT
-  direction              String?   @db.VarChar(10)
-  modificationAuthorized Boolean   @default(false)
-  transmittedOn          DateTime?
-  scanUrl                String?
-
-  // Décharge (§10.2.5): recorded independently of the status state machine
-  // — it's proof of physical handover, not a lifecycle transition.
-  dischargedAt    DateTime?
-  dischargedById  String?
-  dischargedStamp Boolean?
-  receivedAt      DateTime?
-  number          String?   @unique @db.VarChar(30)
-  siteId          String?
-
-  parent   Document?  @relation("DocumentHierarchy", fields: [parentId], references: [id])
-  children Document[] @relation("DocumentHierarchy")
-
-  category      Category?      @relation(fields: [categoryId], references: [id])
-  correspondant Correspondant? @relation(fields: [correspondantId], references: [id])
-  site          Site?          @relation(fields: [siteId], references: [id])
-  dischargedBy  User?          @relation("DischargedBy", fields: [dischargedById], references: [id])
-
-  instructions     Instruction[]
-  notifications    Notification[]
-  circuitInstances CircuitInstance[]
-
-  @@map("document")
-}
-
-enum InstructionStatus {
-  EXECUTED
-  CANCELLED
-}
-
-enum InstructionPriorite {
-  LOW
-  MEDIUM
-  HIGH
-}
-
-model Instruction {
-  id           String              @id @default(uuid())
-  userId       String
-  userId2      String?
-  documentId   String
-  label        String              @db.VarChar(100)
-  priorite     InstructionPriorite
-  dateline     DateTime?
-  statut       InstructionStatus
-  createdAt    DateTime            @default(now())
-  updatedAt    DateTime?           @updatedAt
-  parentId     String?
-  validationId String?
-
-  document         Document           @relation(fields: [documentId], references: [id])
-  parent           Instruction?       @relation("InstructionDependency", fields: [parentId], references: [id])
-  children         Instruction[]      @relation("InstructionDependency")
-  validation       Validation?        @relation(fields: [validationId], references: [id])
-  userInstructions UserInstructions[]
-
-  @@map("instruction")
-}
-
-model Category {
-  id        String    @id @default(uuid())
-  label     String?   @db.VarChar(100)
-  type      String?   @db.VarChar(10)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime? @updatedAt
-
-  documents Document[]
-
-  @@map("category")
-}
-
-model Correspondant {
-  id        String   @id @default(uuid())
-  name      String?  @db.VarChar(100)
-  type      String?  @db.VarChar(10)
-  // town     String?  @db.VarChar(100)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  documents        Document[]
-  circuitInstances CircuitInstance[]
-
-  @@map("correspondant")
-}
-
-model Validation {
-  id                String    @id @default(uuid())
-  decision          String?
-  circuitInstanceId String?
-  motif             String?
-  dateDecision      DateTime?
-  userId            String
-
-  user            User             @relation(fields: [userId], references: [id])
-  circuitInstance CircuitInstance? @relation(fields: [circuitInstanceId], references: [id])
-  instructions    Instruction[]
-
-  @@map("validation")
-}
-
 enum SiteStatus {
   ACTIVE
-  BLOCKED
+  INACTIVE
 }
 
+/// A geographic/organisational location (9.5). Owns dossiers as their
+/// "site propriétaire" (RG-DOS-003) and has a responsible user.
 model Site {
-  id        String     @id @default(uuid())
-  name      String     @db.VarChar(100)
-  status    SiteStatus
-  updatedAt DateTime   @updatedAt
-  createdAt DateTime   @default(now())
+  id            String     @id @default(uuid())
+  code          String     @unique @db.VarChar(30)
+  name          String     @db.VarChar(100)
+  city          String?    @db.VarChar(100)
+  status        SiteStatus @default(ACTIVE)
+  responsibleId String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
+  responsible User?        @relation("SiteManager", fields: [responsibleId], references: [id])
   assignments Assignment[]
-  documents   Document[]
+  dossiers    Dossier[]
 
   @@map("site")
 }
 
+/// Affectation: a user attached to a site (RG-ORG-001 — a user may belong to
+/// several sites). Deliberately holds no role — roles are held directly by
+/// the user (see UserRole) so they are not scoped to a single site pairing.
 model Assignment {
-  id     String @id @default(uuid())
-  userId String
-  siteId String
+  id        String   @id @default(uuid())
+  userId    String
+  siteId    String
+  createdAt DateTime @default(now())
 
-  user  User   @relation(fields: [userId], references: [id])
-  site  Site   @relation(fields: [siteId], references: [id])
-  roles Role[]
+  user User @relation(fields: [userId], references: [id])
+  site Site @relation(fields: [siteId], references: [id])
 
+  @@unique([userId, siteId])
   @@map("assignment")
 }
 
-/**
- * **
- * Role template
- * for users
- * **
- */
+/// Reusable named permission set ("Exécutant", "Administrateur", ...).
+/// Held directly by users (RG-ORG-003: cumulative, not site-scoped).
 model Role {
-  id            String  @id @default(uuid())
-  assignmentId  String
-  circuitStepId String?
-  name          String? @db.VarChar(50)
+  id          String   @id @default(uuid())
+  code        String   @unique @db.VarChar(30)
+  name        String   @unique @db.VarChar(50)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  assignment      Assignment       @relation(fields: [assignmentId], references: [id])
+  userRoles       UserRole[]
   rolePermissions RolePermission[]
   circuitSteps    CircuitStep[]
-  circuitStep     CircuitStep?     @relation("RoleEtapeCircuitLegacy", fields: [circuitStepId], references: [id])
   circuits        Circuit[]
 
   @@map("role")
+}
+
+model UserRole {
+  userId String
+  roleId String
+
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+  @@map("user_role")
+}
+
+/// A single grantable action (e.g. DOSSIER_CLOSE) — see PermissionCode.
+model Permission {
+  id          String   @id @default(uuid())
+  code        String   @unique @db.VarChar(50)
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rolePermissions RolePermission[]
+
+  @@map("permission")
 }
 
 model RolePermission {
@@ -343,107 +211,728 @@ model RolePermission {
   @@map("role_permission")
 }
 
-model Permission {
-  id        String    @id @default(uuid())
-  createdAt DateTime  @default(now())
-  updatedAt DateTime? @updatedAt
-  name      String?   @db.VarChar(10)
+/// Temporary handover of a responsibility to another collaborator (7.6.6).
+model Delegation {
+  id             String   @id @default(uuid())
+  delegantId     String
+  delegataireId  String
+  responsibility String   @db.VarChar(100)
+  startDate      DateTime
+  endDate        DateTime
+  reason         String?
+  createdAt      DateTime @default(now())
 
-  rolePermissions RolePermission[]
+  delegant    User @relation("DelegationDelegant", fields: [delegantId], references: [id])
+  delegataire User @relation("DelegationDelegataire", fields: [delegataireId], references: [id])
 
-  @@map("permission")
+  @@map("delegation")
 }
 
-/**
- * **
- * circuit template
- * for document circuits
- * materialisation
- * **
- */
+// ---------------------------------------------------------------------------
+// Administration referentials (BAD 6.4)
+// ---------------------------------------------------------------------------
 
-model Circuit {
-  id             String  @id @default(uuid())
-  roleId         String?
-  name           String? @db.VarChar(100)
-  documentTypeId Int?
+/// Retention-bearing document classification (7.1.5 "Catégorie").
+model Category {
+  id              String   @id @default(uuid())
+  label           String   @db.VarChar(100)
+  code            String?  @db.VarChar(30)
+  description     String?
+  /// RG-ARC-001: inherited by a dossier at creation from its category.
+  retentionMonths Int?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  role             Role?             @relation(fields: [roleId], references: [id])
-  circuitSteps     CircuitStep[]
+  dossiers Dossier[]
+
+  @@map("category")
+}
+
+/// Simple dossier classification (7.1.5 "Type"), distinct from Category.
+model DossierType {
+  id        String   @id @default(uuid())
+  name      String   @unique @db.VarChar(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dossiers Dossier[]
+  circuits Circuit[]
+
+  @@map("dossier_type")
+}
+
+/// "Nature du courrier" (10.2, a courrier registration field distinct from
+/// direction/canal — e.g. rapport, demande, réponse administrative...).
+model CourrierNature {
+  id        String   @id @default(uuid())
+  name      String   @unique @db.VarChar(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courriers Courrier[]
+
+  @@map("courrier_nature")
+}
+
+/// Communication channel referential (6.4), used by Courrier.
+model Canal {
+  id        String   @id @default(uuid())
+  name      String   @unique @db.VarChar(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courriers Courrier[]
+
+  @@map("canal")
+}
+
+model CorrespondentType {
+  id        String   @id @default(uuid())
+  name      String   @unique @db.VarChar(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  correspondents Correspondent[]
+
+  @@map("correspondent_type")
+}
+
+enum CorrespondentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Referential of external parties (7.5). May be sender, recipient, or both.
+model Correspondent {
+  id          String              @id @default(uuid())
+  code        String              @unique @db.VarChar(30)
+  name        String              @db.VarChar(150)
+  typeId      String?
+  address     String?
+  city        String?             @db.VarChar(100)
+  country     String?             @db.VarChar(100)
+  email       String?             @db.VarChar(150)
+  phone       String?             @db.VarChar(30)
+  mainContact String?             @db.VarChar(150)
+  status      CorrespondentStatus @default(ACTIVE)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  type             CorrespondentType? @relation(fields: [typeId], references: [id])
+  courriers        Courrier[]
   circuitInstances CircuitInstance[]
+
+  @@map("correspondent")
+}
+
+// ---------------------------------------------------------------------------
+// Dossiers domain — root aggregate (BAD 6.2 / 7.1)
+// ---------------------------------------------------------------------------
+
+enum DossierPriority {
+  URGENT
+  NORMAL
+  LOW
+}
+
+enum DossierConfidentiality {
+  PUBLIC
+  RESTRICTED
+}
+
+enum DossierStatus {
+  OPEN
+  IN_PROGRESS
+  PENDING
+  LATE
+  CLOSED
+  ARCHIVED
+}
+
+/// The Dossier is the root aggregate of the whole domain (7.1.1): every
+/// courrier, instruction, livrable and document is ultimately attached to one.
+model Dossier {
+  id              String                 @id @default(uuid())
+  /// RG-DOS-002: unique, system-generated.
+  number          String                 @unique @db.VarChar(30)
+  title           String                 @db.VarChar(200)
+  description     String?
+  typeId          String?
+  categoryId      String?
+  /// Optional grouping of dossiers under a wider project/programme.
+  projectId       String?
+  /// RG-DOS-003: exactly one owning site.
+  siteId          String
+  /// RG-DOS-004: always has a responsible at any instant.
+  responsibleId   String?
+  priority        DossierPriority        @default(NORMAL)
+  confidentiality DossierConfidentiality @default(PUBLIC)
+  status          DossierStatus          @default(OPEN)
+  /// 0-100, derived from instruction completion; stored for fast listing.
+  progress        Int                    @default(0)
+  keywords        String[]               @default([])
+
+  openedAt    DateTime  @default(now())
+  closedAt    DateTime?
+  archivedAt  DateTime?
+  createdById String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  type        DossierType? @relation(fields: [typeId], references: [id])
+  category    Category?    @relation(fields: [categoryId], references: [id])
+  project     Project?     @relation(fields: [projectId], references: [id])
+  site        Site         @relation(fields: [siteId], references: [id])
+  responsible User?        @relation("DossierResponsible", fields: [responsibleId], references: [id])
+  createdBy   User?        @relation("DossierCreatedBy", fields: [createdById], references: [id])
+
+  courriers        Courrier[]
+  instructions     Instruction[]
+  documents        Document[]
+  notifications    Notification[]
+  circuitInstances CircuitInstance[]
+  /// Per-user view/edit access on top of `confidentiality` (RESTRICTED
+  /// dossiers are otherwise only visible to their responsible/creator).
+  accesses         DossierAccess[]
+
+  @@map("dossier")
+}
+
+/// A wider project/programme a dossier can optionally be tagged under —
+/// purely organisational, carries no workflow of its own.
+model Project {
+  id        String   @id @default(uuid())
+  name      String   @unique @db.VarChar(200)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dossiers Dossier[]
+
+  @@map("project")
+}
+
+/// Explicit per-user grant on a dossier, on top of its `confidentiality`.
+/// One row per (dossier, user); absence of a row means no explicit grant.
+model DossierAccess {
+  id        String   @id @default(uuid())
+  dossierId String
+  userId    String
+  canView   Boolean  @default(true)
+  canEdit   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dossier Dossier @relation(fields: [dossierId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([dossierId, userId])
+  @@map("dossier_access")
+}
+
+enum CourrierDirection {
+  ENTRANT
+  SORTANT
+}
+
+/// Unified status covering both directions (BAD 7.2.4): an entrant courrier
+/// only ever reaches RECU..ARCHIVE; a sortant one additionally cycles through
+/// the BROUILLON..ENVOYE drafting states before ENVOYE/ARCHIVE.
+enum CourrierStatus {
+  RECU
+  ENREGISTRE
+  TRANSMIS
+  EN_TRAITEMENT
+  EN_ATTENTE
+  BROUILLON
+  /// Progressing through its dossier type's validation Circuit — replaces
+  /// the old fixed EN_VERIFICATION/EN_VALIDATION pair now that the number
+  /// of approval steps is driven by a CircuitInstance (BAD 10.6 / RG-VAL-*).
+  EN_CIRCUIT
+  A_CORRIGER
+  VALIDE
+  PRET_A_ENVOYER
+  ENVOYE
+  ANNULE
+  CLOTURE
+  ARCHIVE
+}
+
+/// A correspondence event belonging to exactly one dossier (7.2, RG-COU-001).
+model Courrier {
+  id              String            @id @default(uuid())
+  /// System-generated internal registration number (10.2.4.2).
+  number          String            @unique @db.VarChar(30)
+  dossierId       String
+  direction       CourrierDirection
+  correspondentId String?
+  natureId        String?
+  canalId         String?
+  subject         String            @db.VarChar(255)
+  /// Reference as printed on the physical courrier itself (may differ from
+  /// our internal `number`).
+  reference       String?           @db.VarChar(60)
+  status          CourrierStatus    @default(RECU)
+  copies          Int?
+  receivedAt      DateTime?
+  sentAt          DateTime?
+  scanUrl         String?
+
+  // Décharge (10.2.5): recorded independently of the status state machine —
+  // it's proof of physical handover, not a lifecycle transition.
+  dischargeRequested Boolean   @default(false)
+  dischargedAt       DateTime?
+  dischargedById     String?
+  dischargedStamp    Boolean   @default(false)
+
+  /// Circuit owner (10.6): chosen at creation from among the holders of the
+  /// role the courrier's circuit will require, or left unset and completed
+  /// later by the creator, the owning site's responsible, or a platform
+  /// admin. Can decide any step of this courrier's CircuitInstance
+  /// regardless of that step's own role/site gate — see
+  /// CircuitInstanceService.
+  ownerId String?
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  dossier       Dossier         @relation(fields: [dossierId], references: [id])
+  correspondent Correspondent?  @relation(fields: [correspondentId], references: [id])
+  nature        CourrierNature? @relation(fields: [natureId], references: [id])
+  canal         Canal?          @relation(fields: [canalId], references: [id])
+  createdBy     User?           @relation("CourrierCreatedBy", fields: [createdById], references: [id])
+  dischargedBy  User?           @relation("CourrierDischargedBy", fields: [dischargedById], references: [id])
+  owner         User?           @relation("CourrierOwner", fields: [ownerId], references: [id])
+
+  documents        Document[]
+  instructions     Instruction[]
+  notifications    Notification[]
+  circuitInstances CircuitInstance[]
+  /// Independent from the dossier's own access list — a user with access to
+  /// the dossier is not automatically granted access to every courrier
+  /// inside it, and vice versa.
+  accesses         CourrierAccess[]
+
+  @@map("courrier")
+}
+
+/// Explicit per-user grant on a courrier — mirrors DossierAccess, but is a
+/// wholly separate list: courrier access does not inherit from, or feed
+/// into, its parent dossier's.
+model CourrierAccess {
+  id         String   @id @default(uuid())
+  courrierId String
+  userId     String
+  canView    Boolean  @default(true)
+  canEdit    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  courrier Courrier @relation(fields: [courrierId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([courrierId, userId])
+  @@map("courrier_access")
+}
+
+// ---------------------------------------------------------------------------
+// Traitement domain — Instruction / Livrable / Validation (BAD 6.3.2-3 / 7.3-4)
+// ---------------------------------------------------------------------------
+
+enum InstructionPriority {
+  URGENT
+  NORMAL
+  MEDIUM
+}
+
+enum InstructionStatus {
+  A_AFFECTER
+  AFFECTEE
+  ACCEPTEE
+  REFUSEE
+  EN_COURS
+  EN_ATTENTE_VALIDATION
+  A_CORRIGER
+  TERMINEE
+  ANNULEE
+}
+
+enum UserInstructionRole {
+  EXECUTANT
+  SUPERVISEUR
+}
+
+/// Action (or set of actions) confided to collaborators as part of treating a
+/// dossier (7.3). Always attached to a dossier; may additionally reference
+/// the courrier that triggered it.
+model Instruction {
+  id            String              @id @default(uuid())
+  /// System-generated, human-readable reference (matches Dossier/Courrier).
+  number        String              @unique @db.VarChar(30)
+  dossierId     String
+  courrierId    String?
+  title         String              @db.VarChar(200)
+  description   String?
+  priority      InstructionPriority @default(NORMAL)
+  dueDate       DateTime?
+  status        InstructionStatus   @default(A_AFFECTER)
+  refusalReason String?
+  createdById   String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  closedAt      DateTime?
+
+  dossier   Dossier   @relation(fields: [dossierId], references: [id])
+  courrier  Courrier? @relation(fields: [courrierId], references: [id])
+  createdBy User?     @relation("InstructionCreatedBy", fields: [createdById], references: [id])
+
+  assignees   UserInstructions[]
+  livrables   Livrable[]
+  validations Validation[]
+
+  // RG-LIV-006: an instruction may depend on several others, and several
+  // others may depend on it — modeled as a self many-to-many.
+  dependsOn  InstructionDependency[] @relation("Dependent")
+  dependents InstructionDependency[] @relation("Dependency")
+
+  @@map("instruction")
+}
+
+model InstructionDependency {
+  instructionId String
+  dependsOnId   String
+
+  instruction Instruction @relation("Dependent", fields: [instructionId], references: [id])
+  dependsOn   Instruction @relation("Dependency", fields: [dependsOnId], references: [id])
+
+  @@id([instructionId, dependsOnId])
+  @@map("instruction_dependency")
+}
+
+/// Who is assigned to an instruction, and in what capacity (7.3.6 /
+/// RG-INS-002): directly to an executant, or to a superviseur who then
+/// assigns/reassigns executants.
+model UserInstructions {
+  userId        String
+  instructionId String
+  role          UserInstructionRole
+
+  user        User        @relation(fields: [userId], references: [id])
+  instruction Instruction @relation(fields: [instructionId], references: [id])
+
+  @@id([userId, instructionId, role])
+  @@map("user_instructions")
+}
+
+enum LivrableStatus {
+  EN_PREPARATION
+  DEPOSE
+  SOUMIS
+  EN_VALIDATION
+  REJETE
+  VALIDE
+  ARCHIVE
+}
+
+/// The expected result of an instruction (7.4). Versioned: an edit after
+/// deposit creates a new version rather than mutating history (RG-LIV-007).
+model Livrable {
+  id              String         @id @default(uuid())
+  instructionId   String
+  title           String         @db.VarChar(200)
+  description     String?
+  status          LivrableStatus @default(EN_PREPARATION)
+  version         Int            @default(1)
+  parentVersionId String?
+  createdById     String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  instruction   Instruction @relation(fields: [instructionId], references: [id])
+  parentVersion Livrable?   @relation("LivrableVersions", fields: [parentVersionId], references: [id])
+  versions      Livrable[]  @relation("LivrableVersions")
+  createdBy     User?       @relation("LivrableCreatedBy", fields: [createdById], references: [id])
+
+  documents Document[]
+
+  @@map("livrable")
+}
+
+enum ValidationDecision {
+  VALIDE
+  REJETE
+  CORRECTIONS_DEMANDEES
+}
+
+/// A validation decision (10.6). Applies to an instruction (and, through it,
+/// its livrables — RG-LIV-005: validation is pronounced on the instruction as
+/// a whole) and/or to a circuit instance step.
+model Validation {
+  id                String             @id @default(uuid())
+  instructionId     String?
+  circuitInstanceId String?
+  validatorId       String
+  decision          ValidationDecision
+  motif             String?
+  decidedAt         DateTime           @default(now())
+
+  instruction     Instruction?     @relation(fields: [instructionId], references: [id])
+  circuitInstance CircuitInstance? @relation(fields: [circuitInstanceId], references: [id])
+  validator       User             @relation(fields: [validatorId], references: [id])
+
+  @@map("validation")
+}
+
+// ---------------------------------------------------------------------------
+// Documents (generic attachments — BAD "Pièces jointes" / "Documents associés")
+// ---------------------------------------------------------------------------
+
+/// A stored file, attached to exactly one of Dossier / Courrier / Livrable.
+/// The `storageKey` is the object key in the S3-compatible bucket (see
+/// StorageService); this table is the metadata/ownership index over it.
+model Document {
+  id           String  @id @default(uuid())
+  originalName String
+  storageKey   String  @unique
+  mimeType     String?
+  sizeBytes    Int?
+
+  dossierId  String?
+  courrierId String?
+  livrableId String?
+
+  uploadedById String?
+  createdAt    DateTime @default(now())
+
+  /// Circuit owner (10.6) — same semantics as Courrier.ownerId, for a
+  /// circuit started directly on this document rather than on its courrier.
+  ownerId String?
+
+  dossier    Dossier?  @relation(fields: [dossierId], references: [id])
+  courrier   Courrier? @relation(fields: [courrierId], references: [id])
+  livrable   Livrable? @relation(fields: [livrableId], references: [id])
+  uploadedBy User?     @relation("DocumentUploadedBy", fields: [uploadedById], references: [id])
+  owner      User?     @relation("DocumentOwner", fields: [ownerId], references: [id])
+
+  /// Independent from its dossier's/courrier's own access list, same
+  /// reasoning as CourrierAccess.
+  accesses         DocumentAccess[]
+  circuitInstances CircuitInstance[]
+
+  @@map("document")
+}
+
+/// Explicit per-user grant on a single document — mirrors DossierAccess and
+/// CourrierAccess, each level's list independent of the others.
+model DocumentAccess {
+  id         String   @id @default(uuid())
+  documentId String
+  userId     String
+  canView    Boolean  @default(true)
+  canEdit    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+  @@map("document_access")
+}
+
+// ---------------------------------------------------------------------------
+// Circuit domain — configurable validation workflows (BAD 10.6 / RG-VAL-*)
+// ---------------------------------------------------------------------------
+
+/// A reusable workflow template for a given dossier type.
+model Circuit {
+  id            String   @id @default(uuid())
+  name          String   @db.VarChar(150)
+  dossierTypeId String?
+  roleId        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  dossierType DossierType? @relation(fields: [dossierTypeId], references: [id])
+  role        Role?        @relation(fields: [roleId], references: [id])
+
+  steps     CircuitStep[]
+  instances CircuitInstance[]
 
   @@map("circuit")
 }
 
-enum CircuitStateStatus {
+enum CircuitStepState {
   NOT_STARTED
   IN_PROGRESS
   COMPLETED
   CANCELLED
 }
 
-/**
- * **
- * circuit steps template
- * for document circuits
- * materialisation
- * **
- */
-
+/// An ordered step in a circuit template. `parentStepId` models "si rejet,
+/// retour à l'étape" — the step to fall back to on rejection.
 model CircuitStep {
-  id                  String             @id @default(uuid())
-  circuitId           String
-  order               Int
-  actionType          String?            @db.VarChar(100)
-  parentCircuitStepId String?
-  state               CircuitStateStatus
-  condition           String?
-  roleId              String?
+  id            String  @id @default(uuid())
+  circuitId     String
+  order         Int
+  actionType    String? @db.VarChar(100)
+  parentStepId  String?
+  maxDelayHours Int?
+  condition     String?
+  roleId        String?
 
-  circuit                     Circuit                      @relation(fields: [circuitId], references: [id])
-  parentCircuitStep           CircuitStep?                 @relation("CircuitStepChain", fields: [parentCircuitStepId], references: [id])
-  childCircuitSteps           CircuitStep[]                @relation("CircuitStepChain")
-  role                        Role?                        @relation(fields: [roleId], references: [id])
-  roleLegacy                  Role[]                       @relation("RoleEtapeCircuitLegacy")
-  circuitInstancesCurrent     CircuitInstance[]
-  circuitStepInstanceCircuits CircuitStepInstanceCircuit[]
+  circuit    Circuit       @relation(fields: [circuitId], references: [id])
+  parentStep CircuitStep?  @relation("CircuitStepChain", fields: [parentStepId], references: [id])
+  childSteps CircuitStep[] @relation("CircuitStepChain")
+  role       Role?         @relation(fields: [roleId], references: [id])
+
+  currentInstances CircuitInstance[]
+  stepHistory      CircuitStepInstanceCircuit[]
 
   @@map("circuit_step")
 }
 
-/**
- * **
- * circuit instance
- * for document circuits
- * materialisation
- * sticks a circuit to
- * a document even after
- * the parent circuit is modified
- * **
- */
-model CircuitInstance {
-  id              String  @id @default(uuid())
-  documentId      String
-  circuitId       String
-  circuitStepId   String
-  correspondantId String?
-
-  document           Document                     @relation(fields: [documentId], references: [id])
-  circuit            Circuit                      @relation(fields: [circuitId], references: [id])
-  currentCircuitStep CircuitStep                  @relation(fields: [circuitStepId], references: [id])
-  correspondant      Correspondant?               @relation(fields: [correspondantId], references: [id])
-  circuitStepHistory CircuitStepInstanceCircuit[]
-  validations        Validation[]
-
-  @@map("instance_circuit")
+enum CircuitInstanceStatus {
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
 }
 
+/// A circuit template "materialized" against one dossier/courrier — the
+/// instance keeps following its own path even if the template later changes.
+model CircuitInstance {
+  id              String                @id @default(uuid())
+  circuitId       String
+  /// Derived from courrierId/documentId's own dossier — kept only so a
+  /// dossier's circuits can be listed in one query (see
+  /// CircuitInstanceService.findAll). Never itself a valid start target: a
+  /// circuit must attach to a courrier or a document, never a bare dossier.
+  dossierId       String?
+  courrierId      String?
+  documentId      String?
+  currentStepId   String
+  correspondentId String?
+  status          CircuitInstanceStatus @default(IN_PROGRESS)
+  completedAt     DateTime?
+
+  circuit       Circuit        @relation(fields: [circuitId], references: [id])
+  dossier       Dossier?       @relation(fields: [dossierId], references: [id])
+  courrier      Courrier?      @relation(fields: [courrierId], references: [id])
+  document      Document?      @relation(fields: [documentId], references: [id])
+  currentStep   CircuitStep    @relation(fields: [currentStepId], references: [id])
+  correspondent Correspondent? @relation(fields: [correspondentId], references: [id])
+
+  stepHistory CircuitStepInstanceCircuit[]
+  validations Validation[]
+
+  @@map("circuit_instance")
+}
+
+/// History of every step a circuit instance has passed through.
 model CircuitStepInstanceCircuit {
-  id                String          @id @default(uuid())
+  id                String   @id @default(uuid())
   circuitStepId     String
   circuitInstanceId String
-  circuitStep       CircuitStep     @relation(fields: [circuitStepId], references: [id])
-  circuitInstance   CircuitInstance @relation(fields: [circuitInstanceId], references: [id])
+  enteredAt         DateTime @default(now())
+
+  circuitStep     CircuitStep     @relation(fields: [circuitStepId], references: [id])
+  circuitInstance CircuitInstance @relation(fields: [circuitInstanceId], references: [id])
 
   @@map("circuit_step_instance_circuit")
+}
+
+// ---------------------------------------------------------------------------
+// Collaboration domain — Notifications (BAD RG-NOT-*)
+// ---------------------------------------------------------------------------
+
+enum NotificationCanal {
+  IN_APP
+  EMAIL
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  NOT_READ
+  READ
+  ARCHIVED
+}
+
+/// A notifiable event (RG-NOT-*). Deliberately has no direct `userId`: it
+/// may be fanned out to several recipients at once (e.g. RG-NOT-003 — a
+/// missed deadline notifies "l'ensemble des acteurs concernés"), each
+/// tracked individually through UserNotification.
+model Notification {
+  id         String            @id @default(uuid())
+  dossierId  String?
+  courrierId String?
+  type       String            @db.VarChar(50)
+  message    String?
+  canal      NotificationCanal
+  createdAt  DateTime          @default(now())
+
+  dossier  Dossier?  @relation(fields: [dossierId], references: [id])
+  courrier Courrier? @relation(fields: [courrierId], references: [id])
+
+  recipients UserNotification[]
+
+  @@map("notification")
+}
+
+model UserNotification {
+  userId         String
+  notificationId String
+  status         NotificationStatus @default(NOT_READ)
+
+  user         User         @relation(fields: [userId], references: [id])
+  notification Notification @relation(fields: [notificationId], references: [id])
+
+  @@id([userId, notificationId])
+  @@map("user_notification")
+}
+
+// ---------------------------------------------------------------------------
+// Administration domain — Activity log (BAD RG-AUD-*)
+// ---------------------------------------------------------------------------
+
+enum ActivitySource {
+  USER
+  SYSTEM
+}
+
+enum ActivityLevel {
+  info
+  warn
+  error
+}
+
+/// Every action taken on the platform (RG-AUD-001/002 + free-form system
+/// events — supersedes the earlier separate AuditLog/SystemLog models):
+/// who (or what system process), when, what, on which object. `userId` is
+/// deliberately a loose reference (no FK) so logging never fails or blocks
+/// on a broken relation, and so SYSTEM-sourced entries (no user) fit the
+/// same table. `parentLogId` correlates a chain of related events (e.g. one
+/// request producing several entity-level entries).
+model ActivityLog {
+  id          String         @id @default(uuid())
+  createdAt   DateTime       @default(now())
+  parentLogId String?
+  userId      String?
+  actorLabel  String?        @db.VarChar(100)
+  source      ActivitySource
+  level       ActivityLevel
+  action      String         @db.VarChar(100)
+  entityType  String?        @db.VarChar(50)
+  entityId    String?
+  message     String?        @db.Text
+  stack       String?        @db.Text
+  metadata    Json?
+
+  parent   ActivityLog?  @relation("ActivityLogTree", fields: [parentLogId], references: [id])
+  children ActivityLog[] @relation("ActivityLogTree")
+
+  @@index([parentLogId])
+  @@index([entityType, entityId])
+  @@index([userId, createdAt])
+  @@index([source, createdAt])
+  @@map("activity_log")
 }
