@@ -28,6 +28,9 @@ const mailInclude = {
   // `priority` is included so the frontend can show a courrier's urgency —
   // Courrier has no priority of its own, it inherits its dossier's.
   dossier: { select: { id: true, number: true, title: true, priority: true } },
+  respondsTo: {
+    select: { id: true, number: true, subject: true, direction: true },
+  },
 } satisfies Prisma.CourrierInclude;
 
 const courrierAccessInclude = {
@@ -140,6 +143,9 @@ export class MailService {
 
   async update(id: string, dto: UpdateMailDto) {
     const courrier = await this.ensureEditable(id);
+    if (dto.respondsToId === id) {
+      throw new BadRequestException('A courrier cannot respond to itself');
+    }
     const { receivedAt, ...data } = dto;
     return this.database.courrier.update({
       where: { id: courrier.id },

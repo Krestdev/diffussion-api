@@ -477,6 +477,12 @@ model Courrier {
   sentAt          DateTime?
   scanUrl         String?
 
+  /// Self-reference: this courrier was written in response to another one
+  /// (either direction — a sortant reply to an entrant request, or vice
+  /// versa). Optional and freely settable at creation or later; no cycle
+  /// detection beyond forbidding a courrier from responding to itself.
+  respondsToId String?
+
   // Décharge (10.2.5): recorded independently of the status state machine —
   // it's proof of physical handover, not a lifecycle transition.
   dischargeRequested Boolean   @default(false)
@@ -503,6 +509,8 @@ model Courrier {
   createdBy     User?           @relation("CourrierCreatedBy", fields: [createdById], references: [id])
   dischargedBy  User?           @relation("CourrierDischargedBy", fields: [dischargedById], references: [id])
   owner         User?           @relation("CourrierOwner", fields: [ownerId], references: [id])
+  respondsTo    Courrier?       @relation("CourrierReply", fields: [respondsToId], references: [id])
+  replies       Courrier[]      @relation("CourrierReply")
 
   documents        Document[]
   instructions     Instruction[]
