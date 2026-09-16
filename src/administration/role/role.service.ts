@@ -6,6 +6,7 @@ import {
 import { Prisma } from '../../../generated/prisma/client';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 
@@ -48,12 +49,19 @@ export class RoleService {
     return toView(role);
   }
 
-  async findAll() {
-    const roles = await this.database.role.findMany({
-      orderBy: { name: 'asc' },
-      include: roleInclude,
-    });
-    return roles.map(toView);
+  async findAll(query: PaginationQueryDto) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [roles, total] = await this.database.$transaction([
+      this.database.role.findMany({
+        orderBy: { name: 'asc' },
+        include: roleInclude,
+        skip,
+        take,
+      }),
+      this.database.role.count(),
+    ]);
+    return { data: roles.map(toView), total, skip, take };
   }
 
   async findOne(id: string) {

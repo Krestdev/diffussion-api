@@ -7,6 +7,8 @@ import {
 import * as bcrypt from 'bcrypt';
 import { Prisma, UserStatus } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
+import { EventsGateway } from '../../events/events.gateway';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
@@ -31,7 +33,10 @@ function toView(user: Prisma.UserGetPayload<{ include: typeof userInclude }>) {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly events: EventsGateway,
+  ) {}
 
   async create(dto: CreateUserDto) {
     const existing = await this.database.user.findUnique({
@@ -58,15 +63,23 @@ export class UsersService {
       },
       include: userInclude,
     });
+    this.events.broadcast('user:new');
     return toView(user);
   }
 
-  async findAll() {
-    const users = await this.database.user.findMany({
-      orderBy: { createdAt: 'desc' },
-      include: userInclude,
-    });
-    return users.map(toView);
+  async findAll(query: PaginationQueryDto) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [users, total] = await this.database.$transaction([
+      this.database.user.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: userInclude,
+        skip,
+        take,
+      }),
+      this.database.user.count(),
+    ]);
+    return { data: users.map(toView), total, skip, take };
   }
 
   async findOne(id: string) {
@@ -110,6 +123,7 @@ export class UsersService {
       },
       include: userInclude,
     });
+    this.events.broadcast('user:update');
     return toView(user);
   }
 
@@ -125,6 +139,7 @@ export class UsersService {
       },
       include: userInclude,
     });
+    this.events.broadcast('user:update');
     return toView(updated);
   }
 
@@ -132,6 +147,7 @@ export class UsersService {
     await this.ensureExists(id);
     try {
       await this.database.user.delete({ where: { id } });
+      this.events.broadcast('user:delete');
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&

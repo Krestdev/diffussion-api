@@ -2,10 +2,12 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { DatabaseService } from '../database/database.service';
+import { EventsGateway } from '../events/events.gateway';
 import { NotificationStatus } from '../../generated/prisma/client';
 
 describe('NotificationsService', () => {
   let service: NotificationsService;
+  let events: { emitToUser: jest.Mock };
   let database: {
     notification: Record<string, jest.Mock>;
     userNotification: Record<string, jest.Mock>;
@@ -20,11 +22,13 @@ describe('NotificationsService', () => {
         update: jest.fn(),
       },
     };
+    events = { emitToUser: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         NotificationsService,
         { provide: DatabaseService, useValue: database },
+        { provide: EventsGateway, useValue: events },
       ],
     }).compile();
 
@@ -53,6 +57,8 @@ describe('NotificationsService', () => {
         }),
       }),
     );
+    expect(events.emitToUser).toHaveBeenCalledWith('u-1', 'notification:new');
+    expect(events.emitToUser).toHaveBeenCalledWith('u-2', 'notification:new');
   });
 
   describe('markStatus', () => {

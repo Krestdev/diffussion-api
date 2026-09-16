@@ -530,4 +530,35 @@ describe('CircuitInstanceService', () => {
       });
     });
   });
+
+  describe('findAll', () => {
+    // Isolated from the rest of the file's callback-style $transaction mock
+    // (used by start()/decide()) — findAll() uses the array form instead.
+    it('paginates with defaults and returns the envelope', async () => {
+      const paginatedDatabase = {
+        circuitInstance: {
+          findMany: jest.fn().mockResolvedValue([{ id: 'ci-1' }]),
+          count: jest.fn().mockResolvedValue(1),
+        },
+        $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
+      };
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+          CircuitInstanceService,
+          { provide: DatabaseService, useValue: paginatedDatabase },
+          { provide: NotificationsService, useValue: { create: jest.fn() } },
+        ],
+      }).compile();
+      const paginated = module.get<CircuitInstanceService>(
+        CircuitInstanceService,
+      );
+
+      const result = await paginated.findAll({});
+
+      expect(result).toEqual({ data: [{ id: 'ci-1' }], total: 1, skip: 0, take: 20 });
+      expect(paginatedDatabase.circuitInstance.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 0, take: 20 }),
+      );
+    });
+  });
 });

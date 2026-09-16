@@ -231,16 +231,25 @@ export class CircuitInstanceService {
   }
 
   async findAll(query: FindCircuitInstancesQueryDto) {
-    return this.database.circuitInstance.findMany({
-      where: {
-        dossierId: query.dossierId,
-        courrierId: query.courrierId,
-        documentId: query.documentId,
-        status: query.status,
-      },
-      include: instanceInclude,
-      orderBy: { id: 'desc' },
-    });
+    const where: Prisma.CircuitInstanceWhereInput = {
+      dossierId: query.dossierId,
+      courrierId: query.courrierId,
+      documentId: query.documentId,
+      status: query.status,
+    };
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [data, total] = await this.database.$transaction([
+      this.database.circuitInstance.findMany({
+        where,
+        include: instanceInclude,
+        orderBy: { id: 'desc' },
+        skip,
+        take,
+      }),
+      this.database.circuitInstance.count({ where }),
+    ]);
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

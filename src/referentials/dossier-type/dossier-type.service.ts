@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateDossierTypeDto } from './dto/create-dossier-type.dto';
 import { UpdateDossierTypeDto } from './dto/update-dossier-type.dto';
 
@@ -16,8 +17,18 @@ export class DossierTypeService {
     return this.database.dossierType.create({ data: dto });
   }
 
-  findAll() {
-    return this.database.dossierType.findMany({ orderBy: { name: 'asc' } });
+  async findAll(query: PaginationQueryDto) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [data, total] = await this.database.$transaction([
+      this.database.dossierType.findMany({
+        orderBy: { name: 'asc' },
+        skip,
+        take,
+      }),
+      this.database.dossierType.count(),
+    ]);
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

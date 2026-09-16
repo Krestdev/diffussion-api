@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -16,6 +17,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { RoleService } from './role.service';
@@ -34,8 +36,8 @@ export class RoleController {
   }
 
   @Get()
-  findAll() {
-    return this.roleService.findAll();
+  findAll(@Query() query: PaginationQueryDto) {
+    return this.roleService.findAll(query);
   }
 
   @Get(':id')

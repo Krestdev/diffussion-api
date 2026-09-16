@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -16,6 +17,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { ProjectService } from './project.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
@@ -34,8 +36,8 @@ export class ProjectController {
   }
 
   @Get()
-  findAll() {
-    return this.projectService.findAll();
+  findAll(@Query() query: PaginationQueryDto) {
+    return this.projectService.findAll(query);
   }
 
   @Get(':id')

@@ -1,15 +1,19 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { NotificationStatus, Prisma } from '../../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
+import { EventsGateway } from '../events/events.gateway';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 
 @Injectable()
 export class NotificationsService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly events: EventsGateway,
+  ) {}
 
-  create(dto: CreateNotificationDto) {
+  async create(dto: CreateNotificationDto) {
     const { recipientIds, ...data } = dto;
-    return this.database.notification.create({
+    const notification = await this.database.notification.create({
       data: {
         ...data,
         recipients: {
@@ -20,6 +24,13 @@ export class NotificationsService {
       },
       include: { recipients: true },
     });
+    // Push, not the data itself — each recipient refetches via
+    // useMyNotifications() (GET /notifications/me) on receipt, same as
+    // every other resource in the socket-invalidation pattern.
+    for (const userId of recipientIds) {
+      this.events.emitToUser(userId, 'notification:new');
+    }
+    return notification;
   }
 
   // A user's own inbox: every notification they were fanned out to, with

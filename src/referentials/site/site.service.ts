@@ -6,6 +6,7 @@ import {
 import { Prisma, SiteStatus } from '../../../generated/prisma/client';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
 
@@ -28,11 +29,19 @@ export class SiteService {
     );
   }
 
-  findAll() {
-    return this.database.site.findMany({
-      orderBy: { name: 'asc' },
-      include: includeResponsible,
-    });
+  async findAll(query: PaginationQueryDto) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [data, total] = await this.database.$transaction([
+      this.database.site.findMany({
+        orderBy: { name: 'asc' },
+        include: includeResponsible,
+        skip,
+        take,
+      }),
+      this.database.site.count(),
+    ]);
+    return { data, total, skip, take };
   }
 
   async findOne(uuid: string) {

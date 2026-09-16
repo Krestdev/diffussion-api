@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 
@@ -16,8 +17,14 @@ export class CategoryService {
     return this.database.category.create({ data: dto });
   }
 
-  findAll() {
-    return this.database.category.findMany({ orderBy: { label: 'asc' } });
+  async findAll(query: PaginationQueryDto) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [data, total] = await this.database.$transaction([
+      this.database.category.findMany({ orderBy: { label: 'asc' }, skip, take }),
+      this.database.category.count(),
+    ]);
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

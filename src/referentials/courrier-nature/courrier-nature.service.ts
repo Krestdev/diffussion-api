@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateCourrierNatureDto } from './dto/create-courrier-nature.dto';
 import { UpdateCourrierNatureDto } from './dto/update-courrier-nature.dto';
 
@@ -16,10 +17,18 @@ export class CourrierNatureService {
     return this.database.courrierNature.create({ data: dto });
   }
 
-  findAll() {
-    return this.database.courrierNature.findMany({
-      orderBy: { name: 'asc' },
-    });
+  async findAll(query: PaginationQueryDto) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [data, total] = await this.database.$transaction([
+      this.database.courrierNature.findMany({
+        orderBy: { name: 'asc' },
+        skip,
+        take,
+      }),
+      this.database.courrierNature.count(),
+    ]);
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

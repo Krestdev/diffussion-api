@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 
@@ -16,8 +17,14 @@ export class ProjectService {
     return this.database.project.create({ data: dto });
   }
 
-  findAll() {
-    return this.database.project.findMany({ orderBy: { name: 'asc' } });
+  async findAll(query: PaginationQueryDto) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [data, total] = await this.database.$transaction([
+      this.database.project.findMany({ orderBy: { name: 'asc' }, skip, take }),
+      this.database.project.count(),
+    ]);
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateCorrespondentTypeDto } from './dto/create-correspondent-type.dto';
 import { UpdateCorrespondentTypeDto } from './dto/update-correspondent-type.dto';
 
@@ -16,10 +17,18 @@ export class CorrespondentTypeService {
     return this.database.correspondentType.create({ data: dto });
   }
 
-  findAll() {
-    return this.database.correspondentType.findMany({
-      orderBy: { name: 'asc' },
-    });
+  async findAll(query: PaginationQueryDto) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [data, total] = await this.database.$transaction([
+      this.database.correspondentType.findMany({
+        orderBy: { name: 'asc' },
+        skip,
+        take,
+      }),
+      this.database.correspondentType.count(),
+    ]);
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

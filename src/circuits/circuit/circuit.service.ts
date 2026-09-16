@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
+import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import { CreateCircuitDto } from './dto/create-circuit.dto';
 import { UpdateCircuitDto } from './dto/update-circuit.dto';
 
@@ -22,11 +23,19 @@ export class CircuitService {
     return this.database.circuit.create({ data: dto, include });
   }
 
-  findAll() {
-    return this.database.circuit.findMany({
-      orderBy: { name: 'asc' },
-      include,
-    });
+  async findAll(query: PaginationQueryDto) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? 20;
+    const [data, total] = await this.database.$transaction([
+      this.database.circuit.findMany({
+        orderBy: { name: 'asc' },
+        include,
+        skip,
+        take,
+      }),
+      this.database.circuit.count(),
+    ]);
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {
