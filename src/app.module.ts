@@ -10,7 +10,7 @@ import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { ReferentialsModule } from './referentials/referentials.module';
-import { DocumentModule } from './document/document.module';
+import { DomainModule } from './domain/domain.module';
 import { InstructionsModule } from './instructions/instructions.module';
 import { DbLogger } from './logging/db.logger';
 import { ActivityModule } from './activity/activity.module';
@@ -44,7 +44,7 @@ import { StorageModule } from './storage/storage.module';
     RbacModule,
     ReferentialsModule,
     InstructionsModule,
-    DocumentModule,
+    DomainModule,
     AdministrationModule,
     NotificationsModule,
     DocumentsModule,

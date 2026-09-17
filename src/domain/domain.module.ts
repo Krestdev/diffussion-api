@@ -12,4 +12,4 @@ import { DeliverableService } from './deliverable/deliverable.service';
   providers: [DossierService, MailService, DeliverableService],
   exports: [DossierService, MailService, DeliverableService],
 })
-export class DocumentModule {}
+export class DomainModule {}
