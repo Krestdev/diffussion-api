@@ -5,6 +5,15 @@ import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InstructionStatus } from '../../generated/prisma/client';
 
+// Dossier-state rules (RG-DOS-007, site activity, progress) are covered by
+// the DossierService spec; here they're stubbed so fixtures don't need a
+// full dossier/site graph.
+jest.mock('../common/utils/dossier-lifecycle', () => ({
+  assertDossierOpenForActivity: jest.fn(),
+  markDossierInProgress: jest.fn(),
+  refreshDossierProgress: jest.fn(),
+}));
+
 describe('InstructionsService', () => {
   let service: InstructionsService;
   let notifications: { create: jest.Mock };

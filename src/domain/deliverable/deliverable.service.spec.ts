@@ -4,6 +4,15 @@ import { DeliverableService } from './deliverable.service';
 import { DatabaseService } from '../../database/database.service';
 import { LivrableStatus } from '../../../generated/prisma/client';
 
+// Dossier-state rules (RG-DOS-007, site activity, progress) are covered by
+// the DossierService spec; here they're stubbed so fixtures don't need a
+// full dossier/site graph.
+jest.mock('../../common/utils/dossier-lifecycle', () => ({
+  assertDossierOpenForActivity: jest.fn(),
+  markDossierInProgress: jest.fn(),
+  refreshDossierProgress: jest.fn(),
+}));
+
 describe('DeliverableService', () => {
   let service: DeliverableService;
   let database: {
@@ -22,7 +31,10 @@ describe('DeliverableService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
-      instruction: { updateMany: jest.fn() },
+      instruction: {
+        updateMany: jest.fn(),
+        findUnique: jest.fn().mockResolvedValue({ dossierId: 'd-1' }),
+      },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
     };
 

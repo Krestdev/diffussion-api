@@ -19,6 +19,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { DocumentsModule } from './documents/documents.module';
 import { CircuitsModule } from './circuits/circuits.module';
 import { StorageModule } from './storage/storage.module';
+import { MailModule } from './mail/mail.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { StorageModule } from './storage/storage.module';
       }),
     }),
     DatabaseModule,
+    MailModule,
     // Global: every domain module can inject ActivityService directly to
     // record its own events; the module also registers the APP_INTERCEPTOR
     // that logs one root entry per authenticated, non-GET request.

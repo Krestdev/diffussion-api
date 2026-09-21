@@ -4,15 +4,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import { ActivityService } from '../../activity/activity.service';
+import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCourrierNatureDto } from './dto/create-courrier-nature.dto';
 import { UpdateCourrierNatureDto } from './dto/update-courrier-nature.dto';
 
 @Injectable()
 export class CourrierNatureService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    // Read by @AuditLog through `this.activity`.
+    private readonly activity: ActivityService,
+  ) {}
 
-  create(dto: CreateCourrierNatureDto) {
+  @AuditLog({
+    action: 'courrier-nature.created',
+    entityType: 'courrier-nature',
+    operation: 'CREATE',
+  })
+  async create(dto: CreateCourrierNatureDto) {
     return this.database.courrierNature.create({ data: dto });
   }
 
@@ -32,11 +43,21 @@ export class CourrierNatureService {
     return nature;
   }
 
+  @AuditLog({
+    action: 'courrier-nature.updated',
+    entityType: 'courrier-nature',
+    operation: 'UPDATE',
+  })
   async update(id: string, dto: UpdateCourrierNatureDto) {
     await this.findOne(id);
     return this.database.courrierNature.update({ where: { id }, data: dto });
   }
 
+  @AuditLog({
+    action: 'courrier-nature.deleted',
+    entityType: 'courrier-nature',
+    operation: 'DELETE',
+  })
   async remove(id: string) {
     await this.findOne(id);
     try {

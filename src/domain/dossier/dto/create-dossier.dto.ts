@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayUnique,
   IsArray,
+  IsDateString,
   IsEnum,
   IsOptional,
   IsString,
@@ -70,6 +71,14 @@ export class CreateDossierDto {
   @IsOptional()
   @IsEnum(DossierConfidentiality)
   confidentiality?: DossierConfidentiality;
+
+  @ApiPropertyOptional({
+    example: '2026-12-31',
+    description: 'Target completion date — past it, the dossier turns LATE',
+  })
+  @IsOptional()
+  @IsDateString()
+  dueDate?: string;
 
   @ApiPropertyOptional({ type: [String], example: ['subvention', 'communal'] })
   @IsOptional()

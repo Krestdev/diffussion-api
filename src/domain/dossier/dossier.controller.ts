@@ -16,8 +16,12 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
-import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
+import {
+  JwtPayload,
+  JwtPayloadWithRefreshToken,
+} from '../../auth/types/jwt-payload.type';
 import { SetAccessDto } from '../../common/dto/access.dto';
+import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { DossierService } from './dossier.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
 import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
@@ -54,8 +58,9 @@ export class DossierController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDossierDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.dossierService.update(id, dto);
+    return this.dossierService.update(id, dto, user.sub);
   }
 
   @Post(':id/close')
@@ -83,18 +88,27 @@ export class DossierController {
   }
 
   @Get(':id/courriers')
-  getCourriers(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierService.getCourriers(id);
+  getCourriers(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PaginationQueryDto,
+  ) {
+    return this.dossierService.getCourriers(id, query);
   }
 
   @Get(':id/instructions')
-  getInstructions(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierService.getInstructions(id);
+  getInstructions(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PaginationQueryDto,
+  ) {
+    return this.dossierService.getInstructions(id, query);
   }
 
   @Get(':id/livrables')
-  getLivrables(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierService.getLivrables(id);
+  getLivrables(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: PaginationQueryDto,
+  ) {
+    return this.dossierService.getLivrables(id, query);
   }
 
   @Get(':id/historique')

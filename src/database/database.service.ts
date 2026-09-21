@@ -24,7 +24,6 @@ export class DatabaseService
     const adapter = new PrismaPg(pool);
     super({
       adapter,
-      log: ['error', 'warn'],
     });
   }
 

@@ -11,7 +11,7 @@ type RequestWithId = Request & { __requestId?: string };
 export class LoggerMiddleware implements NestMiddleware {
   private readonly logger = new Logger('HTTP');
 
-  constructor(private readonly cls: ClsService<AppClsStore>) { }
+  constructor(private readonly cls: ClsService<AppClsStore>) {}
 
   use(req: RequestWithId, res: Response, next: NextFunction): void {
     const requestId = req.__requestId;

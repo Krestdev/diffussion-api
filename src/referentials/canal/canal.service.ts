@@ -4,15 +4,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import { ActivityService } from '../../activity/activity.service';
+import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCanalDto } from './dto/create-canal.dto';
 import { UpdateCanalDto } from './dto/update-canal.dto';
 
 @Injectable()
 export class CanalService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    // Read by @AuditLog through `this.activity`.
+    private readonly activity: ActivityService,
+  ) {}
 
-  create(dto: CreateCanalDto) {
+  @AuditLog({
+    action: 'canal.created',
+    entityType: 'canal',
+    operation: 'CREATE',
+  })
+  async create(dto: CreateCanalDto) {
     return this.database.canal.create({ data: dto });
   }
 
@@ -28,11 +39,21 @@ export class CanalService {
     return canal;
   }
 
+  @AuditLog({
+    action: 'canal.updated',
+    entityType: 'canal',
+    operation: 'UPDATE',
+  })
   async update(id: string, dto: UpdateCanalDto) {
     await this.findOne(id);
     return this.database.canal.update({ where: { id }, data: dto });
   }
 
+  @AuditLog({
+    action: 'canal.deleted',
+    entityType: 'canal',
+    operation: 'DELETE',
+  })
   async remove(id: string) {
     await this.findOne(id);
     try {

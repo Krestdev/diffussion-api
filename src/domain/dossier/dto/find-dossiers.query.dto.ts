@@ -4,7 +4,7 @@ import { IsEnum, IsInt, IsOptional, IsString, IsUUID } from 'class-validator';
 import { DossierPriority, DossierStatus } from 'generated/prisma/enums';
 
 export class FindDossiersQueryDto {
-  @ApiPropertyOptional({ description: 'Search in title/number' })
+  @ApiPropertyOptional({ description: 'Search in title/number/keywords' })
   @IsOptional()
   @IsString()
   search?: string;

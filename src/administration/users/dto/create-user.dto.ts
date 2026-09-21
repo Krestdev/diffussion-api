@@ -8,6 +8,7 @@ import {
   IsUUID,
   MinLength,
 } from 'class-validator';
+import { NormalizeEmail } from '../../../common/transforms/normalize-email.transform';
 
 export class CreateUserDto {
   @ApiProperty({ example: 'Joseph FONKOU' })
@@ -17,6 +18,7 @@ export class CreateUserDto {
 
   @ApiProperty({ example: 'josephfonkou@creaconsult.com' })
   @IsEmail()
+  @NormalizeEmail()
   email: string;
 
   @ApiProperty({ example: 'Str0ngP@ssword' })

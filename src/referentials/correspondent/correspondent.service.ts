@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
+import { ActivityService } from '../../activity/activity.service';
+import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCorrespondentDto } from './dto/create-correspondent.dto';
 import { FindCorrespondantsQueryDto } from './dto/find-correspondents.query.dto';
@@ -16,9 +18,19 @@ const includeType = {
 
 @Injectable()
 export class CorrespondantService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    // Read by @AuditLog through `this.activity`.
+    private readonly activity: ActivityService,
+  ) {}
 
-  create(dto: CreateCorrespondentDto) {
+  @AuditLog({
+    action: 'correspondent.created',
+    entityType: 'correspondent',
+    operation: 'CREATE',
+  })
+  async create(dto: CreateCorrespondentDto) {
+    if (dto.typeId) await this.assertTypeExists(dto.typeId);
     return createWithUniqueReference('CP', (code) =>
       this.database.correspondent.create({
         data: { ...dto, code },
@@ -64,8 +76,14 @@ export class CorrespondantService {
     return correspondent;
   }
 
+  @AuditLog({
+    action: 'correspondent.updated',
+    entityType: 'correspondent',
+    operation: 'UPDATE',
+  })
   async update(uuid: string, dto: UpdateCorrespondantDto) {
     await this.findOne(uuid);
+    if (dto.typeId) await this.assertTypeExists(dto.typeId);
     return this.database.correspondent.update({
       where: { id: uuid },
       data: dto,
@@ -73,6 +91,11 @@ export class CorrespondantService {
     });
   }
 
+  @AuditLog({
+    action: 'correspondent.deleted',
+    entityType: 'correspondent',
+    operation: 'DELETE',
+  })
   async remove(uuid: string) {
     await this.findOne(uuid);
     try {
@@ -87,6 +110,16 @@ export class CorrespondantService {
         );
       }
       throw error;
+    }
+  }
+
+  private async assertTypeExists(typeId: string) {
+    const type = await this.database.correspondentType.findUnique({
+      where: { id: typeId },
+      select: { id: true },
+    });
+    if (!type) {
+      throw new BadRequestException(`Correspondent type ${typeId} not found`);
     }
   }
 }

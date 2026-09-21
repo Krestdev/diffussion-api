@@ -7,6 +7,7 @@ import {
 import { Prisma } from '../../generated/prisma/client';
 import { SetAccessDto } from '../common/dto/access.dto';
 import { SetOwnerDto } from '../common/dto/set-owner.dto';
+import { assertDossierOpenForActivity } from '../common/utils/dossier-lifecycle';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { RbacService } from '../auth/rbac/rbac.service';
@@ -44,6 +45,11 @@ export class DocumentsService {
         'Provide exactly one of dossierId, courrierId, livrableId',
       );
     }
+
+    await assertDossierOpenForActivity(
+      this.database,
+      await this.resolveDossierId(dto),
+    );
 
     const prefix = dto.dossierId
       ? `dossiers/${dto.dossierId}`
@@ -104,6 +110,30 @@ export class DocumentsService {
     const document = await this.findOne(id);
     await this.storage.delete(document.storageKey);
     await this.database.document.delete({ where: { id } });
+  }
+
+  // The dossier a new document ultimately lands in: directly, through its
+  // courrier, or through its livrable's instruction.
+  private async resolveDossierId(dto: UploadDocumentDto): Promise<string> {
+    if (dto.dossierId) return dto.dossierId;
+    if (dto.courrierId) {
+      const courrier = await this.database.courrier.findUnique({
+        where: { id: dto.courrierId },
+        select: { dossierId: true },
+      });
+      if (!courrier) {
+        throw new NotFoundException(`Courrier ${dto.courrierId} not found`);
+      }
+      return courrier.dossierId;
+    }
+    const livrable = await this.database.livrable.findUnique({
+      where: { id: dto.livrableId },
+      select: { instruction: { select: { dossierId: true } } },
+    });
+    if (!livrable) {
+      throw new NotFoundException(`Livrable ${dto.livrableId} not found`);
+    }
+    return livrable.instruction.dossierId;
   }
 
   // Circuit owner (10.6) — same semantics/authorization as

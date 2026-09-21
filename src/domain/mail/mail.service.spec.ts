@@ -133,7 +133,7 @@ describe('MailService', () => {
       );
     });
 
-    it('allows the owning site\'s responsible', async () => {
+    it("allows the owning site's responsible", async () => {
       database.courrier.findUnique.mockResolvedValue({
         id: 'c-1',
         createdById: 'someone-else',

@@ -1,15 +1,28 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
+  CircuitInstanceStatus,
   DossierStatus,
   InstructionStatus,
   Prisma,
+  UserStatus,
 } from '../../../generated/prisma/client';
+import { ActivityService } from '../../activity/activity.service';
+import { AuditLog } from '../../activity/decorators/audit-log.decorator';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RbacService } from '../../auth/rbac/rbac.service';
 import { SetAccessDto } from '../../common/dto/access.dto';
+import {
+  DEFAULT_TAKE,
+  PaginationQueryDto,
+} from '../../common/dto/pagination.query.dto';
+import { computeDossierProgress } from '../../common/utils/dossier-lifecycle';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
+import { assertSiteActive } from '../../common/utils/referential-guards';
 import { DatabaseService } from '../../database/database.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
 import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
@@ -34,19 +47,71 @@ const TERMINAL_INSTRUCTION_STATUSES: InstructionStatus[] = [
   InstructionStatus.ANNULEE,
 ];
 
+// Statuses that turn LATE once the due date has passed (and that a LATE
+// dossier returns from, as IN_PROGRESS, when its due date is pushed back).
+const LATENESS_ELIGIBLE_STATUSES: DossierStatus[] = [
+  DossierStatus.OPEN,
+  DossierStatus.IN_PROGRESS,
+  DossierStatus.PENDING,
+];
+
+// Status a dossier should have given its due date, right now. Time passing
+// is handled by DossierLatenessService; this covers due-date edits.
+export function statusForDueDate(
+  status: DossierStatus,
+  dueDate: Date | null,
+): DossierStatus {
+  const overdue = dueDate !== null && dueDate.getTime() < Date.now();
+  if (overdue && LATENESS_ELIGIBLE_STATUSES.includes(status)) {
+    return DossierStatus.LATE;
+  }
+  if (!overdue && status === DossierStatus.LATE) {
+    return DossierStatus.IN_PROGRESS;
+  }
+  return status;
+}
+
+function paging(query: PaginationQueryDto) {
+  return { skip: query.skip ?? 0, take: query.take ?? DEFAULT_TAKE };
+}
+
 @Injectable()
 export class DossierService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly rbac: RbacService,
+    // Read by @AuditLog through `this.activity`.
+    private readonly activity: ActivityService,
+  ) {}
 
-  create(dto: CreateDossierDto, createdById: string) {
-    const { keywords, responsibleId, ...data } = dto;
+  @AuditLog({
+    action: 'dossier.created',
+    entityType: 'dossier',
+    operation: 'CREATE',
+  })
+  async create(dto: CreateDossierDto, createdById: string) {
+    await assertSiteActive(this.database, dto.siteId);
+    const responsibleId = dto.responsibleId ?? createdById;
+    await this.assertEligibleResponsible(responsibleId, dto.siteId);
+
+    const { keywords, dueDate: rawDueDate, ...data } = dto;
+    const openedAt = new Date();
+    const dueDate = rawDueDate ? new Date(rawDueDate) : null;
+    const retentionUntil = await this.computeRetentionUntil(
+      dto.categoryId,
+      openedAt,
+    );
     return createWithUniqueReference('D', (number) =>
       this.database.dossier.create({
         data: {
           ...data,
           number,
+          openedAt,
+          dueDate,
+          status: statusForDueDate(DossierStatus.OPEN, dueDate),
+          retentionUntil,
           keywords: keywords ?? [],
-          responsibleId: responsibleId ?? createdById,
+          responsibleId,
           createdById,
         },
         include: dossierInclude,
@@ -65,6 +130,8 @@ export class DossierService {
         ? [
             { title: { contains: query.search, mode: 'insensitive' } },
             { number: { contains: query.search, mode: 'insensitive' } },
+            // Exact keyword match (Postgres array containment).
+            { keywords: { has: query.search } },
           ]
         : undefined,
     };
@@ -94,30 +161,108 @@ export class DossierService {
     return dossier;
   }
 
-  async update(id: string, dto: UpdateDossierDto) {
-    await this.ensureMutable(id);
-    const { keywords, ...data } = dto;
+  @AuditLog({
+    action: 'dossier.updated',
+    entityType: 'dossier',
+    operation: 'UPDATE',
+  })
+  async update(id: string, dto: UpdateDossierDto, actingUserId: string) {
+    const dossier = await this.ensureMutable(id);
+
+    // RG-DOS-004: a dossier always has a responsible — it can be replaced,
+    // never cleared.
+    if ('responsibleId' in dto && !dto.responsibleId) {
+      throw new BadRequestException(
+        'A dossier must always have a responsible — pass another user instead of clearing it',
+      );
+    }
+
+    // RG-DOS-003: the owning site drives circuits, eligibility and access,
+    // so moving a dossier is an administrative act, not a plain edit.
+    const siteChanged =
+      dto.siteId !== undefined && dto.siteId !== dossier.siteId;
+    if (siteChanged) {
+      const canMove = await this.rbac.hasPermission(
+        actingUserId,
+        PermissionCode.AdminManageSites,
+      );
+      if (!canMove) {
+        throw new ForbiddenException(
+          `Moving a dossier to another site requires ${PermissionCode.AdminManageSites}`,
+        );
+      }
+      await assertSiteActive(this.database, dto.siteId!);
+    }
+
+    const targetSiteId = dto.siteId ?? dossier.siteId;
+    const targetResponsibleId = dto.responsibleId ?? dossier.responsibleId;
+    if (
+      targetResponsibleId &&
+      (siteChanged || targetResponsibleId !== dossier.responsibleId)
+    ) {
+      await this.assertEligibleResponsible(targetResponsibleId, targetSiteId);
+    }
+
+    const retentionUntil =
+      dto.categoryId !== undefined && dto.categoryId !== dossier.categoryId
+        ? await this.computeRetentionUntil(dto.categoryId, dossier.openedAt)
+        : undefined;
+
+    const { keywords, dueDate: rawDueDate, ...data } = dto;
+    const dueDateChanged = 'dueDate' in dto;
+    const dueDate = rawDueDate ? new Date(rawDueDate) : null;
+
     return this.database.dossier.update({
       where: { id },
-      data: { ...data, keywords },
+      data: {
+        ...data,
+        keywords,
+        retentionUntil,
+        ...(dueDateChanged
+          ? { dueDate, status: statusForDueDate(dossier.status, dueDate) }
+          : {}),
+      },
       include: dossierInclude,
     });
   }
 
   // RG-DOS-005: a dossier can only close once every instruction attached to
-  // it is terminated (validated) or cancelled.
+  // it is terminated (validated) or cancelled, and no validation circuit is
+  // still running on it or on one of its courriers/documents.
+  @AuditLog({
+    action: 'dossier.closed',
+    entityType: 'dossier',
+    operation: 'UPDATE',
+  })
   async close(id: string) {
     await this.ensureMutable(id);
 
-    const pending = await this.database.instruction.count({
-      where: {
-        dossierId: id,
-        status: { notIn: TERMINAL_INSTRUCTION_STATUSES },
-      },
-    });
+    const [pending, runningCircuits] = await Promise.all([
+      this.database.instruction.count({
+        where: {
+          dossierId: id,
+          status: { notIn: TERMINAL_INSTRUCTION_STATUSES },
+        },
+      }),
+      this.database.circuitInstance.count({
+        where: {
+          status: CircuitInstanceStatus.IN_PROGRESS,
+          OR: [
+            { dossierId: id },
+            { courrier: { dossierId: id } },
+            { document: { dossierId: id } },
+          ],
+        },
+      }),
+    ]);
     if (pending > 0) {
       throw new BadRequestException(
         `${pending} instruction(s) are still open — a dossier can only be closed once every instruction is terminated or cancelled`,
+      );
+    }
+    if (runningCircuits > 0) {
+      throw new BadRequestException(
+        `${runningCircuits} validation circuit(s) are still in progress on this dossier — complete or cancel them before closing`,
       );
     }
 
@@ -131,6 +276,11 @@ export class DossierService {
   // RG-DOS-008: reopening is described as an exceptional procedure decided
   // outside the platform — exposed here as a distinct, separately
   // permissioned action rather than a plain field update.
+  @AuditLog({
+    action: 'dossier.reopened',
+    entityType: 'dossier',
+    operation: 'UPDATE',
+  })
   async reopen(id: string) {
     const dossier = await this.findOne(id);
     if (dossier.status !== DossierStatus.CLOSED) {
@@ -139,7 +289,7 @@ export class DossierService {
     return this.database.dossier.update({
       where: { id },
       data: {
-        status: DossierStatus.IN_PROGRESS,
+        status: statusForDueDate(DossierStatus.IN_PROGRESS, dossier.dueDate),
         closedAt: null,
         archivedAt: null,
       },
@@ -148,6 +298,11 @@ export class DossierService {
   }
 
   // 10.8.3: a dossier must be closed before it is eligible for archiving.
+  @AuditLog({
+    action: 'dossier.archived',
+    entityType: 'dossier',
+    operation: 'UPDATE',
+  })
   async archive(id: string) {
     const dossier = await this.findOne(id);
     if (dossier.status !== DossierStatus.CLOSED) {
@@ -163,6 +318,11 @@ export class DossierService {
   // Inverse of archive() — brings a dossier back to CLOSED (not straight to
   // IN_PROGRESS: archiving only ever happens from CLOSED, so this undoes
   // exactly that step; a further reopen() can resume active work from there).
+  @AuditLog({
+    action: 'dossier.unarchived',
+    entityType: 'dossier',
+    operation: 'UPDATE',
+  })
   async unarchive(id: string) {
     const dossier = await this.findOne(id);
     if (dossier.status !== DossierStatus.ARCHIVED) {
@@ -175,30 +335,72 @@ export class DossierService {
     });
   }
 
-  async getCourriers(id: string) {
+  async getCourriers(id: string, query: PaginationQueryDto) {
     await this.findOne(id);
-    return this.database.courrier.findMany({
-      where: { dossierId: id },
-      include: { correspondent: true },
-      orderBy: { createdAt: 'desc' },
-    });
+    const { skip, take } = paging(query);
+    const where: Prisma.CourrierWhereInput = {
+      dossierId: id,
+      OR: query.search
+        ? [
+            { subject: { contains: query.search, mode: 'insensitive' } },
+            { number: { contains: query.search, mode: 'insensitive' } },
+          ]
+        : undefined,
+    };
+    const [data, total] = await this.database.$transaction([
+      this.database.courrier.findMany({
+        where,
+        include: { correspondent: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.database.courrier.count({ where }),
+    ]);
+    return { data, total, skip, take };
   }
 
-  async getInstructions(id: string) {
+  async getInstructions(id: string, query: PaginationQueryDto) {
     await this.findOne(id);
-    return this.database.instruction.findMany({
-      where: { dossierId: id },
-      include: { assignees: { include: { user: true } } },
-      orderBy: { createdAt: 'desc' },
-    });
+    const { skip, take } = paging(query);
+    const where: Prisma.InstructionWhereInput = {
+      dossierId: id,
+      title: query.search
+        ? { contains: query.search, mode: 'insensitive' }
+        : undefined,
+    };
+    const [data, total] = await this.database.$transaction([
+      this.database.instruction.findMany({
+        where,
+        include: { assignees: { include: { user: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.database.instruction.count({ where }),
+    ]);
+    return { data, total, skip, take };
   }
 
-  async getLivrables(id: string) {
+  async getLivrables(id: string, query: PaginationQueryDto) {
     await this.findOne(id);
-    return this.database.livrable.findMany({
-      where: { instruction: { dossierId: id } },
-      orderBy: { createdAt: 'desc' },
-    });
+    const { skip, take } = paging(query);
+    const where: Prisma.LivrableWhereInput = {
+      instruction: { dossierId: id },
+      title: query.search
+        ? { contains: query.search, mode: 'insensitive' }
+        : undefined,
+    };
+    const [data, total] = await this.database.$transaction([
+      this.database.livrable.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.database.livrable.count({ where }),
+    ]);
+    return { data, total, skip, take };
   }
 
   // RG-AUD-*: full trail of everything recorded against this dossier.
@@ -207,26 +409,17 @@ export class DossierService {
   async getHistorique(id: string) {
     await this.findOne(id);
     return this.database.activityLog.findMany({
-      where: { entityType: 'Dossier', entityId: id },
+      where: { entityType: 'dossier', entityId: id },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   // 10.1.8: progression derived from how many attached instructions are
-  // terminated. Persisted on the dossier so listings stay cheap to render.
+  // terminated. Read-only — the persisted `progress` is kept up to date by
+  // the instruction lifecycle (see refreshDossierProgress).
   async getProgression(id: string) {
     await this.findOne(id);
-    const [total, done] = await this.database.$transaction([
-      this.database.instruction.count({ where: { dossierId: id } }),
-      this.database.instruction.count({
-        where: { dossierId: id, status: InstructionStatus.TERMINEE },
-      }),
-    ]);
-    const progress = total === 0 ? 0 : Math.round((done / total) * 100);
-
-    await this.database.dossier.update({ where: { id }, data: { progress } });
-
-    return { total, done, progress };
+    return computeDossierProgress(this.database, id);
   }
 
   // RG-DOS-*: explicit per-user grants on top of `confidentiality` — a
@@ -244,7 +437,24 @@ export class DossierService {
   // dossier — any existing grant for a user not listed is dropped.
   async setAccess(id: string, dto: SetAccessDto) {
     await this.findOne(id);
+
+    const inconsistent = dto.entries.filter((e) => e.canEdit && !e.canView);
+    if (inconsistent.length) {
+      throw new BadRequestException(
+        'canEdit requires canView — a user cannot edit a dossier they cannot see',
+      );
+    }
     const userIds = dto.entries.map((entry) => entry.userId);
+    const known = await this.database.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true },
+    });
+    const unknown = userIds.filter((uid) => !known.some((u) => u.id === uid));
+    if (unknown.length) {
+      throw new BadRequestException(`Unknown user ids: ${unknown.join(', ')}`);
+    }
+
+    const before = await this.getAccess(id);
 
     await this.database.$transaction([
       this.database.dossierAccess.deleteMany({
@@ -267,7 +477,68 @@ export class DossierService {
       ),
     ]);
 
-    return this.getAccess(id);
+    const after = await this.getAccess(id);
+    const summarize = (grants: typeof before) =>
+      grants.map((g) => ({
+        userId: g.userId,
+        canView: g.canView,
+        canEdit: g.canEdit,
+      }));
+    await this.activity.record({
+      action: 'dossier.access-updated',
+      entityType: 'dossier',
+      entityId: id,
+      changes: { accesses: [summarize(before), summarize(after)] },
+    });
+    return after;
+  }
+
+  // RG-DOS-004: the responsible must be able to act on the dossier —
+  // an active user attached to its owning site (circuit eligibility and
+  // notifications are resolved through site assignments).
+  private async assertEligibleResponsible(userId: string, siteId: string) {
+    const user = await this.database.user.findUnique({
+      where: { id: userId },
+      select: {
+        name: true,
+        status: true,
+        assignments: { where: { siteId }, select: { siteId: true } },
+      },
+    });
+    if (!user) {
+      throw new BadRequestException(`User ${userId} not found`);
+    }
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new BadRequestException(
+        `${user.name} is suspended and cannot be responsible for a dossier`,
+      );
+    }
+    if (user.assignments.length === 0) {
+      throw new BadRequestException(
+        `${user.name} is not assigned to the dossier's site — assign them to it first, or pick another responsible`,
+      );
+    }
+  }
+
+  // RG-ARC-001: retention runs from the dossier's opening date for as many
+  // months as its category prescribes; null when there's no category or
+  // the category sets no retention.
+  private async computeRetentionUntil(
+    categoryId: string | null | undefined,
+    openedAt: Date,
+  ): Promise<Date | null> {
+    if (!categoryId) return null;
+    const category = await this.database.category.findUnique({
+      where: { id: categoryId },
+      select: { retentionMonths: true },
+    });
+    if (!category) {
+      throw new NotFoundException(`Category ${categoryId} not found`);
+    }
+    if (category.retentionMonths == null) return null;
+    const until = new Date(openedAt);
+    until.setMonth(until.getMonth() + category.retentionMonths);
+    return until;
   }
 
   private async ensureMutable(id: string) {

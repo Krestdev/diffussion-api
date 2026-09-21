@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
 import { DossierTypeService } from './dossier-type.service';
 
@@ -10,6 +11,7 @@ describe('DossierTypeService', () => {
       providers: [
         DossierTypeService,
         { provide: DatabaseService, useValue: {} },
+        { provide: ActivityService, useValue: {} },
       ],
     }).compile();
 

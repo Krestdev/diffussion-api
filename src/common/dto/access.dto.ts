@@ -1,6 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsUUID, ValidateNested } from 'class-validator';
+import {
+  ArrayUnique,
+  IsArray,
+  IsBoolean,
+  IsUUID,
+  ValidateNested,
+} from 'class-validator';
 
 // Shared shape for the per-user access grant lists on Dossier, Courrier, and
 // Document — each resource's list is independent (see the models' comments
@@ -26,6 +32,9 @@ export class AccessEntryDto {
 export class SetAccessDto {
   @ApiProperty({ type: [AccessEntryDto] })
   @IsArray()
+  @ArrayUnique((entry: AccessEntryDto) => entry.userId, {
+    message: 'Each user may appear only once in entries',
+  })
   @ValidateNested({ each: true })
   @Type(() => AccessEntryDto)
   entries: AccessEntryDto[];

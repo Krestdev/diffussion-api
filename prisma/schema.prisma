@@ -55,6 +55,23 @@ model Service {
   @@map("service")
 }
 
+/// Single-use, short-lived password reset grant (only the SHA-256 digest of
+/// the token is stored — the token itself only ever lives in the user's
+/// reset link).
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_token")
+}
+
 enum UserStatus {
   ACTIVE
   SUSPENDED
@@ -88,21 +105,22 @@ model User {
   userNotifications UserNotification[]
   validations       Validation[]
 
-  managedSites        Site[]           @relation("SiteManager")
-  responsibleDossiers Dossier[]        @relation("DossierResponsible")
-  createdDossiers     Dossier[]        @relation("DossierCreatedBy")
-  createdCourriers    Courrier[]       @relation("CourrierCreatedBy")
-  dischargedCourriers Courrier[]       @relation("CourrierDischargedBy")
-  ownedCourriers      Courrier[]       @relation("CourrierOwner")
-  createdInstructions Instruction[]    @relation("InstructionCreatedBy")
-  createdLivrables    Livrable[]       @relation("LivrableCreatedBy")
-  uploadedDocuments   Document[]       @relation("DocumentUploadedBy")
-  ownedDocuments      Document[]       @relation("DocumentOwner")
-  delegationsGiven    Delegation[]     @relation("DelegationDelegant")
-  delegationsReceived Delegation[]     @relation("DelegationDelegataire")
+  managedSites        Site[]               @relation("SiteManager")
+  responsibleDossiers Dossier[]            @relation("DossierResponsible")
+  createdDossiers     Dossier[]            @relation("DossierCreatedBy")
+  createdCourriers    Courrier[]           @relation("CourrierCreatedBy")
+  dischargedCourriers Courrier[]           @relation("CourrierDischargedBy")
+  ownedCourriers      Courrier[]           @relation("CourrierOwner")
+  createdInstructions Instruction[]        @relation("InstructionCreatedBy")
+  createdLivrables    Livrable[]           @relation("LivrableCreatedBy")
+  uploadedDocuments   Document[]           @relation("DocumentUploadedBy")
+  ownedDocuments      Document[]           @relation("DocumentOwner")
+  delegationsGiven    Delegation[]         @relation("DelegationDelegant")
+  delegationsReceived Delegation[]         @relation("DelegationDelegataire")
   dossierAccesses     DossierAccess[]
   courrierAccesses    CourrierAccess[]
   documentAccesses    DocumentAccess[]
+  passwordResetTokens PasswordResetToken[]
 
   @@map("user")
 }
@@ -235,8 +253,8 @@ model Delegation {
 /// Retention-bearing document classification (7.1.5 "Catégorie").
 model Category {
   id              String   @id @default(uuid())
-  label           String   @db.VarChar(100)
-  code            String?  @db.VarChar(30)
+  label           String   @unique @db.VarChar(100)
+  code            String?  @unique @db.VarChar(30)
   description     String?
   /// RG-ARC-001: inherited by a dossier at creation from its category.
   retentionMonths Int?
@@ -372,12 +390,17 @@ model Dossier {
   progress        Int                    @default(0)
   keywords        String[]               @default([])
 
-  openedAt    DateTime  @default(now())
-  closedAt    DateTime?
-  archivedAt  DateTime?
-  createdById String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  openedAt       DateTime  @default(now())
+  /// Target completion date; past it, an active dossier turns LATE.
+  dueDate        DateTime?
+  closedAt       DateTime?
+  archivedAt     DateTime?
+  /// RG-ARC-001: openedAt + the category's retentionMonths, fixed at
+  /// creation (recomputed if the category changes). Null = no retention rule.
+  retentionUntil DateTime?
+  createdById    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   type        DossierType? @relation(fields: [typeId], references: [id])
   category    Category?    @relation(fields: [categoryId], references: [id])

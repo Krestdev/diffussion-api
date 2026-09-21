@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
 import { ProjectController } from './project.controller';
 import { ProjectService } from './project.service';
@@ -10,7 +11,11 @@ describe('ProjectController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [ProjectController],
-      providers: [ProjectService, { provide: DatabaseService, useValue: {} }],
+      providers: [
+        ProjectService,
+        { provide: DatabaseService, useValue: {} },
+        { provide: ActivityService, useValue: {} },
+      ],
     })
       .overrideGuard(PermissionGuard)
       .useValue({ canActivate: () => true })

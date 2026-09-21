@@ -4,15 +4,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import { ActivityService } from '../../activity/activity.service';
+import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateDossierTypeDto } from './dto/create-dossier-type.dto';
 import { UpdateDossierTypeDto } from './dto/update-dossier-type.dto';
 
 @Injectable()
 export class DossierTypeService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    // Read by @AuditLog through `this.activity`.
+    private readonly activity: ActivityService,
+  ) {}
 
-  create(dto: CreateDossierTypeDto) {
+  @AuditLog({
+    action: 'dossier-type.created',
+    entityType: 'dossier-type',
+    operation: 'CREATE',
+  })
+  async create(dto: CreateDossierTypeDto) {
     return this.database.dossierType.create({ data: dto });
   }
 
@@ -30,11 +41,21 @@ export class DossierTypeService {
     return dossierType;
   }
 
+  @AuditLog({
+    action: 'dossier-type.updated',
+    entityType: 'dossier-type',
+    operation: 'UPDATE',
+  })
   async update(id: string, dto: UpdateDossierTypeDto) {
     await this.findOne(id);
     return this.database.dossierType.update({ where: { id }, data: dto });
   }
 
+  @AuditLog({
+    action: 'dossier-type.deleted',
+    entityType: 'dossier-type',
+    operation: 'DELETE',
+  })
   async remove(id: string) {
     await this.findOne(id);
     try {

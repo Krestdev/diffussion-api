@@ -9,9 +9,11 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { CreateDelegationDto } from './dto/create-delegation.dto';
 import { UpdateDelegationDto } from './dto/update-delegation.dto';
@@ -30,8 +32,8 @@ export class DelegationController {
   }
 
   @Get()
-  findAll() {
-    return this.delegationService.findAll();
+  findAll(@Query() query: PaginationQueryDto) {
+    return this.delegationService.findAll(query);
   }
 
   @Get(':id')

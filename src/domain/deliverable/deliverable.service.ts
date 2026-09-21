@@ -8,6 +8,7 @@ import {
   LivrableStatus,
   Prisma,
 } from '../../../generated/prisma/client';
+import { assertDossierOpenForActivity } from '../../common/utils/dossier-lifecycle';
 import { DatabaseService } from '../../database/database.service';
 import { CreateDeliverableDto } from './dto/create-deliverable.dto';
 import { FindDeliverableQueryDto } from './dto/find-deliverable-query.dto';
@@ -22,7 +23,8 @@ const deliverableInclude = {
 export class DeliverableService {
   constructor(private readonly database: DatabaseService) {}
 
-  create(dto: CreateDeliverableDto, createdById: string) {
+  async create(dto: CreateDeliverableDto, createdById: string) {
+    await this.assertInstructionDossierOpen(dto.instructionId);
     return this.database.livrable.create({
       data: { ...dto, createdById },
       include: deliverableInclude,
@@ -78,6 +80,7 @@ export class DeliverableService {
 
   async newVersion(id: string, dto: UpdateDeliverableDto, createdById: string) {
     const parent = await this.findOne(id);
+    await this.assertInstructionDossierOpen(parent.instructionId);
     return this.database.livrable.create({
       data: {
         instructionId: parent.instructionId,
@@ -148,5 +151,17 @@ export class DeliverableService {
       data: { status },
       include: deliverableInclude,
     });
+  }
+
+  // RG-DOS-007: no new livrable (or version) on a closed/archived dossier.
+  private async assertInstructionDossierOpen(instructionId: string) {
+    const instruction = await this.database.instruction.findUnique({
+      where: { id: instructionId },
+      select: { dossierId: true },
+    });
+    if (!instruction) {
+      throw new NotFoundException(`Instruction ${instructionId} not found`);
+    }
+    await assertDossierOpenForActivity(this.database, instruction.dossierId);
   }
 }

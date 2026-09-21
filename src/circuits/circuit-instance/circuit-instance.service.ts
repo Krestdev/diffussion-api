@@ -11,6 +11,7 @@ import {
   Prisma,
   ValidationDecision,
 } from '../../../generated/prisma/client';
+import { assertDossierOpenForActivity } from '../../common/utils/dossier-lifecycle';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { CreateCircuitInstanceDto } from './dto/create-circuit-instance.dto';
@@ -99,7 +100,8 @@ function resolveOwnerAndSite(instance: TargetContext) {
     instance.document?.dossier?.siteId ??
     instance.document?.courrier?.dossier.siteId ??
     null;
-  const ownerId = instance.courrier?.ownerId ?? instance.document?.ownerId ?? null;
+  const ownerId =
+    instance.courrier?.ownerId ?? instance.document?.ownerId ?? null;
   // Who submitted the target in the first place (RG-NOT-*: they're the one
   // who needs to hear "validated"/"corrections requested" outcomes).
   const submitterId =
@@ -118,7 +120,10 @@ export class CircuitInstanceService {
   // direction: everyone who could act on a step, not just one candidate.
   // Returns [] (rather than "everyone with the role") when siteId is
   // unknown, mirroring userIsEligibleForRole's own refusal in that case.
-  private async findEligibleUserIds(roleId: string | null, siteId: string | null) {
+  private async findEligibleUserIds(
+    roleId: string | null,
+    siteId: string | null,
+  ) {
     if (!roleId || !siteId) return [];
     const users = await this.database.user.findMany({
       where: {
@@ -217,7 +222,10 @@ export class CircuitInstanceService {
         })
       : null;
     if (!circuit?.roleId) {
-      return { circuit: circuit && { id: circuit.id, name: circuit.name }, users: [] };
+      return {
+        circuit: circuit && { id: circuit.id, name: circuit.name },
+        users: [],
+      };
     }
     const users = await this.database.user.findMany({
       where: {
@@ -288,7 +296,9 @@ export class CircuitInstanceService {
     }
 
     const dossierId =
-      courrier?.dossierId ?? document?.dossierId ?? document?.courrier?.dossierId;
+      courrier?.dossierId ??
+      document?.dossierId ??
+      document?.courrier?.dossierId;
     if (!dossierId) {
       throw new BadRequestException(
         document
@@ -302,6 +312,7 @@ export class CircuitInstanceService {
     if (!dossier) {
       throw new NotFoundException(`Dossier ${dossierId} not found`);
     }
+    await assertDossierOpenForActivity(this.database, dossier.id);
 
     const circuit = dto.circuitId
       ? await this.database.circuit.findUnique({
@@ -323,7 +334,11 @@ export class CircuitInstanceService {
     if (
       circuit.roleId &&
       !isOwner &&
-      !(await this.userIsEligibleForRole(userId, circuit.roleId, dossier.siteId))
+      !(await this.userIsEligibleForRole(
+        userId,
+        circuit.roleId,
+        dossier.siteId,
+      ))
     ) {
       throw new ForbiddenException(
         'You do not hold the role required to trigger this circuit for this site',
@@ -365,7 +380,8 @@ export class CircuitInstanceService {
       });
     });
 
-    const targetLabel = courrier?.subject ?? document?.originalName ?? circuit.name;
+    const targetLabel =
+      courrier?.subject ?? document?.originalName ?? circuit.name;
     this.notify({
       recipientIds: await this.stepPendingRecipients(
         firstStep.roleId,
@@ -526,7 +542,9 @@ export class CircuitInstanceService {
     // already resolved above and doesn't depend on the write having landed.
     const circuitName = instance.circuit.name;
     const targetLabel =
-      instance.courrier?.subject ?? instance.document?.originalName ?? circuitName;
+      instance.courrier?.subject ??
+      instance.document?.originalName ??
+      circuitName;
     const notifyBase = {
       dossierId: instance.dossierId,
       courrierId: instance.courrierId,

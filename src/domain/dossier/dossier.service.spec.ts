@@ -1,7 +1,13 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { DossierService } from './dossier.service';
 import { DatabaseService } from '../../database/database.service';
+import { RbacService } from '../../auth/rbac/rbac.service';
+import { ActivityService } from '../../activity/activity.service';
 import { DossierStatus } from '../../../generated/prisma/client';
 
 describe('DossierService', () => {
@@ -12,10 +18,13 @@ describe('DossierService', () => {
     courrier: Record<string, jest.Mock>;
     livrable: Record<string, jest.Mock>;
     activityLog: Record<string, jest.Mock>;
+    circuitInstance: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
+  let rbac: { hasPermission: jest.Mock };
 
   beforeEach(async () => {
+    rbac = { hasPermission: jest.fn().mockResolvedValue(false) };
     database = {
       dossier: {
         create: jest.fn(),
@@ -28,6 +37,7 @@ describe('DossierService', () => {
       courrier: { findMany: jest.fn() },
       livrable: { findMany: jest.fn() },
       activityLog: { findMany: jest.fn() },
+      circuitInstance: { count: jest.fn().mockResolvedValue(0) },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
     };
 
@@ -35,6 +45,11 @@ describe('DossierService', () => {
       providers: [
         DossierService,
         { provide: DatabaseService, useValue: database },
+        { provide: RbacService, useValue: rbac },
+        {
+          provide: ActivityService,
+          useValue: { record: jest.fn().mockResolvedValue('log-1') },
+        },
       ],
     }).compile();
 
@@ -89,6 +104,20 @@ describe('DossierService', () => {
       );
       expect(result.status).toBe(DossierStatus.CLOSED);
     });
+
+    it('refuses to close while a validation circuit is still running', async () => {
+      database.dossier.findUnique.mockResolvedValue({
+        id: 'd-1',
+        status: DossierStatus.IN_PROGRESS,
+      });
+      database.instruction.count.mockResolvedValue(0);
+      database.circuitInstance.count.mockResolvedValue(1);
+
+      await expect(service.close('d-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(database.dossier.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('update', () => {
@@ -99,8 +128,39 @@ describe('DossierService', () => {
       });
 
       await expect(
-        service.update('d-1', { title: 'New title' }),
+        service.update('d-1', { title: 'New title' }, 'u-1'),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses to clear the responsible (RG-DOS-004)', async () => {
+      database.dossier.findUnique.mockResolvedValue({
+        id: 'd-1',
+        status: DossierStatus.IN_PROGRESS,
+        siteId: 's-1',
+        responsibleId: 'u-1',
+      });
+
+      await expect(
+        service.update(
+          'd-1',
+          { responsibleId: null as unknown as string },
+          'u-1',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses to move a dossier to another site without ADMIN_MANAGE_SITES', async () => {
+      database.dossier.findUnique.mockResolvedValue({
+        id: 'd-1',
+        status: DossierStatus.IN_PROGRESS,
+        siteId: 's-1',
+        responsibleId: 'u-1',
+      });
+
+      await expect(
+        service.update('d-1', { siteId: 's-2' }, 'u-1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(database.dossier.update).not.toHaveBeenCalled();
     });
   });
 
@@ -118,7 +178,7 @@ describe('DossierService', () => {
   });
 
   describe('getProgression', () => {
-    it('computes progress as done/total instructions and persists it', async () => {
+    it('computes progress as done/total non-cancelled instructions, read-only', async () => {
       database.dossier.findUnique.mockResolvedValue({ id: 'd-1' });
       database.instruction.count
         .mockResolvedValueOnce(4) // total
@@ -128,10 +188,7 @@ describe('DossierService', () => {
       const result = await service.getProgression('d-1');
 
       expect(result).toEqual({ total: 4, done: 2, progress: 50 });
-      expect(database.dossier.update).toHaveBeenCalledWith({
-        where: { id: 'd-1' },
-        data: { progress: 50 },
-      });
+      expect(database.dossier.update).not.toHaveBeenCalled();
     });
   });
 });

@@ -12,6 +12,11 @@ import {
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { SetOwnerDto } from '../../common/dto/set-owner.dto';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
+import {
+  assertDossierOpenForActivity,
+  markDossierInProgress,
+} from '../../common/utils/dossier-lifecycle';
+import { assertCorrespondentActive } from '../../common/utils/referential-guards';
 import { DatabaseService } from '../../database/database.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
@@ -85,9 +90,13 @@ export class MailService {
 
   // (dto already carries ownerId straight through via `...data` below —
   // Prisma accepts the scalar FK field directly on CourrierCreateInput.)
-  create(dto: CreateMailDto, createdById: string) {
+  async create(dto: CreateMailDto, createdById: string) {
+    await assertDossierOpenForActivity(this.database, dto.dossierId);
+    if (dto.correspondentId) {
+      await assertCorrespondentActive(this.database, dto.correspondentId);
+    }
     const { receivedAt, ...data } = dto;
-    return createWithUniqueReference('M', (number) =>
+    const courrier = await createWithUniqueReference('M', (number) =>
       this.database.courrier.create({
         data: {
           ...data,
@@ -102,6 +111,8 @@ export class MailService {
         include: mailInclude,
       }),
     );
+    await markDossierInProgress(this.database, dto.dossierId);
+    return courrier;
   }
 
   async findAll(query: FindMailsQueryDto) {
@@ -140,6 +151,15 @@ export class MailService {
 
   async update(id: string, dto: UpdateMailDto) {
     const courrier = await this.ensureEditable(id);
+    if (dto.dossierId && dto.dossierId !== courrier.dossierId) {
+      await assertDossierOpenForActivity(this.database, dto.dossierId);
+    }
+    if (
+      dto.correspondentId &&
+      dto.correspondentId !== courrier.correspondentId
+    ) {
+      await assertCorrespondentActive(this.database, dto.correspondentId);
+    }
     const { receivedAt, ...data } = dto;
     return this.database.courrier.update({
       where: { id: courrier.id },
@@ -207,7 +227,7 @@ export class MailService {
     );
     if (!isCreator && !isSiteAdmin && !isPlatformAdmin) {
       throw new ForbiddenException(
-        'Only the creator, the site responsible, or a platform admin can assign this courrier\'s circuit owner',
+        "Only the creator, the site responsible, or a platform admin can assign this courrier's circuit owner",
       );
     }
     return this.database.courrier.update({

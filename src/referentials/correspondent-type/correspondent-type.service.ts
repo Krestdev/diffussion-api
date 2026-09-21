@@ -4,15 +4,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import { ActivityService } from '../../activity/activity.service';
+import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCorrespondentTypeDto } from './dto/create-correspondent-type.dto';
 import { UpdateCorrespondentTypeDto } from './dto/update-correspondent-type.dto';
 
 @Injectable()
 export class CorrespondentTypeService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    // Read by @AuditLog through `this.activity`.
+    private readonly activity: ActivityService,
+  ) {}
 
-  create(dto: CreateCorrespondentTypeDto) {
+  @AuditLog({
+    action: 'correspondent-type.created',
+    entityType: 'correspondent-type',
+    operation: 'CREATE',
+  })
+  async create(dto: CreateCorrespondentTypeDto) {
     return this.database.correspondentType.create({ data: dto });
   }
 
@@ -32,6 +43,11 @@ export class CorrespondentTypeService {
     return type;
   }
 
+  @AuditLog({
+    action: 'correspondent-type.updated',
+    entityType: 'correspondent-type',
+    operation: 'UPDATE',
+  })
   async update(id: string, dto: UpdateCorrespondentTypeDto) {
     await this.findOne(id);
     return this.database.correspondentType.update({
@@ -40,6 +56,11 @@ export class CorrespondentTypeService {
     });
   }
 
+  @AuditLog({
+    action: 'correspondent-type.deleted',
+    entityType: 'correspondent-type',
+    operation: 'DELETE',
+  })
   async remove(id: string) {
     await this.findOne(id);
     try {

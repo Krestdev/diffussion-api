@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
 import { DossierTypeController } from './dossier-type.controller';
 import { DossierTypeService } from './dossier-type.service';
@@ -13,6 +14,7 @@ describe('DossierTypeController', () => {
       providers: [
         DossierTypeService,
         { provide: DatabaseService, useValue: {} },
+        { provide: ActivityService, useValue: {} },
       ],
     })
       .overrideGuard(PermissionGuard)

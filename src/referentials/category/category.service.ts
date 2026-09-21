@@ -4,15 +4,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import { ActivityService } from '../../activity/activity.service';
+import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 
 @Injectable()
 export class CategoryService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    // Read by @AuditLog through `this.activity`.
+    private readonly activity: ActivityService,
+  ) {}
 
-  create(dto: CreateCategoryDto) {
+  @AuditLog({
+    action: 'category.created',
+    entityType: 'category',
+    operation: 'CREATE',
+  })
+  async create(dto: CreateCategoryDto) {
     return this.database.category.create({ data: dto });
   }
 
@@ -30,11 +41,21 @@ export class CategoryService {
     return category;
   }
 
+  @AuditLog({
+    action: 'category.updated',
+    entityType: 'category',
+    operation: 'UPDATE',
+  })
   async update(id: string, dto: UpdateCategoryDto) {
     await this.findOne(id);
     return this.database.category.update({ where: { id }, data: dto });
   }
 
+  @AuditLog({
+    action: 'category.deleted',
+    entityType: 'category',
+    operation: 'DELETE',
+  })
   async remove(id: string) {
     await this.findOne(id);
     try {

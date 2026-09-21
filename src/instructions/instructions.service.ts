@@ -11,6 +11,11 @@ import {
   UserInstructionRole,
 } from '../../generated/prisma/client';
 import { createWithUniqueReference } from '../common/utils/generate-reference';
+import {
+  assertDossierOpenForActivity,
+  markDossierInProgress,
+  refreshDossierProgress,
+} from '../common/utils/dossier-lifecycle';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AssignInstructionDto } from './dto/assign-instruction.dto';
@@ -88,7 +93,12 @@ export class InstructionsService {
   }
 
   private notifyAssignment(
-    instruction: { id: string; title: string; dossierId: string; courrierId: string | null },
+    instruction: {
+      id: string;
+      title: string;
+      dossierId: string;
+      courrierId: string | null;
+    },
     userIds: (string | null | undefined)[],
     excludeUserId?: string,
   ) {
@@ -106,6 +116,7 @@ export class InstructionsService {
   async create(dto: CreateInstructionsDto, createdById: string) {
     const { executantIds, superviseurId, dueDate, dependsOnId, ...data } = dto;
     const hasAssignees = Boolean(executantIds?.length || superviseurId);
+    await assertDossierOpenForActivity(this.database, data.dossierId);
 
     if (dependsOnId) {
       const parent = await this.database.instruction.findUnique({
@@ -140,9 +151,7 @@ export class InstructionsService {
           // Sub-tasks: a single parent picked at creation (the frontend's
           // AddTaskDialog exposes one "Tâche parent" field) — the schema
           // itself allows several, this just doesn't expose that yet.
-          dependsOn: dependsOnId
-            ? { create: { dependsOnId } }
-            : undefined,
+          dependsOn: dependsOnId ? { create: { dependsOnId } } : undefined,
         },
         include: instructionInclude,
       }),
@@ -159,6 +168,8 @@ export class InstructionsService {
       this.notifyAssignment(instruction, assigneeIds, createdById);
     }
 
+    await markDossierInProgress(this.database, instruction.dossierId);
+    await refreshDossierProgress(this.database, instruction.dossierId);
     return instruction;
   }
 
@@ -261,7 +272,10 @@ export class InstructionsService {
         refusalReason: dto.motif,
         assignees: {
           deleteMany: { role: UserInstructionRole.EXECUTANT },
-          create: { userId: dto.newAssigneeId, role: UserInstructionRole.EXECUTANT },
+          create: {
+            userId: dto.newAssigneeId,
+            role: UserInstructionRole.EXECUTANT,
+          },
         },
       },
       include: instructionInclude,
@@ -295,16 +309,23 @@ export class InstructionsService {
       );
     }
 
-    return this.database.instruction.update({
+    const closed = await this.database.instruction.update({
       where: { id: instruction.id },
       data: { status: InstructionStatus.TERMINEE, closedAt: new Date() },
       include: instructionInclude,
     });
+    await refreshDossierProgress(this.database, closed.dossierId);
+    return closed;
   }
 
   async cancel(id: string) {
     const instruction = await this.ensureNotTerminal(id);
-    return this.setStatus(instruction.id, InstructionStatus.ANNULEE);
+    const cancelled = await this.setStatus(
+      instruction.id,
+      InstructionStatus.ANNULEE,
+    );
+    await refreshDossierProgress(this.database, cancelled.dossierId);
+    return cancelled;
   }
 
   // 10.4.4.6 "Contrôle par le superviseur" — the approving half. Livrables

@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
 import { CourrierNatureController } from './courrier-nature.controller';
 import { CourrierNatureService } from './courrier-nature.service';
@@ -13,6 +14,7 @@ describe('CourrierNatureController', () => {
       providers: [
         CourrierNatureService,
         { provide: DatabaseService, useValue: {} },
+        { provide: ActivityService, useValue: {} },
       ],
     })
       .overrideGuard(PermissionGuard)

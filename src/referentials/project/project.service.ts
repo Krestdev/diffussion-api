@@ -4,15 +4,26 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import { ActivityService } from '../../activity/activity.service';
+import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 
 @Injectable()
 export class ProjectService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    // Read by @AuditLog through `this.activity`.
+    private readonly activity: ActivityService,
+  ) {}
 
-  create(dto: CreateProjectDto) {
+  @AuditLog({
+    action: 'project.created',
+    entityType: 'project',
+    operation: 'CREATE',
+  })
+  async create(dto: CreateProjectDto) {
     return this.database.project.create({ data: dto });
   }
 
@@ -30,11 +41,21 @@ export class ProjectService {
     return project;
   }
 
+  @AuditLog({
+    action: 'project.updated',
+    entityType: 'project',
+    operation: 'UPDATE',
+  })
   async update(id: string, dto: UpdateProjectDto) {
     await this.findOne(id);
     return this.database.project.update({ where: { id }, data: dto });
   }
 
+  @AuditLog({
+    action: 'project.deleted',
+    entityType: 'project',
+    operation: 'DELETE',
+  })
   async remove(id: string) {
     await this.findOne(id);
     try {
