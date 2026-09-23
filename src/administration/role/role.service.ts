@@ -20,6 +20,24 @@ const roleInclude = {
   _count: { select: { userRoles: true } },
 } satisfies Prisma.RoleInclude;
 
+// Listing payload: identity + how many users hold the role. The permission
+// grid and the timestamps belong to the detail view (GET /roles/:id), not to
+// a list that may carry a hundred roles.
+const roleListSelect = {
+  id: true,
+  code: true,
+  name: true,
+  description: true,
+  _count: { select: { userRoles: true } },
+} satisfies Prisma.RoleSelect;
+
+function toListView(
+  role: Prisma.RoleGetPayload<{ select: typeof roleListSelect }>,
+) {
+  const { _count, ...rest } = role;
+  return { ...rest, usersCount: _count.userRoles };
+}
+
 function toView(role: Prisma.RoleGetPayload<{ include: typeof roleInclude }>) {
   const { rolePermissions, _count, ...rest } = role;
   return {
@@ -77,13 +95,13 @@ export class RoleService {
       this.database.role.findMany({
         where,
         orderBy: { name: 'asc' },
-        include: roleInclude,
+        select: roleListSelect,
         skip,
         take,
       }),
       this.database.role.count({ where }),
     ]);
-    return { data: roles.map(toView), total, skip, take };
+    return { data: roles.map(toListView), total, skip, take };
   }
 
   async findOne(id: string) {

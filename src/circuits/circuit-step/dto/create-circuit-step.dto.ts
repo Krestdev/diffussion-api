@@ -6,7 +6,10 @@ export class CreateCircuitStepDto {
   @IsUUID()
   circuitId: string;
 
-  @ApiProperty({ example: 1, description: 'Position in the circuit' })
+  @ApiProperty({
+    example: 1,
+    description: 'Position in the circuit — unique within it, starting at 1',
+  })
   @IsInt()
   @Min(1)
   order: number;

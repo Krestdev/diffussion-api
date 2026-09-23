@@ -20,6 +20,7 @@ import { DocumentsModule } from './documents/documents.module';
 import { CircuitsModule } from './circuits/circuits.module';
 import { StorageModule } from './storage/storage.module';
 import { MailModule } from './mail/mail.module';
+import { AnalysisModule } from './analysis/analysis.module';
 
 @Module({
   imports: [
@@ -39,8 +40,8 @@ import { MailModule } from './mail/mail.module';
     DatabaseModule,
     MailModule,
     // Global: every domain module can inject ActivityService directly to
-    // record its own events; the module also registers the APP_INTERCEPTOR
-    // that logs one root entry per authenticated, non-GET request.
+    // record its own business events. The first record() call in a request
+    // is automatically promoted to root in the audit-log view.
     ActivityModule,
     AuthModule,
     RbacModule,
@@ -52,6 +53,7 @@ import { MailModule } from './mail/mail.module';
     DocumentsModule,
     CircuitsModule,
     StorageModule,
+    AnalysisModule,
   ],
   controllers: [AppController],
   providers: [AppService, DbLogger],

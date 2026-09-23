@@ -10,9 +10,27 @@ export class CreateDelegationDto {
   @IsUUID()
   delegataireId: string;
 
-  @ApiProperty({ example: 'Responsable de dossier' })
+  @ApiProperty({
+    description:
+      'Role handed over — the delegataire is treated as holding it at the site below, for the period',
+  })
+  @IsUUID()
+  roleId: string;
+
+  @ApiProperty({
+    description:
+      'Site the delegation applies to. The delegataire must already be assigned to it.',
+  })
+  @IsUUID()
+  siteId: string;
+
+  @ApiPropertyOptional({
+    example: 'Responsable de dossier',
+    description: 'Free-text label for the register — carries no rights',
+  })
+  @IsOptional()
   @IsString()
-  responsibility: string;
+  responsibility?: string;
 
   @ApiProperty({ example: '2026-08-25' })
   @IsDateString()

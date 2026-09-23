@@ -31,6 +31,16 @@ function uniqueFields(error: Prisma.PrismaClientKnownRequestError): string[] {
   return meta?.driverAdapterError?.cause?.constraint?.fields ?? [];
 }
 
+// An HttpException's payload is either a plain string or an object whose
+// `message` holds the real detail (one string, or one per invalid field).
+function extractMessage(exception: HttpException): string | string[] {
+  const response = exception.getResponse();
+  if (typeof response === 'string') return response;
+  const detail = (response as { message?: string | string[] }).message;
+  if (Array.isArray(detail)) return detail;
+  return detail ?? exception.message;
+}
+
 // Safety net for constraint violations a service didn't check explicitly:
 // they're client errors (409/400/404), not a server failure (500).
 function mapPrismaError(
@@ -82,22 +92,29 @@ export class AllExceptionsFilter implements ExceptionFilter {
         ? exception.getStatus()
         : (prismaError?.status ?? HttpStatus.INTERNAL_SERVER_ERROR);
 
+    // ValidationPipe puts the per-field errors in the response *body*, not in
+    // `message` (which is just "Bad Request Exception") — surfacing them is
+    // the difference between a usable 400 and a guessing game.
     const message =
       exception instanceof HttpException
-        ? exception.message
+        ? extractMessage(exception)
         : (prismaError?.message ?? 'Internal server error');
 
     const stack = exception instanceof Error ? exception.stack : undefined;
 
     if (status >= 500) {
       this.logger.error(
-        `${req.method} ${req.originalUrl} → ${status}: ${message}`,
+        `${req.method} ${req.originalUrl} → ${status}: ${
+          Array.isArray(message) ? message.join('; ') : message
+        }`,
         stack,
         'ExceptionFilter',
       );
     } else {
       this.logger.warn(
-        `${req.method} ${req.originalUrl} → ${status}: ${message}`,
+        `${req.method} ${req.originalUrl} → ${status}: ${
+          Array.isArray(message) ? message.join('; ') : message
+        }`,
         'ExceptionFilter',
       );
     }

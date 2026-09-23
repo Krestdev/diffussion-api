@@ -15,13 +15,19 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { CreateDelegationDto } from './dto/create-delegation.dto';
 import { UpdateDelegationDto } from './dto/update-delegation.dto';
 import { DelegationService } from './delegation.service';
 
 @ApiTags('delegations')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+// A delegation hands one user's responsibilities to another, so managing
+// them is an administration act over people — same gate as user management.
+@UseGuards(JwtAuthGuard, PermissionGuard)
+@RequirePermission(PermissionCode.AdminManageUsers)
 @Controller('delegations')
 export class DelegationController {
   constructor(private readonly delegationService: DelegationService) {}

@@ -54,7 +54,10 @@ export class DossierLatenessService
         this.logger.log(`${count} dossier(s) marked LATE`);
       }
     } catch (error) {
-      this.logger.error('Dossier lateness sweep failed', (error as Error).stack);
+      this.logger.error(
+        'Dossier lateness sweep failed',
+        (error as Error).stack,
+      );
     }
   }
 }

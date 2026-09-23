@@ -35,8 +35,12 @@ export class DossierController {
   constructor(private readonly dossierService: DossierService) {}
 
   @Get()
-  findAll(@Query() query: FindDossiersQueryDto) {
-    return this.dossierService.findAll(query);
+  @RequirePermission(PermissionCode.DossierRead)
+  findAll(
+    @Query() query: FindDossiersQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.dossierService.findAll(query, user.sub);
   }
 
   @Post()
@@ -49,8 +53,12 @@ export class DossierController {
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierService.findOne(id);
+  @RequirePermission(PermissionCode.DossierRead)
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.dossierService.findOne(id, user.sub);
   }
 
   @Patch(':id')
@@ -88,44 +96,60 @@ export class DossierController {
   }
 
   @Get(':id/courriers')
+  @RequirePermission(PermissionCode.DossierRead)
   getCourriers(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.dossierService.getCourriers(id, query);
+    return this.dossierService.getCourriers(id, query, user.sub);
   }
 
   @Get(':id/instructions')
+  @RequirePermission(PermissionCode.DossierRead)
   getInstructions(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.dossierService.getInstructions(id, query);
+    return this.dossierService.getInstructions(id, query, user.sub);
   }
 
   @Get(':id/livrables')
+  @RequirePermission(PermissionCode.DossierRead)
   getLivrables(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.dossierService.getLivrables(id, query);
+    return this.dossierService.getLivrables(id, query, user.sub);
   }
 
   @Get(':id/historique')
   @RequirePermission(PermissionCode.AuditRead)
-  getHistorique(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierService.getHistorique(id);
+  getHistorique(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.dossierService.getHistorique(id, user.sub);
   }
 
   @Get(':id/progression')
-  getProgression(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierService.getProgression(id);
+  @RequirePermission(PermissionCode.DossierRead)
+  getProgression(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.dossierService.getProgression(id, user.sub);
   }
 
   @Get(':id/access')
   @RequirePermission(PermissionCode.DossierRead)
-  getAccess(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierService.getAccess(id);
+  getAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.dossierService.getAccess(id, user.sub);
   }
 
   @Put(':id/access')

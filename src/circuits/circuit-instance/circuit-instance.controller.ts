@@ -2,6 +2,8 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
@@ -11,7 +13,10 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
+import {
+  JwtPayload,
+  JwtPayloadWithRefreshToken,
+} from '../../auth/types/jwt-payload.type';
 import { CircuitInstanceService } from './circuit-instance.service';
 import { CreateCircuitInstanceDto } from './dto/create-circuit-instance.dto';
 import { DecideCircuitInstanceDto } from './dto/decide-circuit-instance.dto';
@@ -31,8 +36,11 @@ export class CircuitInstanceController {
   ) {}
 
   @Get()
-  findAll(@Query() query: FindCircuitInstancesQueryDto) {
-    return this.circuitInstanceService.findAll(query);
+  findAll(
+    @Query() query: FindCircuitInstancesQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.circuitInstanceService.findAll(query, user.sub);
   }
 
   // Registered before ':id' — otherwise "eligible-owners" would be parsed
@@ -62,5 +70,14 @@ export class CircuitInstanceController {
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
     return this.circuitInstanceService.decide(id, dto, user.sub);
+  }
+
+  @Post(':id/cancel')
+  @HttpCode(HttpStatus.OK)
+  cancel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.circuitInstanceService.cancel(id, user.sub);
   }
 }

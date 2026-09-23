@@ -7,6 +7,7 @@ import {
 import { CircuitInstanceService } from './circuit-instance.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
+import { RbacService } from '../../auth/rbac/rbac.service';
 import {
   CircuitInstanceStatus,
   CourrierStatus,
@@ -25,6 +26,7 @@ jest.mock('../../common/utils/dossier-lifecycle', () => ({
 describe('CircuitInstanceService', () => {
   let service: CircuitInstanceService;
   let notifications: { create: jest.Mock };
+  let rbac: { hasRoleAtSite: jest.Mock; usersWithRoleAtSite: jest.Mock };
   let database: {
     courrier: Record<string, jest.Mock>;
     dossier: Record<string, jest.Mock>;
@@ -34,6 +36,7 @@ describe('CircuitInstanceService', () => {
     circuitStepInstanceCircuit: Record<string, jest.Mock>;
     userRole: Record<string, jest.Mock>;
     assignment: Record<string, jest.Mock>;
+    delegation: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
     validation: Record<string, jest.Mock>;
     $transaction: jest.Mock;
@@ -54,6 +57,9 @@ describe('CircuitInstanceService', () => {
       circuitInstance: {
         create: jest.fn(),
         update: jest.fn(),
+        // Optimistic-concurrency guard in decide(): 1 row matched = this
+        // decision won the race.
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
         findMany: jest.fn(),
@@ -61,17 +67,38 @@ describe('CircuitInstanceService', () => {
       circuitStepInstanceCircuit: { create: jest.fn() },
       userRole: { findFirst: jest.fn() },
       assignment: { findFirst: jest.fn() },
+      delegation: { findFirst: jest.fn().mockResolvedValue(null) },
       user: { findMany: jest.fn().mockResolvedValue([]) },
       validation: { create: jest.fn() },
       $transaction: jest.fn((cb: (tx: unknown) => unknown) => cb(fakeTx())),
     };
     notifications = { create: jest.fn().mockResolvedValue({}) };
+    // Real eligibility rule, driven by the same mocks the tests already set:
+    // holds the role AND is assigned to the site, or holds it there through
+    // an active delegation.
+    rbac = {
+      hasRoleAtSite: jest.fn(
+        async (userId: string, roleId: string, siteId: string | null) => {
+          if (!siteId) return false;
+          const [role, assignment, delegation] = await Promise.all([
+            database.userRole.findFirst({ where: { userId, roleId } }),
+            database.assignment.findFirst({ where: { userId, siteId } }),
+            database.delegation.findFirst({
+              where: { delegataireId: userId, roleId, siteId },
+            }),
+          ]);
+          return (role !== null && assignment !== null) || delegation !== null;
+        },
+      ),
+      usersWithRoleAtSite: jest.fn().mockResolvedValue([]),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CircuitInstanceService,
         { provide: DatabaseService, useValue: database },
         { provide: NotificationsService, useValue: notifications },
+        { provide: RbacService, useValue: rbac },
       ],
     }).compile();
 
@@ -100,7 +127,7 @@ describe('CircuitInstanceService', () => {
         typeId: 't-1',
         siteId: 'site-1',
       });
-      database.circuit.findMany.mockResolvedValue([]);
+      database.circuit.findUnique.mockResolvedValue(null);
 
       await expect(
         service.start({ courrierId: 'c-1' }, 'u-1'),
@@ -131,14 +158,12 @@ describe('CircuitInstanceService', () => {
         typeId: 't-1',
         siteId: 'site-1',
       });
-      database.circuit.findMany.mockResolvedValue([
-        {
-          id: 'ci-1',
-          name: 'Circuit',
-          roleId: 'r-1',
-          steps: [{ id: 's-1', order: 1 }],
-        },
-      ]);
+      database.circuit.findUnique.mockResolvedValue({
+        id: 'ci-1',
+        name: 'Circuit',
+        roleId: 'r-1',
+        steps: [{ id: 's-1', order: 1 }],
+      });
       database.userRole.findFirst.mockResolvedValue({ id: 'ur-1' });
       database.assignment.findFirst.mockResolvedValue(null);
 
@@ -159,14 +184,12 @@ describe('CircuitInstanceService', () => {
         typeId: 't-1',
         siteId: 'site-1',
       });
-      database.circuit.findMany.mockResolvedValue([
-        {
-          id: 'ci-1',
-          name: 'Circuit',
-          roleId: 'r-1',
-          steps: [{ id: 's-1', order: 1 }],
-        },
-      ]);
+      database.circuit.findUnique.mockResolvedValue({
+        id: 'ci-1',
+        name: 'Circuit',
+        roleId: 'r-1',
+        steps: [{ id: 's-1', order: 1 }],
+      });
       database.userRole.findFirst.mockResolvedValue(null);
       database.assignment.findFirst.mockResolvedValue({ id: 'a-1' });
 
@@ -187,14 +210,12 @@ describe('CircuitInstanceService', () => {
         typeId: 't-1',
         siteId: 'site-1',
       });
-      database.circuit.findMany.mockResolvedValue([
-        {
-          id: 'circ-1',
-          name: 'Circuit',
-          roleId: 'r-1',
-          steps: [{ id: 's-1', order: 1 }],
-        },
-      ]);
+      database.circuit.findUnique.mockResolvedValue({
+        id: 'circ-1',
+        name: 'Circuit',
+        roleId: 'r-1',
+        steps: [{ id: 's-1', order: 1 }],
+      });
       database.circuitInstance.create.mockResolvedValue({ id: 'inst-1' });
       database.circuitInstance.findUniqueOrThrow.mockResolvedValue({
         id: 'inst-1',
@@ -218,14 +239,12 @@ describe('CircuitInstanceService', () => {
         typeId: 't-1',
         siteId: 'site-1',
       });
-      database.circuit.findMany.mockResolvedValue([
-        {
-          id: 'circ-1',
-          name: 'Circuit',
-          roleId: null,
-          steps: [{ id: 's-1', order: 1 }],
-        },
-      ]);
+      database.circuit.findUnique.mockResolvedValue({
+        id: 'circ-1',
+        name: 'Circuit',
+        roleId: null,
+        steps: [{ id: 's-1', order: 1 }],
+      });
       database.circuitInstance.create.mockResolvedValue({ id: 'inst-1' });
       database.circuitInstance.findUniqueOrThrow.mockResolvedValue({
         id: 'inst-1',
@@ -265,14 +284,12 @@ describe('CircuitInstanceService', () => {
         typeId: 't-1',
         siteId: 'site-1',
       });
-      database.circuit.findMany.mockResolvedValue([
-        {
-          id: 'circ-1',
-          name: 'Circuit',
-          roleId: null,
-          steps: [{ id: 's-1', order: 1 }],
-        },
-      ]);
+      database.circuit.findUnique.mockResolvedValue({
+        id: 'circ-1',
+        name: 'Circuit',
+        roleId: null,
+        steps: [{ id: 's-1', order: 1 }],
+      });
       database.circuitInstance.create.mockResolvedValue({ id: 'inst-1' });
       database.circuitInstance.findUniqueOrThrow.mockResolvedValue({
         id: 'inst-1',
@@ -383,13 +400,36 @@ describe('CircuitInstanceService', () => {
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    it('allows the courrier owner to decide a role-gated step without holding the role', async () => {
+    it('refuses the courrier owner on a role-gated step they have no role for', async () => {
+      // Separation of duties: owning the target must not let one person
+      // approve every step of a multi-role circuit on their own.
       database.circuitInstance.findUnique.mockResolvedValue(
         instanceAtStep(
           { id: 's-1', order: 1, roleId: 'r-1' },
           { courrier: { ownerId: 'u-1', siteId: 'site-1' } },
         ),
       );
+      database.userRole.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.decide(
+          'inst-1',
+          { decision: ValidationDecision.VALIDE },
+          'u-1',
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(database.circuitInstance.update).not.toHaveBeenCalled();
+    });
+
+    it('allows the owner once they do hold the step role at the site', async () => {
+      database.circuitInstance.findUnique.mockResolvedValue(
+        instanceAtStep(
+          { id: 's-1', order: 1, roleId: 'r-1' },
+          { courrier: { ownerId: 'u-1', siteId: 'site-1' } },
+        ),
+      );
+      database.userRole.findFirst.mockResolvedValue({ userId: 'u-1' });
+      database.assignment.findFirst.mockResolvedValue({ userId: 'u-1' });
       database.circuitInstance.findUniqueOrThrow.mockResolvedValue({
         id: 'inst-1',
         currentStepId: 's-2',
@@ -401,9 +441,8 @@ describe('CircuitInstanceService', () => {
         'u-1',
       );
 
-      expect(database.userRole.findFirst).not.toHaveBeenCalled();
-      expect(database.circuitInstance.update).toHaveBeenCalledWith({
-        where: { id: 'inst-1' },
+      expect(database.circuitInstance.updateMany).toHaveBeenCalledWith({
+        where: { id: 'inst-1', currentStepId: expect.any(String) },
         data: { currentStepId: 's-2' },
       });
     });
@@ -431,8 +470,8 @@ describe('CircuitInstanceService', () => {
       expect(database.assignment.findFirst).toHaveBeenCalledWith({
         where: { userId: 'u-1', siteId: 'site-1' },
       });
-      expect(database.circuitInstance.update).toHaveBeenCalledWith({
-        where: { id: 'inst-1' },
+      expect(database.circuitInstance.updateMany).toHaveBeenCalledWith({
+        where: { id: 'inst-1', currentStepId: expect.any(String) },
         data: { currentStepId: 's-2' },
       });
     });
@@ -452,8 +491,8 @@ describe('CircuitInstanceService', () => {
         'u-1',
       );
 
-      expect(database.circuitInstance.update).toHaveBeenCalledWith({
-        where: { id: 'inst-1' },
+      expect(database.circuitInstance.updateMany).toHaveBeenCalledWith({
+        where: { id: 'inst-1', currentStepId: expect.any(String) },
         data: { currentStepId: 's-2' },
       });
       expect(database.courrier.update).not.toHaveBeenCalled();
@@ -475,8 +514,8 @@ describe('CircuitInstanceService', () => {
         'u-1',
       );
 
-      expect(database.circuitInstance.update).toHaveBeenCalledWith({
-        where: { id: 'inst-1' },
+      expect(database.circuitInstance.updateMany).toHaveBeenCalledWith({
+        where: { id: 'inst-1', currentStepId: expect.any(String) },
         data: {
           status: CircuitInstanceStatus.COMPLETED,
           completedAt: expect.any(Date),
@@ -503,8 +542,8 @@ describe('CircuitInstanceService', () => {
         'u-1',
       );
 
-      expect(database.circuitInstance.update).toHaveBeenCalledWith({
-        where: { id: 'inst-1' },
+      expect(database.circuitInstance.updateMany).toHaveBeenCalledWith({
+        where: { id: 'inst-1', currentStepId: expect.any(String) },
         data: { currentStepId: 's-1' },
       });
       expect(database.courrier.update).not.toHaveBeenCalled();
@@ -526,8 +565,8 @@ describe('CircuitInstanceService', () => {
         'u-1',
       );
 
-      expect(database.circuitInstance.update).toHaveBeenCalledWith({
-        where: { id: 'inst-1' },
+      expect(database.circuitInstance.updateMany).toHaveBeenCalledWith({
+        where: { id: 'inst-1', currentStepId: expect.any(String) },
         data: {
           status: CircuitInstanceStatus.CANCELLED,
           completedAt: expect.any(Date),

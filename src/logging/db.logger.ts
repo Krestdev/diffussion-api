@@ -57,7 +57,12 @@ export class DbLogger extends ConsoleLogger implements LoggerService {
           level,
           action: `system.${level}`,
           message: String(message),
-          stack: typeof stack === 'string' ? stack : stack ? JSON.stringify(stack) : undefined,
+          stack:
+            typeof stack === 'string'
+              ? stack
+              : stack
+                ? JSON.stringify(stack)
+                : undefined,
         },
       })
       .catch(() => void 0)

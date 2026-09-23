@@ -48,7 +48,10 @@ describe('DossierService', () => {
         { provide: RbacService, useValue: rbac },
         {
           provide: ActivityService,
-          useValue: { record: jest.fn().mockResolvedValue('log-1') },
+          useValue: {
+            record: jest.fn().mockResolvedValue('log-1'),
+            tryRecord: jest.fn().mockResolvedValue('log-1'),
+          },
         },
       ],
     }).compile();

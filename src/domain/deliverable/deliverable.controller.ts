@@ -51,6 +51,7 @@ export class DeliverableController {
   }
 
   @Patch(':id')
+  @RequirePermission(PermissionCode.LivrableDeposit)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDeliverableDto,
@@ -70,16 +71,19 @@ export class DeliverableController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(PermissionCode.LivrableDeposit)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.deliverableService.remove(id);
   }
 
   @Post(':id/deposit')
+  @RequirePermission(PermissionCode.LivrableDeposit)
   deposit(@Param('id', ParseUUIDPipe) id: string) {
     return this.deliverableService.deposit(id);
   }
 
   @Post(':id/submit')
+  @RequirePermission(PermissionCode.LivrableSubmit)
   submit(@Param('id', ParseUUIDPipe) id: string) {
     return this.deliverableService.submit(id);
   }

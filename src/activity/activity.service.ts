@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { Prisma } from '../../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
@@ -17,16 +17,35 @@ export interface ActivityPayload {
   metadata?: Record<string, unknown>;
 }
 
+// Column limits from schema.prisma — a value longer than its column used to
+// fail the whole request the log was describing.
+const MAX_ACTION = 255;
+const MAX_ACTOR_LABEL = 100;
+const MAX_ENTITY_TYPE = 50;
+
+function truncate(value: string, max: number): string;
+function truncate(value: string | null, max: number): string | null;
+function truncate(value: string | null, max: number): string | null {
+  if (value === null) return null;
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`;
+}
+
 @Injectable()
 export class ActivityService {
+  private readonly logger = new Logger(ActivityService.name);
+
   constructor(
     private readonly db: DatabaseService,
     private readonly cls: ClsService<AppClsStore>,
   ) {}
 
   /**
-   * Create an activity log entry linked to the current request's parentLogId.
-   * Returns the created log's ID so callers can use it for further chaining.
+   * Create an activity log entry. If this is the first log for the current
+   * request (no parentLogId in CLS yet) it is automatically promoted to
+   * **root** and its ID is stored in CLS so all subsequent calls become its
+   * children. This way the first real business event (e.g. "Circuit Started")
+   * becomes the root visible in the audit-log UI rather than a generic
+   * "POST /api/..." interceptor entry.
    */
   async record(payload: ActivityPayload): Promise<string> {
     const meta: Record<string, unknown> = {};
@@ -37,11 +56,14 @@ export class ActivityService {
       data: {
         parentLogId: this.cls.get('parentLogId') ?? null,
         userId: this.cls.get('userId') ?? null,
-        actorLabel: this.cls.get('actorLabel') ?? null,
+        actorLabel: truncate(
+          this.cls.get('actorLabel') ?? null,
+          MAX_ACTOR_LABEL,
+        ),
         source: payload.source ?? 'SYSTEM',
         level: payload.level ?? 'info',
-        action: payload.action,
-        entityType: payload.entityType ?? null,
+        action: truncate(payload.action, MAX_ACTION),
+        entityType: truncate(payload.entityType ?? null, MAX_ENTITY_TYPE),
         entityId: payload.entityId ?? null,
         message: payload.message ?? null,
         stack: payload.stack ?? null,
@@ -50,17 +72,49 @@ export class ActivityService {
           : undefined,
       },
     });
+
+    // Auto-promote: first log written in this request becomes the root so
+    // all subsequent record() calls land as its children.
+    if (!this.cls.get('parentLogId')) {
+      this.cls.set('parentLogId', log.id);
+    }
+
     return log.id;
   }
 
   /**
-   * Create a root log for this request and store its ID in CLS.
-   * All subsequent record() calls within this request will become children.
+   * Explicitly create a root log and store its ID in CLS.
+   * Kept for backwards-compat with callers that need an explicit root;
+   * record() now auto-promotes if no root has been set yet.
    */
   async recordRoot(payload: ActivityPayload): Promise<string> {
-    const id = await this.record(payload);
-    this.cls.set('parentLogId', id);
-    return id;
+    // Clear any existing parentLogId so this entry writes as root.
+    this.cls.set('parentLogId', undefined as unknown as string);
+    return this.record(payload);
+  }
+
+  /**
+   * record() for callers that must not fail the business action they are
+   * describing — the interceptor (whose write happens before the handler
+   * runs) and @AuditLog (whose write happens after the change is already
+   * committed, so a 500 here would wrongly suggest nothing happened).
+   * Returns null when the entry could not be written.
+   */
+  async tryRecord(
+    payload: ActivityPayload,
+    { asRoot = false }: { asRoot?: boolean } = {},
+  ): Promise<string | null> {
+    try {
+      return asRoot
+        ? await this.recordRoot(payload)
+        : await this.record(payload);
+    } catch (error) {
+      this.logger.error(
+        `Failed to write activity log "${payload.action}"`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return null;
+    }
   }
 
   /**

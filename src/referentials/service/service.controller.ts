@@ -13,18 +13,22 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { UpdateServiceDto } from './dto/update-service.dto';
 import { ServiceService } from './service.service';
 
 @ApiTags('services')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 @Controller('services')
 export class ServiceController {
   constructor(private readonly serviceService: ServiceService) {}
 
   @Post()
+  @RequirePermission(PermissionCode.AdminManageServices)
   create(@Body() dto: CreateServiceDto) {
     return this.serviceService.create(dto);
   }
@@ -40,6 +44,7 @@ export class ServiceController {
   }
 
   @Patch(':uuid')
+  @RequirePermission(PermissionCode.AdminManageServices)
   update(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: UpdateServiceDto,
@@ -49,6 +54,7 @@ export class ServiceController {
 
   @Delete(':uuid')
   @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(PermissionCode.AdminManageServices)
   remove(@Param('uuid', ParseUUIDPipe) uuid: string) {
     return this.serviceService.remove(uuid);
   }

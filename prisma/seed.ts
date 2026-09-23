@@ -122,12 +122,24 @@ async function seedReferentials() {
     'Partenaire technique',
     'Personne physique',
   ];
-  const canaux = ['Courrier électronique', 'Courrier postal', 'Remise en main propre'];
-  const natures = ['Demande d’information', 'Rapport', 'Réponse administrative'];
+  const canaux = [
+    'Courrier électronique',
+    'Courrier postal',
+    'Remise en main propre',
+  ];
+  const natures = [
+    'Demande d’information',
+    'Rapport',
+    'Réponse administrative',
+  ];
 
   await Promise.all(
     dossierTypes.map((name) =>
-      prisma.dossierType.upsert({ where: { name }, update: {}, create: { name } }),
+      prisma.dossierType.upsert({
+        where: { name },
+        update: {},
+        create: { name },
+      }),
     ),
   );
   await Promise.all(
@@ -163,7 +175,35 @@ async function seedReferentials() {
     },
   });
 
-  console.log('✓ Referentials seeded (dossier types, correspondent types, canaux, natures, a default category)');
+  console.log(
+    '✓ Referentials seeded (dossier types, correspondent types, canaux, natures, a default category)',
+  );
+}
+
+/// Default "document de critères d'analyse" (module spec §5): the grid
+/// proposed on every element of a fiche d'analyse. Admins can add to it.
+const DEFAULT_ANALYSIS_CRITERIA = [
+  'Forme',
+  'Fonctionnalité',
+  'Constitution',
+  'Conformité aux cahiers des charges',
+  'Exploitabilité',
+  'Autres conformités',
+];
+
+async function seedAnalysisCriteria() {
+  await Promise.all(
+    DEFAULT_ANALYSIS_CRITERIA.map((label, index) =>
+      prisma.analysisCriterionTemplate.upsert({
+        where: { label },
+        update: { order: index + 1 },
+        create: { label, order: index + 1 },
+      }),
+    ),
+  );
+  console.log(
+    `✓ ${DEFAULT_ANALYSIS_CRITERIA.length} analysis criteria ensured`,
+  );
 }
 
 async function main() {
@@ -172,6 +212,7 @@ async function main() {
   const site = await seedSite();
   await seedAdminUser(role.id, site.id);
   await seedReferentials();
+  await seedAnalysisCriteria();
 
   console.log('\nSeed complete. Log in with:');
   console.log(`  email:    ${ADMIN_EMAIL}`);

@@ -50,6 +50,7 @@ export class InstructionsController {
   }
 
   @Patch(':id')
+  @RequirePermission(PermissionCode.InstructionUpdate)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateInstructionDto,
@@ -97,7 +98,7 @@ export class InstructionsController {
   }
 
   @Patch(':id/cancel')
-  @RequirePermission(PermissionCode.InstructionAssign)
+  @RequirePermission(PermissionCode.InstructionCancel)
   cancel(@Param('id', ParseUUIDPipe) id: string) {
     return this.instructionsService.cancel(id);
   }

@@ -294,6 +294,7 @@ export class InstructionsService {
   async close(id: string) {
     const instruction = await this.requireStatus(id, [
       InstructionStatus.EN_COURS,
+      InstructionStatus.A_CORRIGER,
       InstructionStatus.EN_ATTENTE_VALIDATION,
     ]);
 

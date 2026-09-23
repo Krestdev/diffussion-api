@@ -121,6 +121,8 @@ model User {
   courrierAccesses    CourrierAccess[]
   documentAccesses    DocumentAccess[]
   passwordResetTokens PasswordResetToken[]
+  analysisSheets      AnalysisSheet[]      @relation("AnalysisSheetAuthor")
+  analysisDecisions   AnalysisSheet[]      @relation("AnalysisSheetDecidedBy")
 
   @@map("user")
 }
@@ -156,6 +158,7 @@ model Site {
   responsible User?        @relation("SiteManager", fields: [responsibleId], references: [id])
   assignments Assignment[]
   dossiers    Dossier[]
+  delegations Delegation[]
 
   @@map("site")
 }
@@ -190,6 +193,7 @@ model Role {
   rolePermissions RolePermission[]
   circuitSteps    CircuitStep[]
   circuits        Circuit[]
+  delegations     Delegation[]
 
   @@map("role")
 }
@@ -234,15 +238,26 @@ model Delegation {
   id             String   @id @default(uuid())
   delegantId     String
   delegataireId  String
-  responsibility String   @db.VarChar(100)
+  /// What is handed over: one role, at one site. The delegataire is treated
+  /// as holding `role` at `site` while the window is open — same rule the
+  /// circuit engine applies to a real role holder assigned to that site.
+  roleId         String
+  siteId         String
+  /// Free-text label kept for the register ("Responsable de dossier"), no
+  /// longer what drives the grant.
+  responsibility String?  @db.VarChar(100)
   startDate      DateTime
   endDate        DateTime
   reason         String?
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   delegant    User @relation("DelegationDelegant", fields: [delegantId], references: [id])
   delegataire User @relation("DelegationDelegataire", fields: [delegataireId], references: [id])
+  role        Role @relation(fields: [roleId], references: [id])
+  site        Site @relation(fields: [siteId], references: [id])
 
+  @@index([delegataireId, roleId, siteId])
   @@map("delegation")
 }
 
@@ -273,8 +288,9 @@ model DossierType {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  dossiers Dossier[]
-  circuits Circuit[]
+  dossiers          Dossier[]
+  circuits          Circuit[]
+  criteriaTemplates AnalysisCriterionTemplate[]
 
   @@map("dossier_type")
 }
@@ -339,6 +355,7 @@ model Correspondent {
   type             CorrespondentType? @relation(fields: [typeId], references: [id])
   courriers        Courrier[]
   circuitInstances CircuitInstance[]
+  maitreOuvrageOf  Project[]          @relation("ProjectMaitreOuvrage")
 
   @@map("correspondent")
 }
@@ -417,6 +434,7 @@ model Dossier {
   /// Per-user view/edit access on top of `confidentiality` (RESTRICTED
   /// dossiers are otherwise only visible to their responsible/creator).
   accesses         DossierAccess[]
+  analysisSheets   AnalysisSheet[]
 
   @@map("dossier")
 }
@@ -424,12 +442,21 @@ model Dossier {
 /// A wider project/programme a dossier can optionally be tagged under —
 /// purely organisational, carries no workflow of its own.
 model Project {
-  id        String   @id @default(uuid())
-  name      String   @unique @db.VarChar(200)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String   @id @default(uuid())
+  name            String   @unique @db.VarChar(200)
+  /// "Réf Projet" on an analysis sheet.
+  reference       String?  @db.VarChar(50)
+  /// "Mode" (ex. marché public, gré à gré...).
+  mode            String?  @db.VarChar(100)
+  /// Maître d'ouvrage: the party the project is carried out for (ex. Port
+  /// Autonome de Douala) — an external correspondent.
+  maitreOuvrageId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  dossiers Dossier[]
+  maitreOuvrage  Correspondent?  @relation("ProjectMaitreOuvrage", fields: [maitreOuvrageId], references: [id])
+  dossiers       Dossier[]
+  analysisSheets AnalysisSheet[]
 
   @@map("project")
 }
@@ -535,6 +562,9 @@ model Courrier {
   /// the dossier is not automatically granted access to every courrier
   /// inside it, and vice versa.
   accesses         CourrierAccess[]
+  /// Every analysis of this delivery: the live one plus the rejected
+  /// versions it superseded.
+  analysisSheets   AnalysisSheet[]
 
   @@map("courrier")
 }
@@ -676,7 +706,10 @@ model Livrable {
   versions      Livrable[]  @relation("LivrableVersions")
   createdBy     User?       @relation("LivrableCreatedBy", fields: [createdById], references: [id])
 
-  documents Document[]
+  documents     Document[]
+  /// The structured analysis this livrable carries, when it is a
+  /// "fiche d'analyse" rather than a plain file deliverable.
+  analysisSheet AnalysisSheet?
 
   @@map("livrable")
 }
@@ -694,6 +727,7 @@ model Validation {
   id                String             @id @default(uuid())
   instructionId     String?
   circuitInstanceId String?
+  analysisSheetId   String?
   validatorId       String
   decision          ValidationDecision
   motif             String?
@@ -701,6 +735,7 @@ model Validation {
 
   instruction     Instruction?     @relation(fields: [instructionId], references: [id])
   circuitInstance CircuitInstance? @relation(fields: [circuitInstanceId], references: [id])
+  analysisSheet   AnalysisSheet?   @relation(fields: [analysisSheetId], references: [id])
   validator       User             @relation(fields: [validatorId], references: [id])
 
   @@map("validation")
@@ -741,6 +776,7 @@ model Document {
   /// reasoning as CourrierAccess.
   accesses         DocumentAccess[]
   circuitInstances CircuitInstance[]
+  analysisItems    AnalysisItem[]
 
   @@map("document")
 }
@@ -768,10 +804,12 @@ model DocumentAccess {
 // ---------------------------------------------------------------------------
 
 /// A reusable workflow template for a given dossier type.
+/// One circuit per dossier type (unique constraint): this guarantees
+/// resolveCircuitForDossierType always finds exactly zero or one match.
 model Circuit {
   id            String   @id @default(uuid())
   name          String   @db.VarChar(150)
-  dossierTypeId String?
+  dossierTypeId String?  @unique
   roleId        String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -812,6 +850,9 @@ model CircuitStep {
   currentInstances CircuitInstance[]
   stepHistory      CircuitStepInstanceCircuit[]
 
+  /// One step per position in a circuit — two steps sharing an order make
+  /// "the next step" ambiguous.
+  @@unique([circuitId, order])
   @@map("circuit_step")
 }
 
@@ -943,7 +984,7 @@ model ActivityLog {
   actorLabel  String?        @db.VarChar(100)
   source      ActivitySource
   level       ActivityLevel
-  action      String         @db.VarChar(100)
+  action      String         @db.VarChar(255)
   entityType  String?        @db.VarChar(50)
   entityId    String?
   message     String?        @db.Text
@@ -958,4 +999,149 @@ model ActivityLog {
   @@index([userId, createdAt])
   @@index([source, createdAt])
   @@map("activity_log")
+}
+
+// ---------------------------------------------------------------------------
+// Analysis sheets — "Fiches d'analyse / Avis" (module spec 10/09/2026)
+// ---------------------------------------------------------------------------
+
+/// The 5-value scale every criterion, element and delivery is judged on.
+enum AnalysisOpinion {
+  /// Avis favorable — tout est bon.
+  AF
+  /// Avis favorable sous réserve — bon, avec des ajustements à faire.
+  AFR
+  /// Avis suspendu — des corrections sont nécessaires pour avancer.
+  AS
+  /// Avis défavorable — à revoir entièrement.
+  AD
+  /// Non applicable.
+  NA
+}
+
+/// The structured evaluation of one delivery (a courrier entrant carrying a
+/// bordereau and its documents). Content only: the lifecycle, the versioning
+/// and the validation live on the owning Livrable, so an analysis behaves
+/// like any other deliverable of its instruction.
+model AnalysisSheet {
+  id            String  @id @default(uuid())
+  /// System-generated, human-readable reference (FA-xxxxxx).
+  reference     String  @unique @db.VarChar(30)
+  /// The deliverable carrying this analysis — one sheet per livrable version.
+  livrableId    String  @unique
+  /// The delivery being analysed. Not unique: a rejected fiche is kept and
+  /// superseded by a new version, so several sheets can share one courrier —
+  /// only one of them is ever live (see assertNoLiveSheet).
+  courrierId    String
+  /// Denormalised from the courrier, for listing and site scoping.
+  dossierId     String
+  projectId     String?
+  /// The rejected version this one replaces (null on a first analysis).
+  parentSheetId String? @unique
+  /// The expert who produced it (one author per sheet).
+  authorId      String
+
+  /// Identification block of the paper form.
+  refBL          String?   @db.VarChar(50)
+  lieuUsage      String?   @db.VarChar(150)
+  remise         DateTime?
+  norme          String?   @db.VarChar(150)
+  /// "Docs références" — ex. Dossier d'exécution, Plans d'exécution...
+  docsReferences String[]  @default([])
+
+  /// Derived from the elements (AD if any element is AD, else AS if any is
+  /// AS, else AF — AFR counts as favourable). A proposal only.
+  suggestedOpinion AnalysisOpinion?
+  /// The avis that stands: set by the person in charge, who may depart from
+  /// the suggestion. Null until they pronounce.
+  overallOpinion   AnalysisOpinion?
+  /// Why the final avis differs from the suggestion, when it does.
+  opinionMotif     String?
+  decidedById      String?
+  decidedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  livrable  Livrable @relation(fields: [livrableId], references: [id], onDelete: Cascade)
+  courrier  Courrier @relation(fields: [courrierId], references: [id])
+  dossier   Dossier  @relation(fields: [dossierId], references: [id])
+  project   Project? @relation(fields: [projectId], references: [id])
+  author    User     @relation("AnalysisSheetAuthor", fields: [authorId], references: [id])
+  decidedBy User?    @relation("AnalysisSheetDecidedBy", fields: [decidedById], references: [id])
+
+  parentSheet AnalysisSheet? @relation("AnalysisSheetVersions", fields: [parentSheetId], references: [id])
+  nextVersion AnalysisSheet? @relation("AnalysisSheetVersions")
+
+  items       AnalysisItem[]
+  validations Validation[]
+
+  @@index([dossierId])
+  @@index([courrierId])
+  @@map("analysis_sheet")
+}
+
+/// One "élément à analyser": a single received document, judged on its own
+/// grid of criteria. Criteria of different elements are unrelated (spec §4).
+model AnalysisItem {
+  id               String           @id @default(uuid())
+  sheetId          String
+  /// The received document this element evaluates.
+  documentId       String
+  label            String           @db.VarChar(200)
+  description      String?
+  observation      String?
+  /// Proposed by the system from the criteria (worst one wins).
+  suggestedOpinion AnalysisOpinion?
+  /// What the expert actually pronounces — the decision is always theirs.
+  opinion          AnalysisOpinion?
+  order            Int
+
+  sheet    AnalysisSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  document Document      @relation(fields: [documentId], references: [id])
+
+  criteria AnalysisItemCriterion[]
+
+  @@unique([sheetId, documentId])
+  @@unique([sheetId, order])
+  @@map("analysis_item")
+}
+
+/// A criterion line under one element. Copied from the template catalogue at
+/// creation (label included) so later edits to the catalogue never rewrite a
+/// sheet that has already been filled.
+model AnalysisItemCriterion {
+  id          String          @id @default(uuid())
+  itemId      String
+  templateId  String?
+  label       String          @db.VarChar(150)
+  opinion     AnalysisOpinion @default(NA)
+  observation String?
+  order       Int
+
+  item     AnalysisItem               @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  template AnalysisCriterionTemplate? @relation(fields: [templateId], references: [id])
+
+  @@unique([itemId, label])
+  @@map("analysis_item_criterion")
+}
+
+/// Admin-managed default grid ("document de critères d'analyse"): Forme,
+/// Fonctionnalité, Constitution, Conformité aux cahiers des charges,
+/// Exploitabilité, Autres conformités. Optionally narrowed to a dossier type.
+model AnalysisCriterionTemplate {
+  id            String  @id @default(uuid())
+  label         String  @unique @db.VarChar(150)
+  description   String?
+  dossierTypeId String?
+  order         Int     @default(0)
+  isActive      Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  dossierType DossierType?            @relation(fields: [dossierTypeId], references: [id])
+  criteria    AnalysisItemCriterion[]
+
+  @@map("analysis_criterion_template")
 }

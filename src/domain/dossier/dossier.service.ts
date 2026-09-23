@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import {
   CircuitInstanceStatus,
+  DossierConfidentiality,
   DossierStatus,
   InstructionStatus,
   Prisma,
@@ -119,7 +120,7 @@ export class DossierService {
     );
   }
 
-  async findAll(query: FindDossiersQueryDto) {
+  async findAll(query: FindDossiersQueryDto, userId?: string) {
     const where: Prisma.DossierWhereInput = {
       status: query.status,
       priority: query.priority,
@@ -136,6 +137,19 @@ export class DossierService {
         : undefined,
     };
 
+    if (userId) {
+      where.AND = [
+        {
+          OR: [
+            { confidentiality: DossierConfidentiality.PUBLIC },
+            { createdById: userId },
+            { responsibleId: userId },
+            { accesses: { some: { userId, canView: true } } },
+          ],
+        },
+      ];
+    }
+
     const [data, total] = await this.database.$transaction([
       this.database.dossier.findMany({
         where,
@@ -150,7 +164,7 @@ export class DossierService {
     return { data, total, skip: query.skip ?? 0, take: query.take ?? 20 };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, userId?: string) {
     const dossier = await this.database.dossier.findUnique({
       where: { id },
       include: dossierInclude,
@@ -158,6 +172,20 @@ export class DossierService {
     if (!dossier) {
       throw new NotFoundException(`Dossier ${id} not found`);
     }
+
+    if (userId && dossier.confidentiality === DossierConfidentiality.RESTRICTED) {
+      if (dossier.createdById !== userId && dossier.responsibleId !== userId) {
+        const access = await this.database.dossierAccess.findUnique({
+          where: { dossierId_userId: { dossierId: id, userId } },
+        });
+        if (!access?.canView) {
+          throw new ForbiddenException(
+            `You do not have permission to view this restricted dossier`,
+          );
+        }
+      }
+    }
+
     return dossier;
   }
 
@@ -335,8 +363,8 @@ export class DossierService {
     });
   }
 
-  async getCourriers(id: string, query: PaginationQueryDto) {
-    await this.findOne(id);
+  async getCourriers(id: string, query: PaginationQueryDto, userId?: string) {
+    await this.findOne(id, userId);
     const { skip, take } = paging(query);
     const where: Prisma.CourrierWhereInput = {
       dossierId: id,
@@ -360,8 +388,8 @@ export class DossierService {
     return { data, total, skip, take };
   }
 
-  async getInstructions(id: string, query: PaginationQueryDto) {
-    await this.findOne(id);
+  async getInstructions(id: string, query: PaginationQueryDto, userId?: string) {
+    await this.findOne(id, userId);
     const { skip, take } = paging(query);
     const where: Prisma.InstructionWhereInput = {
       dossierId: id,
@@ -382,8 +410,8 @@ export class DossierService {
     return { data, total, skip, take };
   }
 
-  async getLivrables(id: string, query: PaginationQueryDto) {
-    await this.findOne(id);
+  async getLivrables(id: string, query: PaginationQueryDto, userId?: string) {
+    await this.findOne(id, userId);
     const { skip, take } = paging(query);
     const where: Prisma.LivrableWhereInput = {
       instruction: { dossierId: id },
@@ -406,8 +434,8 @@ export class DossierService {
   // RG-AUD-*: full trail of everything recorded against this dossier.
   // `userId`/`actorLabel` on ActivityLog are loose references rather than a
   // relation (see schema), so there's no join to include here.
-  async getHistorique(id: string) {
-    await this.findOne(id);
+  async getHistorique(id: string, userId?: string) {
+    await this.findOne(id, userId);
     return this.database.activityLog.findMany({
       where: { entityType: 'dossier', entityId: id },
       orderBy: { createdAt: 'desc' },
@@ -417,15 +445,15 @@ export class DossierService {
   // 10.1.8: progression derived from how many attached instructions are
   // terminated. Read-only — the persisted `progress` is kept up to date by
   // the instruction lifecycle (see refreshDossierProgress).
-  async getProgression(id: string) {
-    await this.findOne(id);
+  async getProgression(id: string, userId?: string) {
+    await this.findOne(id, userId);
     return computeDossierProgress(this.database, id);
   }
 
   // RG-DOS-*: explicit per-user grants on top of `confidentiality` — a
   // RESTRICTED dossier is otherwise only visible to its responsible/creator.
-  async getAccess(id: string) {
-    await this.findOne(id);
+  async getAccess(id: string, userId?: string) {
+    await this.findOne(id, userId);
     return this.database.dossierAccess.findMany({
       where: { dossierId: id },
       include: dossierAccessInclude,

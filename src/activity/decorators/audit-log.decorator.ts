@@ -82,8 +82,10 @@ export function AuditLog(options: AuditLogOptions) {
         changes = snapshotDelete(before ?? {});
       }
 
-      // 4. Record the log
-      await activityService.record({
+      // 4. Record the log — never fatal: the database change above is
+      // already committed, so failing here would report an error for an
+      // action that actually happened.
+      await activityService.tryRecord({
         action: options.action,
         entityType: options.entityType,
         entityId,

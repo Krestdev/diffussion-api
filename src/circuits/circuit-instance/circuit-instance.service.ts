@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -12,11 +13,15 @@ import {
   ValidationDecision,
 } from '../../../generated/prisma/client';
 import { assertDossierOpenForActivity } from '../../common/utils/dossier-lifecycle';
+import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { CreateCircuitInstanceDto } from './dto/create-circuit-instance.dto';
 import { DecideCircuitInstanceDto } from './dto/decide-circuit-instance.dto';
-import { FindCircuitInstancesQueryDto } from './dto/find-circuit-instances.query.dto';
+import {
+  DEFAULT_CIRCUIT_TAKE,
+  FindCircuitInstancesQueryDto,
+} from './dto/find-circuit-instances.query.dto';
 
 const instanceInclude = {
   circuit: {
@@ -114,40 +119,31 @@ export class CircuitInstanceService {
   constructor(
     private readonly database: DatabaseService,
     private readonly notifications: NotificationsService,
+    // Resolves "holds this role at this site", including roles held through
+    // an active delegation.
+    private readonly rbac: RbacService,
   ) {}
 
-  // Same site-scoping rule as userIsEligibleForRole, but the other
-  // direction: everyone who could act on a step, not just one candidate.
-  // Returns [] (rather than "everyone with the role") when siteId is
-  // unknown, mirroring userIsEligibleForRole's own refusal in that case.
-  private async findEligibleUserIds(
-    roleId: string | null,
-    siteId: string | null,
-  ) {
-    if (!roleId || !siteId) return [];
-    const users = await this.database.user.findMany({
-      where: {
-        userRoles: { some: { roleId } },
-        assignments: { some: { siteId } },
-      },
-      select: { id: true },
-    });
-    return users.map((user) => user.id);
+  // Everyone who may decide a step with this role at this site — role
+  // holders assigned to the site, plus anyone currently delegated that role
+  // there. Returns [] when the site is unknown, mirroring hasRoleAtSite.
+  private findEligibleUserIds(roleId: string | null, siteId: string | null) {
+    return this.rbac.usersWithRoleAtSite(roleId, siteId);
   }
 
   // Who should hear "this step now needs a decision": everyone eligible to
-  // decide it, plus the owner (10.6) who can act regardless of role — minus
-  // whoever just triggered this transition, so nobody gets notified about
-  // their own action.
+  // decide it, minus whoever just triggered this transition, so nobody gets
+  // notified about their own action. The owner is only included when they
+  // are themselves eligible — since the owner bypass was removed they can
+  // no longer act on a step whose role they lack, and telling them it
+  // "awaits your decision" would be false. They still get the
+  // completed/cancelled notifications.
   private async stepPendingRecipients(
     roleId: string | null,
     siteId: string | null,
-    ownerId: string | null,
     excludeUserId: string,
   ) {
-    const roleUserIds = await this.findEligibleUserIds(roleId, siteId);
-    const ids = new Set(roleUserIds);
-    if (ownerId) ids.add(ownerId);
+    const ids = new Set(await this.findEligibleUserIds(roleId, siteId));
     ids.delete(excludeUserId);
     return [...ids];
   }
@@ -182,20 +178,14 @@ export class CircuitInstanceService {
   // A role requirement (Circuit.roleId to trigger, CircuitStep.roleId to
   // decide) is only satisfied "on that courrier/document": holding the role
   // application-wide isn't enough on its own, the user must also be
-  // assigned to the site that owns the target's dossier. Otherwise any
-  // holder of e.g. "Approbateur" anywhere could act on a courrier from a
-  // site they have no connection to.
-  private async userIsEligibleForRole(
+  // assigned to the site that owns the target's dossier — or hold that role
+  // at that site through an active delegation (see RbacService).
+  private userIsEligibleForRole(
     userId: string,
     roleId: string,
     siteId: string | null,
   ) {
-    if (!siteId) return false;
-    const [hasRole, isAssignedToSite] = await Promise.all([
-      this.database.userRole.findFirst({ where: { userId, roleId } }),
-      this.database.assignment.findFirst({ where: { userId, siteId } }),
-    ]);
-    return hasRole !== null && isAssignedToSite !== null;
+    return this.rbac.hasRoleAtSite(userId, roleId, siteId);
   }
 
   /**
@@ -227,28 +217,69 @@ export class CircuitInstanceService {
         users: [],
       };
     }
+    const eligibleIds = await this.rbac.usersWithRoleAtSite(
+      circuit.roleId,
+      dossier.siteId,
+    );
     const users = await this.database.user.findMany({
-      where: {
-        userRoles: { some: { roleId: circuit.roleId } },
-        assignments: { some: { siteId: dossier.siteId } },
-      },
+      where: { id: { in: eligibleIds } },
       select: { id: true, name: true, email: true },
       orderBy: { name: 'asc' },
     });
     return { circuit: { id: circuit.id, name: circuit.name }, users };
   }
 
-  async findAll(query: FindCircuitInstancesQueryDto) {
-    return this.database.circuitInstance.findMany({
-      where: {
-        dossierId: query.dossierId,
-        courrierId: query.courrierId,
-        documentId: query.documentId,
-        status: query.status,
-      },
-      include: instanceInclude,
-      orderBy: { id: 'desc' },
-    });
+  async findAll(query: FindCircuitInstancesQueryDto, userId?: string) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_CIRCUIT_TAKE;
+
+    // Build base where clause
+    let where: Prisma.CircuitInstanceWhereInput = {
+      dossierId: query.dossierId,
+      courrierId: query.courrierId,
+      documentId: query.documentId,
+      status: query.status,
+    };
+
+    // "awaiting my decision" inbox: only IN_PROGRESS instances where the
+    // calling user holds the required role at the target's site for the
+    // *current* step.
+    if (query.awaitingMyDecision && userId) {
+      // Fetch all (roleId, siteId) pairs the user can act on right now.
+      const eligiblePairs = await this.rbac.eligibleRoleSitePairs(userId);
+      if (eligiblePairs.length === 0) {
+        return { data: [], total: 0, skip, take };
+      }
+
+      where = {
+        ...where,
+        status: CircuitInstanceStatus.IN_PROGRESS,
+        AND: [
+          {
+            OR: eligiblePairs.map(({ roleId, siteId }) => ({
+              currentStep: { roleId },
+              OR: [
+                { courrier: { dossier: { siteId } } },
+                { document: { dossier: { siteId } } },
+              ],
+            })),
+          },
+        ],
+      };
+    }
+
+    const [data, total] = await this.database.$transaction([
+      this.database.circuitInstance.findMany({
+        where,
+        include: instanceInclude,
+        orderBy: { id: 'desc' },
+        skip,
+        take,
+      }),
+      this.database.circuitInstance.count({ where }),
+    ]);
+
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {
@@ -329,6 +360,8 @@ export class CircuitInstanceService {
       throw new BadRequestException('Unable to resolve a circuit');
     }
 
+    // Triggering is not deciding: the owner of the target may always send
+    // it into its circuit, even without the circuit's trigger role.
     const ownerId = courrier?.ownerId ?? document?.ownerId ?? null;
     const isOwner = ownerId === userId;
     if (
@@ -386,7 +419,6 @@ export class CircuitInstanceService {
       recipientIds: await this.stepPendingRecipients(
         firstStep.roleId,
         dossier.siteId,
-        ownerId,
         userId,
       ),
       type: 'CIRCUIT_STEP_PENDING',
@@ -407,17 +439,71 @@ export class CircuitInstanceService {
         `Dossier "${dossierTitle}" has no type set — a circuit can only be resolved automatically from a dossier type. Set the dossier's type, or pass an explicit circuitId.`,
       );
     }
-    const candidates = await this.database.circuit.findMany({
+    // dossierTypeId is now unique on Circuit (one circuit per dossier type),
+    // so findUnique is exact — no "oldest silently wins" ambiguity.
+    const circuit = await this.database.circuit.findUnique({
       where: { dossierTypeId },
       include: { steps: { orderBy: { order: 'asc' } } },
-      orderBy: { createdAt: 'asc' },
     });
-    if (candidates.length === 0) {
+    if (!circuit) {
       throw new BadRequestException(
         'No validation circuit is configured for this dossier type. Configure one in Paramètres > Circuits de validation.',
       );
     }
-    return candidates[0];
+    return circuit;
+  }
+
+  /**
+   * Cancels a running circuit instance. Only the owner of the target,
+   * the submitter, or an admin may do this.
+   */
+  async cancel(id: string, userId: string) {
+    const instance = await this.database.circuitInstance.findUnique({
+      where: { id },
+      include: { ...targetContextInclude },
+    });
+    if (!instance) {
+      throw new NotFoundException(`Circuit instance ${id} not found`);
+    }
+    if (instance.status !== CircuitInstanceStatus.IN_PROGRESS) {
+      throw new BadRequestException(
+        `Circuit instance is already ${instance.status} and cannot be cancelled`,
+      );
+    }
+
+    const { ownerId, submitterId } = resolveOwnerAndSite(instance);
+    const isActor = userId === ownerId || userId === submitterId;
+    const isAdmin = await this.rbac.hasPermission(
+      userId,
+      // Admins can cancel any circuit — they can also manage circuits directly.
+      // Re-use AdminManageCircuits as the guard for this privileged action.
+      'ADMIN_MANAGE_CIRCUITS' as any,
+    );
+    if (!isActor && !isAdmin) {
+      throw new ForbiddenException(
+        'Only the target owner, the submitter, or an administrator can cancel a circuit instance',
+      );
+    }
+
+    return this.database.$transaction(async (tx) => {
+      await tx.circuitInstance.update({
+        where: { id },
+        data: {
+          status: CircuitInstanceStatus.CANCELLED,
+          completedAt: new Date(),
+        },
+      });
+      if (instance.courrierId) {
+        await tx.courrier.update({
+          where: { id: instance.courrierId },
+          data: { status: CourrierStatus.A_CORRIGER },
+        });
+      }
+      return tx.circuitInstance.findUniqueOrThrow({
+        where: { id },
+        include: instanceInclude,
+      });
+    });
   }
 
   /**
@@ -447,10 +533,12 @@ export class CircuitInstanceService {
 
     const currentStep = instance.currentStep;
     const { siteId, ownerId, submitterId } = resolveOwnerAndSite(instance);
-    const isOwner = ownerId === userId;
+    // Owning the target is deliberately NOT a way past a step's role:
+    // otherwise one owner could approve a whole multi-role circuit alone,
+    // which defeats the separation of duties the steps exist to enforce.
+    // (Owners may still *trigger* a circuit — see start().)
     if (
       currentStep.roleId &&
-      !isOwner &&
       !(await this.userIsEligibleForRole(userId, currentStep.roleId, siteId))
     ) {
       throw new ForbiddenException(
@@ -467,6 +555,10 @@ export class CircuitInstanceService {
       ? steps.find((step) => step.id === currentStep.parentStepId)
       : undefined;
 
+    // Optimistic concurrency: the update targets both `id` AND the step we
+    // read before entering the transaction. If another decision already
+    // advanced `currentStepId`, the updateMany count is 0 and we bail out
+    // rather than silently overwriting the new state.
     const updated = await this.database.$transaction(async (tx) => {
       await tx.validation.create({
         data: {
@@ -477,12 +569,19 @@ export class CircuitInstanceService {
         },
       });
 
+      let stepAdvanced: { count: number };
+
       if (approved) {
         if (nextStep) {
-          await tx.circuitInstance.update({
-            where: { id: instance.id },
+          stepAdvanced = await tx.circuitInstance.updateMany({
+            where: { id: instance.id, currentStepId: currentStep.id },
             data: { currentStepId: nextStep.id },
           });
+          if (stepAdvanced.count === 0) {
+            throw new ConflictException(
+              'Another decision was recorded simultaneously for this step — please refresh and try again',
+            );
+          }
           await tx.circuitStepInstanceCircuit.create({
             data: {
               circuitStepId: nextStep.id,
@@ -490,13 +589,18 @@ export class CircuitInstanceService {
             },
           });
         } else {
-          await tx.circuitInstance.update({
-            where: { id: instance.id },
+          stepAdvanced = await tx.circuitInstance.updateMany({
+            where: { id: instance.id, currentStepId: currentStep.id },
             data: {
               status: CircuitInstanceStatus.COMPLETED,
               completedAt: new Date(),
             },
           });
+          if (stepAdvanced.count === 0) {
+            throw new ConflictException(
+              'Another decision was recorded simultaneously for this step — please refresh and try again',
+            );
+          }
           if (instance.courrierId) {
             await tx.courrier.update({
               where: { id: instance.courrierId },
@@ -505,10 +609,15 @@ export class CircuitInstanceService {
           }
         }
       } else if (currentStep.parentStepId) {
-        await tx.circuitInstance.update({
-          where: { id: instance.id },
+        stepAdvanced = await tx.circuitInstance.updateMany({
+          where: { id: instance.id, currentStepId: currentStep.id },
           data: { currentStepId: currentStep.parentStepId },
         });
+        if (stepAdvanced.count === 0) {
+          throw new ConflictException(
+            'Another decision was recorded simultaneously for this step — please refresh and try again',
+          );
+        }
         await tx.circuitStepInstanceCircuit.create({
           data: {
             circuitStepId: currentStep.parentStepId,
@@ -516,13 +625,18 @@ export class CircuitInstanceService {
           },
         });
       } else {
-        await tx.circuitInstance.update({
-          where: { id: instance.id },
+        stepAdvanced = await tx.circuitInstance.updateMany({
+          where: { id: instance.id, currentStepId: currentStep.id },
           data: {
             status: CircuitInstanceStatus.CANCELLED,
             completedAt: new Date(),
           },
         });
+        if (stepAdvanced.count === 0) {
+          throw new ConflictException(
+            'Another decision was recorded simultaneously for this step — please refresh and try again',
+          );
+        }
         if (instance.courrierId) {
           await tx.courrier.update({
             where: { id: instance.courrierId },
@@ -555,11 +669,24 @@ export class CircuitInstanceService {
         recipientIds: await this.stepPendingRecipients(
           nextStep.roleId,
           siteId,
-          ownerId,
           userId,
         ),
         type: 'CIRCUIT_STEP_PENDING',
         message: `« ${targetLabel} » attend votre décision (circuit "${circuitName}", étape ${nextStep.order}).`,
+      });
+
+      // Let the owner/submitter know it advanced (since they were excluded
+      // from the "awaits your decision" above if they lack the required role).
+      const alreadyNotified = new Set(
+        await this.findEligibleUserIds(nextStep.roleId, siteId),
+      );
+      this.notify({
+        ...notifyBase,
+        recipientIds: [submitterId, ownerId].filter(
+          (id) => id && id !== userId && !alreadyNotified.has(id),
+        ),
+        type: 'CIRCUIT_STEP_ADVANCED',
+        message: `« ${targetLabel} » est passé à l'étape ${nextStep.order} du circuit "${circuitName}".`,
       });
     } else if (approved) {
       this.notify({
@@ -574,7 +701,6 @@ export class CircuitInstanceService {
         recipientIds: await this.stepPendingRecipients(
           parentStep.roleId,
           siteId,
-          ownerId,
           userId,
         ),
         type: 'CIRCUIT_STEP_REJECTED',

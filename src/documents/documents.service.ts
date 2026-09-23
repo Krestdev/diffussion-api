@@ -90,26 +90,68 @@ export class DocumentsService {
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actingUserId: string) {
     const document = await this.database.document.findUnique({
       where: { id },
+      include: {
+        dossier: { select: { site: true } },
+        courrier: { select: { dossier: { select: { site: true } } } },
+        accesses: { where: { userId: actingUserId } },
+      },
     });
     if (!document) {
       throw new NotFoundException(`Document ${id} not found`);
     }
+
+    await this.assertCanAccessDocument(document, actingUserId);
+
     return document;
   }
 
-  async getDownloadUrl(id: string) {
-    const document = await this.findOne(id);
+  async getDownloadUrl(id: string, actingUserId: string) {
+    const document = await this.findOne(id, actingUserId);
     const url = await this.storage.getSignedDownloadUrl(document.storageKey);
     return { url, expiresIn: 900 };
   }
 
-  async remove(id: string) {
-    const document = await this.findOne(id);
+  async remove(id: string, actingUserId: string) {
+    const document = await this.findOne(id, actingUserId);
     await this.storage.delete(document.storageKey);
     await this.database.document.delete({ where: { id } });
+  }
+
+  // RG-DOC-003: Document read access is independent from the dossier.
+  // Access is granted to the uploader, the circuit owner, explicitly
+  // listed users in DocumentAccess, the responsible of the site, or a
+  // platform administrator.
+  private async assertCanAccessDocument(
+    document: {
+      uploadedById: string | null;
+      ownerId: string | null;
+      dossier: { site: { responsibleId: string | null } | null } | null;
+      courrier: {
+        dossier: { site: { responsibleId: string | null } | null };
+      } | null;
+      accesses: { userId: string }[];
+    },
+    actingUserId: string,
+  ) {
+    if (document.uploadedById === actingUserId) return;
+    if (document.ownerId === actingUserId) return;
+    if (document.accesses.length > 0) return;
+
+    const site = document.dossier?.site ?? document.courrier?.dossier.site;
+    if (site?.responsibleId === actingUserId) return;
+
+    const isAdmin = await this.rbac.hasPermission(
+      actingUserId,
+      PermissionCode.AdminManageCircuits,
+    );
+    if (isAdmin) return;
+
+    throw new ForbiddenException(
+      'You do not have permission to access this document',
+    );
   }
 
   // The dossier a new document ultimately lands in: directly, through its
@@ -172,8 +214,8 @@ export class DocumentsService {
   // Independent from its dossier's/courrier's own access list (see
   // DocumentAccess in schema.prisma) — a user with access to either does
   // not automatically get access to this specific document, and vice versa.
-  async getAccess(id: string) {
-    await this.findOne(id);
+  async getAccess(id: string, actingUserId: string) {
+    await this.findOne(id, actingUserId);
     return this.database.documentAccess.findMany({
       where: { documentId: id },
       include: documentAccessInclude,
@@ -181,8 +223,8 @@ export class DocumentsService {
     });
   }
 
-  async setAccess(id: string, dto: SetAccessDto) {
-    await this.findOne(id);
+  async setAccess(id: string, dto: SetAccessDto, actingUserId: string) {
+    await this.findOne(id, actingUserId);
     const userIds = dto.entries.map((entry) => entry.userId);
 
     await this.database.$transaction([
@@ -208,6 +250,6 @@ export class DocumentsService {
       ),
     ]);
 
-    return this.getAccess(id);
+    return this.getAccess(id, actingUserId);
   }
 }

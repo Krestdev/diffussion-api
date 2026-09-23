@@ -74,19 +74,28 @@ export class DocumentsController {
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.documentsService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.findOne(id, user.sub);
   }
 
   @Get(':id/download-url')
-  getDownloadUrl(@Param('id', ParseUUIDPipe) id: string) {
-    return this.documentsService.getDownloadUrl(id);
+  getDownloadUrl(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.getDownloadUrl(id, user.sub);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.documentsService.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.remove(id, user.sub);
   }
 
   // Authorization (uploader / site responsible / platform admin) is
@@ -101,12 +110,19 @@ export class DocumentsController {
   }
 
   @Get(':id/access')
-  getAccess(@Param('id', ParseUUIDPipe) id: string) {
-    return this.documentsService.getAccess(id);
+  getAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.getAccess(id, user.sub);
   }
 
   @Put(':id/access')
-  setAccess(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetAccessDto) {
-    return this.documentsService.setAccess(id, dto);
+  setAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetAccessDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.setAccess(id, dto, user.sub);
   }
 }

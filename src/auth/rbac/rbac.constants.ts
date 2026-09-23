@@ -21,14 +21,17 @@ export enum PermissionCode {
   InstructionCreate = 'INSTRUCTION_CREATE',
   InstructionAssign = 'INSTRUCTION_ASSIGN',
   InstructionReassign = 'INSTRUCTION_REASSIGN',
+  InstructionUpdate = 'INSTRUCTION_UPDATE',
   InstructionAccept = 'INSTRUCTION_ACCEPT',
   InstructionRefuse = 'INSTRUCTION_REFUSE',
+  InstructionCancel = 'INSTRUCTION_CANCEL',
   InstructionClose = 'INSTRUCTION_CLOSE',
 
   // Livrables (7.6.4.4)
   LivrableDeposit = 'LIVRABLE_DEPOSIT',
   LivrableRead = 'LIVRABLE_READ',
   LivrableNewVersion = 'LIVRABLE_NEW_VERSION',
+  LivrableSubmit = 'LIVRABLE_SUBMIT',
   LivrableDownload = 'LIVRABLE_DOWNLOAD',
 
   // Validation (7.6.4.5)
@@ -46,6 +49,14 @@ export enum PermissionCode {
   AdminManageRoles = 'ADMIN_MANAGE_ROLES',
   AdminManageCircuits = 'ADMIN_MANAGE_CIRCUITS',
   AdminManageSettings = 'ADMIN_MANAGE_SETTINGS',
+
+  // Fiches d'analyse / Avis (module spec 10/09/2026)
+  AnalysisRead = 'ANALYSIS_READ',
+  AnalysisCreate = 'ANALYSIS_CREATE',
+  AnalysisUpdate = 'ANALYSIS_UPDATE',
+  /// Pronounce the final avis on a fiche (chef de projet).
+  AnalysisDecide = 'ANALYSIS_DECIDE',
+  AdminManageAnalysisCriteria = 'ADMIN_MANAGE_ANALYSIS_CRITERIA',
 
   // Audit (RG-AUD-*)
   AuditRead = 'AUDIT_READ',
