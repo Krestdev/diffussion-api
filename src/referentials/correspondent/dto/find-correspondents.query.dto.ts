@@ -1,20 +1,21 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 import { CorrespondentStatus } from 'generated/prisma/enums';
+import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 
-export class FindCorrespondantsQueryDto {
-  @ApiPropertyOptional({ description: 'Search in name/email' })
-  @IsOptional()
-  @IsString()
-  search?: string;
-
+/**
+ * Filters for GET /correspondents (the "Correspondants" admin table and the
+ * correspondent pickers). `search` (inherited) matches the name, code,
+ * email, phone or main contact. Pagination comes from PaginationQueryDto,
+ * which also caps `take` at MAX_TAKE.
+ */
+export class FindCorrespondantsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({ description: 'CorrespondentType id' })
   @IsOptional()
   @IsUUID()
   typeId?: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'City, partial match' })
   @IsOptional()
   @IsString()
   city?: string;
@@ -23,16 +24,4 @@ export class FindCorrespondantsQueryDto {
   @IsOptional()
   @IsEnum(CorrespondentStatus)
   status?: CorrespondentStatus;
-
-  @ApiPropertyOptional({ default: 0 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  skip?: number;
-
-  @ApiPropertyOptional({ default: 20 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  take?: number;
 }

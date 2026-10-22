@@ -45,9 +45,10 @@ export class DocumentsController {
       required: ['file'],
       properties: {
         file: { type: 'string', format: 'binary' },
-        dossierId: { type: 'string' },
-        courrierId: { type: 'string' },
-        livrableId: { type: 'string' },
+        name: { type: 'string', maxLength: 200, description: 'Human-readable display name (defaults to filename if omitted)' },
+        dossierId: { type: 'string', format: 'uuid' },
+        courrierId: { type: 'string', format: 'uuid' },
+        livrableId: { type: 'string', format: 'uuid' },
       },
     },
   })
@@ -69,8 +70,11 @@ export class DocumentsController {
   }
 
   @Get()
-  findAll(@Query() query: FindDocumentsQueryDto) {
-    return this.documentsService.findAll(query);
+  findAll(
+    @Query() query: FindDocumentsQueryDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.findAll(query, user.sub);
   }
 
   @Get(':id')

@@ -10,6 +10,13 @@ import {
 } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import {
+  assertAdministers,
+  assertInScope,
+  RbacService,
+  SiteScopeList,
+} from '../../auth/rbac/rbac.service';
 import {
   DEFAULT_TAKE,
   PaginationQueryDto,
@@ -42,6 +49,7 @@ export class DelegationService {
     private readonly database: DatabaseService,
     // Required by @AuditLog, which reads `this.activity`.
     private readonly activity: ActivityService,
+    private readonly rbac: RbacService,
   ) {}
 
   @AuditLog({
@@ -49,7 +57,8 @@ export class DelegationService {
     entityType: 'delegation',
     operation: 'CREATE',
   })
-  async create(dto: CreateDelegationDto) {
+  async create(dto: CreateDelegationDto, actingUserId: string) {
+    assertInScope(await this.adminScope(actingUserId), dto.siteId);
     const { startDate, endDate, ...data } = dto;
     const shape: DelegationShape = {
       delegantId: dto.delegantId,
@@ -68,10 +77,11 @@ export class DelegationService {
     });
   }
 
-  async findAll(query: PaginationQueryDto) {
+  async findAll(query: PaginationQueryDto, actingUserId: string) {
+    const scope = await this.adminScope(actingUserId);
     const skip = query.skip ?? 0;
     const take = query.take ?? DEFAULT_TAKE;
-    const where: Prisma.DelegationWhereInput = query.search
+    const search: Prisma.DelegationWhereInput = query.search
       ? {
           OR: [
             { responsibility: { contains: query.search, mode: 'insensitive' } },
@@ -90,6 +100,9 @@ export class DelegationService {
           ],
         }
       : {};
+    const where: Prisma.DelegationWhereInput = {
+      AND: [search, scope === 'ALL' ? {} : { siteId: { in: scope } }],
+    };
     const [data, total] = await this.database.$transaction([
       this.database.delegation.findMany({
         where,
@@ -103,7 +116,8 @@ export class DelegationService {
     return { data, total, skip, take };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, actingUserId: string) {
+    const scope = await this.adminScope(actingUserId);
     const delegation = await this.database.delegation.findUnique({
       where: { id },
       include,
@@ -111,6 +125,7 @@ export class DelegationService {
     if (!delegation) {
       throw new NotFoundException(`Delegation ${id} not found`);
     }
+    assertInScope(scope, delegation.siteId);
     return delegation;
   }
 
@@ -119,8 +134,8 @@ export class DelegationService {
     entityType: 'delegation',
     operation: 'UPDATE',
   })
-  async update(id: string, dto: UpdateDelegationDto) {
-    const existing = await this.findOne(id);
+  async update(id: string, dto: UpdateDelegationDto, actingUserId: string) {
+    const existing = await this.findOne(id, actingUserId);
     const { startDate, endDate, ...data } = dto;
     const shape: DelegationShape = {
       delegantId: dto.delegantId ?? existing.delegantId,
@@ -130,6 +145,7 @@ export class DelegationService {
       startDate: startDate ? new Date(startDate) : existing.startDate,
       endDate: endDate ? new Date(endDate) : existing.endDate,
     };
+    assertInScope(await this.adminScope(actingUserId), shape.siteId);
     await this.assertValid(shape, id);
 
     return this.database.delegation.update({
@@ -148,17 +164,27 @@ export class DelegationService {
     entityType: 'delegation',
     operation: 'DELETE',
   })
-  async remove(id: string) {
-    await this.findOne(id);
+  async remove(id: string, actingUserId: string) {
+    await this.findOne(id, actingUserId);
     await this.database.delegation.delete({ where: { id } });
+  }
+
+  // Managing delegations is an administration act over people: same scope
+  // as user management — a site's responsible only touches their site's.
+  private async adminScope(actingUserId: string): Promise<SiteScopeList> {
+    const scope = await this.rbac.administeredSites(
+      actingUserId,
+      PermissionCode.AdminManageUsers,
+    );
+    assertAdministers(scope);
+    return scope;
   }
 
   /**
    * A delegation only makes sense if the receiver can actually stand in for
-   * the giver: real, active people, a real role, and a site the receiver is
-   * already attached to (circuit eligibility is resolved through site
-   * assignments, so a delegation to someone outside the site would grant
-   * nothing).
+   * the giver: real, active people, a real role, and the site both of them
+   * belong to (circuit eligibility is resolved through the users' sites, so
+   * a delegation to someone outside the site would grant nothing).
    */
   private async assertValid(shape: DelegationShape, ignoreId?: string) {
     if (shape.endDate.getTime() < shape.startDate.getTime()) {
@@ -175,14 +201,7 @@ export class DelegationService {
       }),
       this.database.user.findUnique({
         where: { id: shape.delegataireId },
-        select: {
-          name: true,
-          status: true,
-          assignments: {
-            where: { siteId: shape.siteId },
-            select: { siteId: true },
-          },
-        },
+        select: { name: true, status: true, siteId: true },
       }),
       this.database.role.findUnique({
         where: { id: shape.roleId },
@@ -221,9 +240,31 @@ export class DelegationService {
         `Site "${site.name}" is inactive — no new activity can be recorded on it`,
       );
     }
-    if (delegataire.assignments.length === 0) {
+    if (delegataire.siteId !== shape.siteId) {
       throw new BadRequestException(
-        `${delegataire.name} is not assigned to site "${site.name}" — assign them to it before delegating a role there`,
+        `${delegataire.name} does not belong to site "${site.name}" — a role can only be delegated within the site`,
+      );
+    }
+
+    // One can only hand over what one holds: the role at that site, or the
+    // role globally while belonging there.
+    const held = await this.database.userRole.findFirst({
+      where: {
+        userId: shape.delegantId,
+        roleId: shape.roleId,
+        OR: [
+          { siteId: shape.siteId },
+          {
+            siteId: null,
+            user: { siteId: shape.siteId },
+          },
+        ],
+      },
+      select: { id: true },
+    });
+    if (!held) {
+      throw new BadRequestException(
+        `${delegant.name} does not hold the role "${role.name}" at site "${site.name}" — nothing to delegate`,
       );
     }
 

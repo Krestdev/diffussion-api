@@ -1,0 +1,1034 @@
+{
+  "info": {
+    "name": "Diffusion API — Courrier sortant",
+    "description": "The outgoing-mail flow: draft → validation circuit → sent.\n\nFully automated — folder 0 builds its own site, dossier type, single-step circuit and dossier, all suffixed with a timestamp so it can be re-run freely.\n\nFolder 3 is different: it documents KNOWN ISSUES. Those requests pass on purpose, but print a warning in the Postman console describing what the API does wrong today. They are the regression net for when those bugs get fixed.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "email", "value": "admin@creaconsult.com" },
+    { "key": "password", "value": "Admin@2026!" },
+    { "key": "accessToken", "value": "" },
+    { "key": "adminUserId", "value": "" },
+    { "key": "adminRoleId", "value": "" },
+    { "key": "siteId", "value": "" },
+    { "key": "dossierTypeId", "value": "" },
+    { "key": "circuitId", "value": "" },
+    { "key": "stepId", "value": "" },
+    { "key": "dossierId", "value": "" },
+    { "key": "correspondentId", "value": "" },
+    { "key": "canalId", "value": "" },
+    { "key": "courrierId", "value": "" },
+    { "key": "entrantCourrierId", "value": "" },
+    { "key": "instanceId", "value": "" },
+    { "key": "stamp", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "0. Setup",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('accessToken', pm.response.json().accessToken);",
+                  "pm.collectionVariables.set('stamp', String(Date.now()).slice(-6));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" }
+          }
+        },
+        {
+          "name": "Who am I",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const me = pm.response.json();",
+                  "pm.collectionVariables.set('adminUserId', me.id);",
+                  "pm.test('can draft outgoing mail', () => pm.expect(me.permissions).to.include('COURRIER_WRITE_SORTANT'));",
+                  "pm.test('can send', () => pm.expect(me.permissions).to.include('COURRIER_SEND'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/auth/me", "host": ["{{baseUrl}}"], "path": ["auth", "me"] }
+          }
+        },
+        {
+          "name": "Find the Administrateur role",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const role = pm.response.json().data.find((r) => r.name === 'Administrateur');",
+                  "pm.collectionVariables.set('adminRoleId', role.id);",
+                  "pm.test('role found', () => pm.expect(role).to.be.an('object'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/roles?take=100",
+              "host": ["{{baseUrl}}"],
+              "path": ["roles"],
+              "query": [{ "key": "take", "value": "100" }]
+            }
+          }
+        },
+        {
+          "name": "Create the site",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('siteId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/sites", "host": ["{{baseUrl}}"], "path": ["sites"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Site sortant {{stamp}}\",\n  \"city\": \"Douala\",\n  \"responsibleId\": \"{{adminUserId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create the dossier type",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('dossierTypeId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/dossier-types", "host": ["{{baseUrl}}"], "path": ["dossier-types"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Type sortant {{stamp}}\"\n}" }
+          }
+        },
+        {
+          "name": "Create a single-step circuit",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('circuitId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/circuits", "host": ["{{baseUrl}}"], "path": ["circuits"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Signature courrier sortant {{stamp}}\",\n  \"dossierTypeId\": \"{{dossierTypeId}}\",\n  \"roleId\": \"{{adminRoleId}}\"\n}"
+            },
+            "description": "One step is enough here: a single approval takes the draft to VALIDE."
+          }
+        },
+        {
+          "name": "Add its only step (Signature)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('stepId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/circuit-steps", "host": ["{{baseUrl}}"], "path": ["circuit-steps"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"circuitId\": \"{{circuitId}}\",\n  \"order\": 1,\n  \"actionType\": \"SIGNATURE\",\n  \"roleId\": \"{{adminRoleId}}\"\n}"
+            },
+            "description": "No parentStepId — so a rejection here cancels the run and sends the draft back to A_CORRIGER."
+          }
+        },
+        {
+          "name": "Create the dossier",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('dossierId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/dossiers", "host": ["{{baseUrl}}"], "path": ["dossiers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Dossier sortant {{stamp}}\",\n  \"siteId\": \"{{siteId}}\",\n  \"typeId\": \"{{dossierTypeId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Create a canal (how the letter leaves)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('canalId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/canaux", "host": ["{{baseUrl}}"], "path": ["canaux"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Porteur {{stamp}}\"\n}" }
+          }
+        },
+        {
+          "name": "Create the addressee (correspondent)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('correspondentId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/correspondents", "host": ["{{baseUrl}}"], "path": ["correspondents"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Mairie de Douala {{stamp}}\",\n  \"city\": \"Douala\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Draft → circuit → sent",
+      "item": [
+        {
+          "name": "Draft the outgoing courrier",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('courrierId', body.id);",
+                  "pm.test('number generated (M-xxxxxx)', () => pm.expect(body.number).to.match(/^M-/));",
+                  "pm.test('a SORTANT courrier starts as BROUILLON', () => pm.expect(body.status).to.eql('BROUILLON'));",
+                  "pm.test('direction kept', () => pm.expect(body.direction).to.eql('SORTANT'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/courriers", "host": ["{{baseUrl}}"], "path": ["courriers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dossierId\": \"{{dossierId}}\",\n  \"direction\": \"SORTANT\",\n  \"subject\": \"Reponse a la demande de raccordement {{stamp}}\",\n  \"correspondentId\": \"{{correspondentId}}\",\n  \"canalId\": \"{{canalId}}\",\n  \"copies\": 2\n}"
+            },
+            "description": "⚠️ This endpoint is gated by COURRIER_REGISTER_ENTRANT even for SORTANT — see folder 3."
+          }
+        },
+        {
+          "name": "Edit the draft",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('subject updated', () => pm.expect(pm.response.json().subject).to.include('revise'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/courriers/{{courrierId}}", "host": ["{{baseUrl}}"], "path": ["courriers", "{{courrierId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"subject\": \"Reponse revise {{stamp}}\",\n  \"reference\": \"REF-{{stamp}}\"\n}" },
+            "description": "A draft is editable while it is BROUILLON or A_CORRIGER."
+          }
+        },
+        {
+          "name": "RULE — sending a draft → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('message names the expected status', () => pm.expect(pm.response.json().message).to.include('VALIDE'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "send"]
+            },
+            "description": "Only an approved (VALIDE) courrier can be sent."
+          }
+        },
+        {
+          "name": "RULE — transmit is for incoming mail → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "console.log('transmit() expects RECU/ENREGISTRE — a BROUILLON is refused.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/transmit",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "transmit"]
+            }
+          }
+        },
+        {
+          "name": "Submit for verification → EN_CIRCUIT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('status EN_CIRCUIT', () => pm.expect(pm.response.json().status).to.eql('EN_CIRCUIT'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/submit-for-verification",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "submit-for-verification"]
+            },
+            "description": "Requires COURRIER_WRITE_SORTANT. For SORTANT it starts from BROUILLON or A_CORRIGER."
+          }
+        },
+        {
+          "name": "RULE — editing a courrier in circuit → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('message', () => pm.expect(pm.response.json().message).to.include('no longer be edited'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/courriers/{{courrierId}}", "host": ["{{baseUrl}}"], "path": ["courriers", "{{courrierId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"subject\": \"Tentative de modification\"\n}" }
+          }
+        },
+        {
+          "name": "Fetch the circuit instance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const rows = pm.response.json();",
+                  "const list = Array.isArray(rows) ? rows : rows.data;",
+                  "pm.test('an instance exists', () => pm.expect(list.length).to.be.above(0));",
+                  "pm.collectionVariables.set('instanceId', list[0].id);",
+                  "pm.test('single-step circuit, at step 1', () => {",
+                  "  pm.expect(list[0].currentStep.order).to.eql(1);",
+                  "  pm.expect(list[0].circuit.steps.length).to.eql(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances?courrierId={{courrierId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances"],
+              "query": [{ "key": "courrierId", "value": "{{courrierId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Approve the signature step → VALIDE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('circuit COMPLETED', () => pm.expect(pm.response.json().status).to.eql('COMPLETED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances/{{instanceId}}/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances", "{{instanceId}}", "decide"]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"VALIDE\"\n}" }
+          }
+        },
+        {
+          "name": "The courrier is VALIDE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status VALIDE', () => pm.expect(pm.response.json().status).to.eql('VALIDE'));",
+                  "console.log('Note: PRET_A_ENVOYER exists in the enum but is never used — see folder 3.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/courriers/{{courrierId}}", "host": ["{{baseUrl}}"], "path": ["courriers", "{{courrierId}}"] }
+          }
+        },
+        {
+          "name": "Send it → ENVOYE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('status ENVOYE', () => pm.expect(body.status).to.eql('ENVOYE'));",
+                  "pm.test('sentAt stamped', () => pm.expect(body.sentAt).to.not.be.null);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "send"]
+            },
+            "description": "Requires COURRIER_SEND."
+          }
+        },
+        {
+          "name": "RULE — sending twice → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "send"]
+            }
+          }
+        },
+        {
+          "name": "RULE — cancelling a sent courrier → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "console.log('Once ENVOYE, the courrier is out of the cancellable statuses.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "cancel"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Rejection loop (A_CORRIGER)",
+      "item": [
+        {
+          "name": "Draft a second courrier",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('courrierId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/courriers", "host": ["{{baseUrl}}"], "path": ["courriers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dossierId\": \"{{dossierId}}\",\n  \"direction\": \"SORTANT\",\n  \"subject\": \"Lettre a corriger {{stamp}}\",\n  \"correspondentId\": \"{{correspondentId}}\",\n  \"canalId\": \"{{canalId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Submit it",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/submit-for-verification",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "submit-for-verification"]
+            }
+          }
+        },
+        {
+          "name": "Fetch its instance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const rows = pm.response.json();",
+                  "const list = Array.isArray(rows) ? rows : rows.data;",
+                  "pm.collectionVariables.set('instanceId', list[0].id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances?courrierId={{courrierId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances"],
+              "query": [{ "key": "courrierId", "value": "{{courrierId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Reject the signature → circuit CANCELLED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('CANCELLED (the step has no fallback)', () => pm.expect(pm.response.json().status).to.eql('CANCELLED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances/{{instanceId}}/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances", "{{instanceId}}", "decide"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"REJETE\",\n  \"motif\": \"Formulation a revoir, ajouter la reference du marche\"\n}"
+            }
+          }
+        },
+        {
+          "name": "The draft is back to A_CORRIGER",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status A_CORRIGER', () => pm.expect(pm.response.json().status).to.eql('A_CORRIGER'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/courriers/{{courrierId}}", "host": ["{{baseUrl}}"], "path": ["courriers", "{{courrierId}}"] }
+          }
+        },
+        {
+          "name": "Correct the letter (editable again)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('200 OK', () => pm.response.to.have.status(200));"]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/courriers/{{courrierId}}", "host": ["{{baseUrl}}"], "path": ["courriers", "{{courrierId}}"] },
+            "body": { "mode": "raw", "raw": "{\n  \"subject\": \"Lettre corrigee {{stamp}}\",\n  \"reference\": \"MARCHE-{{stamp}}\"\n}" }
+          }
+        },
+        {
+          "name": "Resubmit → a fresh circuit instance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('back EN_CIRCUIT', () => pm.expect(pm.response.json().status).to.eql('EN_CIRCUIT'));",
+                  "console.log('A_CORRIGER is one of the statuses a SORTANT courrier may re-enter a circuit from.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/submit-for-verification",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "submit-for-verification"]
+            }
+          }
+        },
+        {
+          "name": "Cancel it instead of approving → ANNULE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('status ANNULE', () => pm.expect(pm.response.json().status).to.eql('ANNULE'));",
+                  "console.log('EN_CIRCUIT is cancellable for an outgoing courrier.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/cancel",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "cancel"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. KNOWN ISSUES (documented, not yet fixed)",
+      "item": [
+        {
+          "name": "ISSUE — no addressee is required before sending",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 — accepted today', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('courrierId', body.id);",
+                  "pm.test('no correspondent, no canal', () => {",
+                  "  pm.expect(body.correspondentId).to.be.null;",
+                  "  pm.expect(body.canalId).to.be.null;",
+                  "});",
+                  "console.warn('ISSUE: an outgoing courrier with no addressee and no channel can be drafted, approved and SENT. submit-for-verification should require both.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/courriers", "host": ["{{baseUrl}}"], "path": ["courriers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dossierId\": \"{{dossierId}}\",\n  \"direction\": \"SORTANT\",\n  \"subject\": \"Lettre sans destinataire {{stamp}}\"\n}"
+            },
+            "description": "When this is fixed, the expected failure moves to submit-for-verification, not to creation."
+          }
+        },
+        {
+          "name": "ISSUE — closing an outgoing courrier is impossible",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 — close() only accepts the incoming statuses', () => pm.response.to.have.status(400));",
+                  "console.warn('ISSUE: an outgoing courrier can never reach CLOTURE. Decide whether ENVOYE is terminal or a closing step is needed.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/close",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "close"]
+            }
+          }
+        },
+        {
+          "name": "ISSUE — an INCOMING courrier can be 'sent' (setup)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('entrantCourrierId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/courriers", "host": ["{{baseUrl}}"], "path": ["courriers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dossierId\": \"{{dossierId}}\",\n  \"direction\": \"ENTRANT\",\n  \"subject\": \"Courrier recu {{stamp}}\",\n  \"correspondentId\": \"{{correspondentId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "ISSUE — transmit it",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{entrantCourrierId}}/transmit",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{entrantCourrierId}}", "transmit"]
+            }
+          }
+        },
+        {
+          "name": "ISSUE — submit it to the circuit",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{entrantCourrierId}}/submit-for-verification",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{entrantCourrierId}}", "submit-for-verification"]
+            },
+            "description": "Note this needs COURRIER_WRITE_SORTANT even though the courrier is incoming — another mis-scoped permission."
+          }
+        },
+        {
+          "name": "ISSUE — approve it (becomes VALIDE)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const rows = pm.response.json();",
+                  "const list = Array.isArray(rows) ? rows : rows.data;",
+                  "const instance = list[0];",
+                  "pm.sendRequest({",
+                  "  url: pm.collectionVariables.get('baseUrl') + '/circuit-instances/' + instance.id + '/decide',",
+                  "  method: 'POST',",
+                  "  header: {",
+                  "    'Content-Type': 'application/json',",
+                  "    Authorization: 'Bearer ' + pm.collectionVariables.get('accessToken'),",
+                  "  },",
+                  "  body: { mode: 'raw', raw: JSON.stringify({ decision: 'VALIDE' }) },",
+                  "}, (err, res) => console.log('approved → ' + (res ? res.code : err)));",
+                  "pm.test('instance fetched', () => pm.expect(instance).to.be.an('object'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances?courrierId={{entrantCourrierId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances"],
+              "query": [{ "key": "courrierId", "value": "{{entrantCourrierId}}" }]
+            }
+          }
+        },
+        {
+          "name": "ISSUE — /send accepts an INCOMING courrier",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 today — should be 400 once fixed', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('an ENTRANT courrier got marked ENVOYE', () => {",
+                  "  pm.expect(body.direction).to.eql('ENTRANT');",
+                  "  pm.expect(body.status).to.eql('ENVOYE');",
+                  "});",
+                  "console.warn('ISSUE: send() checks the status but not the direction — a letter you RECEIVED can be marked as sent. It should refuse anything that is not SORTANT.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{entrantCourrierId}}/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{entrantCourrierId}}", "send"]
+            },
+            "description": "Run the three preceding requests first. When the fix lands, flip the expectation to 400."
+          }
+        },
+        {
+          "name": "ISSUE — PRET_A_ENVOYER is never used",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const statuses = pm.response.json().data.map((c) => c.status);",
+                  "pm.test('no courrier is ever PRET_A_ENVOYER', () => pm.expect(statuses).to.not.include('PRET_A_ENVOYER'));",
+                  "console.warn('ISSUE: CourrierStatus.PRET_A_ENVOYER exists but nothing writes it — send() goes straight from VALIDE to ENVOYE. Either implement the step or drop the value.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers?dossierId={{dossierId}}&take=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers"],
+              "query": [
+                { "key": "dossierId", "value": "{{dossierId}}" },
+                { "key": "take", "value": "50" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "ISSUE — a décharge can be stamped on outgoing mail",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 today', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('stamped', () => pm.expect(body.dischargedStamp).to.be.true);",
+                  "console.warn('ISSUE: discharge() only refuses status RECU, so it applies to SORTANT mail too. A décharge on outgoing mail is proof of DELIVERY and needs its own rule.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/discharge",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "discharge"]
+            },
+            "body": { "mode": "raw", "raw": "{}" }
+          }
+        }
+      ]
+    }
+  ]
+}

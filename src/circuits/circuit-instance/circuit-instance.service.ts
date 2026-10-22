@@ -7,17 +7,25 @@ import {
 } from '@nestjs/common';
 import {
   CircuitInstanceStatus,
+  CourrierDirection,
   CourrierStatus,
   NotificationCanal,
   Prisma,
   ValidationDecision,
 } from '../../../generated/prisma/client';
+import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
+import { dateRange } from '../../common/utils/date-range';
 import { assertDossierOpenForActivity } from '../../common/utils/dossier-lifecycle';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { CreateCircuitInstanceDto } from './dto/create-circuit-instance.dto';
 import { DecideCircuitInstanceDto } from './dto/decide-circuit-instance.dto';
+import {
+  ApprobationTab,
+  ApprobationTarget,
+  FindApprobationQueryDto,
+} from './dto/find-approbation.query.dto';
 import {
   DEFAULT_CIRCUIT_TAKE,
   FindCircuitInstancesQueryDto,
@@ -99,11 +107,25 @@ type TargetContext = Prisma.CircuitInstanceGetPayload<{
   include: typeof targetContextInclude;
 }>;
 
+// The Approbation table's "Type" column, as a filter.
+function targetTypeWhere(
+  target: ApprobationTarget,
+): Prisma.CircuitInstanceWhereInput {
+  switch (target) {
+    case 'COURRIER_ENTRANT':
+      return { courrier: { direction: CourrierDirection.ENTRANT } };
+    case 'COURRIER_SORTANT':
+      return { courrier: { direction: CourrierDirection.SORTANT } };
+    case 'DOCUMENT':
+      return { documentId: { not: null } };
+  }
+}
+
 function resolveOwnerAndSite(instance: TargetContext) {
   const siteId =
-    instance.courrier?.dossier.siteId ??
+    instance.courrier?.dossier?.siteId ??
     instance.document?.dossier?.siteId ??
-    instance.document?.courrier?.dossier.siteId ??
+    instance.document?.courrier?.dossier?.siteId ??
     null;
   const ownerId =
     instance.courrier?.ownerId ?? instance.document?.ownerId ?? null;
@@ -241,31 +263,12 @@ export class CircuitInstanceService {
       status: query.status,
     };
 
-    // "awaiting my decision" inbox: only IN_PROGRESS instances where the
-    // calling user holds the required role at the target's site for the
-    // *current* step.
     if (query.awaitingMyDecision && userId) {
-      // Fetch all (roleId, siteId) pairs the user can act on right now.
-      const eligiblePairs = await this.rbac.eligibleRoleSitePairs(userId);
-      if (eligiblePairs.length === 0) {
+      const awaiting = await this.awaitingDecisionWhere(userId);
+      if (!awaiting) {
         return { data: [], total: 0, skip, take };
       }
-
-      where = {
-        ...where,
-        status: CircuitInstanceStatus.IN_PROGRESS,
-        AND: [
-          {
-            OR: eligiblePairs.map(({ roleId, siteId }) => ({
-              currentStep: { roleId },
-              OR: [
-                { courrier: { dossier: { siteId } } },
-                { document: { dossier: { siteId } } },
-              ],
-            })),
-          },
-        ],
-      };
+      where = { ...where, AND: [awaiting] };
     }
 
     const [data, total] = await this.database.$transaction([
@@ -280,6 +283,133 @@ export class CircuitInstanceService {
     ]);
 
     return { data, total, skip, take };
+  }
+
+  /**
+   * "Awaiting my decision": IN_PROGRESS instances whose *current* step's
+   * role the user holds at the target's site (directly or by delegation).
+   * Null when the user can't act anywhere — callers short-circuit to an
+   * empty result rather than query with an always-false filter.
+   */
+  private async awaitingDecisionWhere(
+    userId: string,
+  ): Promise<Prisma.CircuitInstanceWhereInput | null> {
+    const eligiblePairs = await this.rbac.eligibleRoleSitePairs(userId);
+    if (eligiblePairs.length === 0) return null;
+    return {
+      status: CircuitInstanceStatus.IN_PROGRESS,
+      OR: eligiblePairs.map(({ roleId, siteId }) => ({
+        currentStep: { roleId },
+        OR: [
+          { courrier: { dossier: { siteId } } },
+          { document: { dossier: { siteId } } },
+        ],
+      })),
+    };
+  }
+
+  /**
+   * Everything the Approbation page needs in one call: one tab of rows
+   * (see APPROBATION_TABS), filtered and paginated, plus each tab's count.
+   * Every row is something the caller can decide or already decided, so no
+   * separate visibility rule applies. `metrics` ignore the filters, so the
+   * tab counts stay put while the user searches.
+   */
+  async findApprobation(query: FindApprobationQueryDto, userId: string) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+    const tab = query.tab ?? 'pending';
+
+    // `null` = the caller holds no role anywhere: nothing is pending for them.
+    const pendingWhere = await this.awaitingDecisionWhere(userId);
+    const decidedByMe = (
+      decisions: ValidationDecision[],
+    ): Prisma.CircuitInstanceWhereInput => ({
+      validations: {
+        some: { validatorId: userId, decision: { in: decisions } },
+      },
+    });
+    const tabWhere: Record<
+      ApprobationTab,
+      Prisma.CircuitInstanceWhereInput | null
+    > = {
+      pending: pendingWhere,
+      accepted: decidedByMe([ValidationDecision.VALIDE]),
+      rejected: decidedByMe([
+        ValidationDecision.REJETE,
+        ValidationDecision.CORRECTIONS_DEMANDEES,
+      ]),
+    };
+
+    const created = dateRange(query.createdFrom, query.createdTo);
+    const contains = query.search
+      ? { contains: query.search, mode: 'insensitive' as const }
+      : undefined;
+    const filters: (Prisma.CircuitInstanceWhereInput | undefined)[] = [
+      contains && {
+        OR: [
+          { courrier: { number: contains } },
+          { courrier: { subject: contains } },
+          { courrier: { reference: contains } },
+          { document: { originalName: contains } },
+          { dossier: { number: contains } },
+          { dossier: { title: contains } },
+        ],
+      },
+      query.targetType && targetTypeWhere(query.targetType),
+      query.priority && { dossier: { priority: query.priority } },
+      created && {
+        OR: [
+          { courrier: { createdAt: created } },
+          { document: { createdAt: created } },
+        ],
+      },
+    ];
+
+    const selected = tabWhere[tab];
+    const where: Prisma.CircuitInstanceWhereInput | null = selected && {
+      AND: [
+        selected,
+        {
+          circuitId: query.circuitId,
+          dossierId: query.dossierId,
+        },
+        ...filters.filter((filter) => filter !== undefined),
+      ],
+    };
+
+    const count = (filter: Prisma.CircuitInstanceWhereInput | null) =>
+      filter
+        ? this.database.circuitInstance.count({ where: filter })
+        : Promise.resolve(0);
+    const [rows, total, pending, accepted, rejected] = await Promise.all([
+      where
+        ? this.database.circuitInstance.findMany({
+            where,
+            include: instanceInclude,
+            // Newest targets first. Instances have no timestamp of their
+            // own; whichever of courrier/document is set orders the row.
+            orderBy: [
+              { courrier: { createdAt: 'desc' } },
+              { document: { createdAt: 'desc' } },
+            ],
+            skip,
+            take,
+          })
+        : Promise.resolve([]),
+      count(where),
+      count(tabWhere.pending),
+      count(tabWhere.accepted),
+      count(tabWhere.rejected),
+    ]);
+
+    return {
+      data: rows,
+      total,
+      skip,
+      take,
+      metrics: { pending, accepted, rejected },
+    };
   }
 
   async findOne(id: string) {
@@ -334,7 +464,9 @@ export class CircuitInstanceService {
       throw new BadRequestException(
         document
           ? 'This document is not attached (directly, or via its courrier) to a dossier — a circuit cannot resolve a dossier type or site from it'
-          : 'Unable to resolve a dossier for this target',
+          : courrier
+            ? `Courrier ${courrier.number} must be attached to a dossier before it can enter its circuit`
+            : 'Unable to resolve a dossier for this target',
       );
     }
     const dossier = await this.database.dossier.findUnique({

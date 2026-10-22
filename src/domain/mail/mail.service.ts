@@ -18,10 +18,21 @@ import {
 } from '../../common/utils/dossier-lifecycle';
 import { assertCorrespondentActive } from '../../common/utils/referential-guards';
 import { DatabaseService } from '../../database/database.service';
+import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
+import { dateRange } from '../../common/utils/date-range';
+import { visibleDossierWhere } from '../../common/utils/dossier-visibility';
+import { FindIncomingMailsQueryDto } from './dto/find-incoming-mails.query.dto';
+import {
+  FindOutgoingMailsQueryDto,
+  OUTGOING_STATUS_GROUPS,
+  OutgoingStatusGroup,
+} from './dto/find-outgoing-mails.query.dto';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { CircuitInstanceService } from '../../circuits/circuit-instance/circuit-instance.service';
 import { CreateMailDto } from './dto/create-mail.dto';
+import { CreateOutgoingMailDto } from './dto/create-outgoing-mail.dto';
+import { StorageService } from '../../storage/storage.service';
 import { FindMailsQueryDto } from './dto/find-mails.query.dto';
 import { UpdateMailDto } from './dto/update-mail.dto';
 
@@ -33,6 +44,10 @@ const mailInclude = {
   // `priority` is included so the frontend can show a courrier's urgency —
   // Courrier has no priority of its own, it inherits its dossier's.
   dossier: { select: { id: true, number: true, title: true, priority: true } },
+  respondsTo: {
+    select: { id: true, number: true, subject: true, direction: true },
+  },
+  documents: { orderBy: { createdAt: 'asc' } },
 } satisfies Prisma.CourrierInclude;
 
 const courrierAccessInclude = {
@@ -55,6 +70,13 @@ const ENTRANT_OPEN_STATUSES: CourrierStatus[] = [
   CourrierStatus.ENREGISTRE,
   CourrierStatus.TRANSMIS,
   CourrierStatus.EN_TRAITEMENT,
+];
+
+// Entrant statuses it can be marked fully treated from: still open, or
+// approved by its circuit (which leaves it VALIDE).
+const ENTRANT_CLOSABLE_STATUSES: CourrierStatus[] = [
+  ...ENTRANT_OPEN_STATUSES,
+  CourrierStatus.VALIDE,
 ];
 
 // Sortant workflow: statuses before it's been sent — cancellable.
@@ -86,16 +108,24 @@ export class MailService {
     private readonly database: DatabaseService,
     private readonly circuitInstanceService: CircuitInstanceService,
     private readonly rbac: RbacService,
+    private readonly storage: StorageService,
   ) {}
 
   // (dto already carries ownerId straight through via `...data` below —
   // Prisma accepts the scalar FK field directly on CourrierCreateInput.)
-  async create(dto: CreateMailDto, createdById: string) {
+  async create(
+    dto: CreateMailDto,
+    createdById: string,
+    files?: Express.Multer.File[],
+  ) {
     await assertDossierOpenForActivity(this.database, dto.dossierId);
     if (dto.correspondentId) {
       await assertCorrespondentActive(this.database, dto.correspondentId);
     }
-    const { receivedAt, ...data } = dto;
+    if (dto.respondsToId) {
+      await this.assertRespondsToValid(dto.respondsToId);
+    }
+    const { receivedAt, documents: documentMetas, ...data } = dto;
     const courrier = await createWithUniqueReference('M', (number) =>
       this.database.courrier.create({
         data: {
@@ -111,8 +141,55 @@ export class MailService {
         include: mailInclude,
       }),
     );
+
+    if (files && files.length > 0) {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const meta = documentMetas?.[i];
+        const { key } = await this.storage.upload(file.buffer, {
+          originalName: file.originalname,
+          contentType: file.mimetype,
+          prefix: `courriers/${courrier.id}`,
+        });
+        await this.database.document.create({
+          data: {
+            originalName: file.originalname,
+            name: meta?.name ?? file.originalname,
+            storageKey: key,
+            mimeType: file.mimetype,
+            sizeBytes: file.size,
+            courrierId: courrier.id,
+            uploadedById: createdById,
+          },
+        });
+      }
+    }
+
     await markDossierInProgress(this.database, dto.dossierId);
+
+    if (files && files.length > 0) {
+      return this.findOne(courrier.id);
+    }
+
     return courrier;
+  }
+
+  // Sortant draft from its subject alone: a BROUILLON with its internal
+  // number, not yet attached to a dossier. Everything else, dossier
+  // included, is completed through update() before submitForVerification().
+  async createOutgoingDraft(dto: CreateOutgoingMailDto, createdById: string) {
+    return createWithUniqueReference('M', (number) =>
+      this.database.courrier.create({
+        data: {
+          subject: dto.subject,
+          number,
+          direction: CourrierDirection.SORTANT,
+          status: CourrierStatus.BROUILLON,
+          createdById,
+        },
+        include: mailInclude,
+      }),
+    );
   }
 
   async findAll(query: FindMailsQueryDto) {
@@ -138,6 +215,127 @@ export class MailService {
     return { data, total, skip: query.skip ?? 0, take: query.take ?? 20 };
   }
 
+  /**
+   * Everything the "Courriers entrants" page needs in one call: the
+   * filtered, paginated list plus the page's metric cards. Only courriers
+   * in dossiers the caller can see are returned (same rule as the dossier
+   * list). `metrics` ignore the filters, so the cards stay put while the
+   * user searches.
+   */
+  async findIncoming(query: FindIncomingMailsQueryDto, userId: string) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+    const visible = visibleMailsWhere(
+      CourrierDirection.ENTRANT,
+      userId,
+      await this.readableSites(userId),
+    );
+    const received = dateRange(query.receivedFrom, query.receivedTo);
+    const where: Prisma.CourrierWhereInput = {
+      ...visible,
+      status: query.status,
+      dossierId: query.dossierId,
+      correspondentId: query.correspondentId,
+      natureId: query.natureId,
+      ownerId: query.ownerId,
+      AND: [
+        searchWhere(query.search),
+        // No reception date recorded: fall back to the registration date,
+        // the same one the list displays.
+        received && {
+          OR: [
+            { receivedAt: received },
+            { receivedAt: null, createdAt: received },
+          ],
+        },
+      ].filter((filter) => filter !== undefined),
+    };
+
+    const [data, total, allCount, archivedCount] =
+      await this.database.$transaction([
+        this.database.courrier.findMany({
+          where,
+          include: mailInclude,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take,
+        }),
+        this.database.courrier.count({ where }),
+        this.database.courrier.count({ where: visible }),
+        this.database.courrier.count({
+          where: { ...visible, status: CourrierStatus.ARCHIVE },
+        }),
+      ]);
+
+    return {
+      data,
+      total,
+      skip,
+      take,
+      metrics: { total: allCount, archived: archivedCount },
+    };
+  }
+
+  /**
+   * Everything the "Courriers sortants" page needs in one call: the rows of
+   * one tab (`group`), paginated server-side, plus each tab's count. Same
+   * visibility rule as findIncoming. `metrics` ignore the filters, so the
+   * tab counts and cards stay put while the user searches.
+   */
+  async findOutgoing(query: FindOutgoingMailsQueryDto, userId: string) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+    const visible = visibleMailsWhere(
+      CourrierDirection.SORTANT,
+      userId,
+      await this.readableSites(userId),
+    );
+    const created = dateRange(query.createdFrom, query.createdTo);
+    const where: Prisma.CourrierWhereInput = {
+      ...visible,
+      status: query.status,
+      dossierId: query.dossierId,
+      correspondentId: query.correspondentId,
+      natureId: query.natureId,
+      ownerId: query.ownerId,
+      createdAt: created,
+      AND: [
+        searchWhere(query.search),
+        query.group && {
+          status: { in: [...OUTGOING_STATUS_GROUPS[query.group]] },
+        },
+      ].filter((filter) => filter !== undefined),
+    };
+    const inGroup = (group: OutgoingStatusGroup) => ({
+      ...visible,
+      status: { in: [...OUTGOING_STATUS_GROUPS[group]] },
+    });
+
+    const [data, total, pending, approved, rejected, allCount] =
+      await this.database.$transaction([
+        this.database.courrier.findMany({
+          where,
+          include: mailInclude,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take,
+        }),
+        this.database.courrier.count({ where }),
+        this.database.courrier.count({ where: inGroup('pending') }),
+        this.database.courrier.count({ where: inGroup('approved') }),
+        this.database.courrier.count({ where: inGroup('rejected') }),
+        this.database.courrier.count({ where: visible }),
+      ]);
+
+    return {
+      data,
+      total,
+      skip,
+      take,
+      metrics: { pending, approved, rejected, total: allCount },
+    };
+  }
+
   async findOne(id: string) {
     const courrier = await this.database.courrier.findUnique({
       where: { id },
@@ -149,10 +347,27 @@ export class MailService {
     return courrier;
   }
 
+  // Checked up front so a bad id is a 400, not a foreign-key 500. Only a
+  // direct self-reference is refused — longer reply chains are fine.
+  private async assertRespondsToValid(respondsToId: string, selfId?: string) {
+    if (respondsToId === selfId) {
+      throw new BadRequestException('A courrier cannot respond to itself');
+    }
+    const target = await this.database.courrier.findUnique({
+      where: { id: respondsToId },
+      select: { id: true },
+    });
+    if (!target) {
+      throw new BadRequestException(`Courrier ${respondsToId} not found`);
+    }
+  }
+
   async update(id: string, dto: UpdateMailDto) {
     const courrier = await this.ensureEditable(id);
-    if (dto.dossierId && dto.dossierId !== courrier.dossierId) {
-      await assertDossierOpenForActivity(this.database, dto.dossierId);
+    const dossierChanged =
+      dto.dossierId !== undefined && dto.dossierId !== courrier.dossierId;
+    if (dossierChanged) {
+      await assertDossierOpenForActivity(this.database, dto.dossierId!);
     }
     if (
       dto.correspondentId &&
@@ -160,8 +375,11 @@ export class MailService {
     ) {
       await assertCorrespondentActive(this.database, dto.correspondentId);
     }
+    if (dto.respondsToId && dto.respondsToId !== courrier.respondsToId) {
+      await this.assertRespondsToValid(dto.respondsToId, id);
+    }
     const { receivedAt, ...data } = dto;
-    return this.database.courrier.update({
+    const updated = await this.database.courrier.update({
       where: { id: courrier.id },
       data: {
         ...data,
@@ -169,6 +387,10 @@ export class MailService {
       },
       include: mailInclude,
     });
+    if (dossierChanged) {
+      await markDossierInProgress(this.database, dto.dossierId!);
+    }
+    return updated;
   }
 
   async remove(id: string) {
@@ -220,7 +442,7 @@ export class MailService {
       throw new NotFoundException(`Courrier ${id} not found`);
     }
     const isCreator = courrier.createdById === actingUserId;
-    const isSiteAdmin = courrier.dossier.site.responsibleId === actingUserId;
+    const isSiteAdmin = courrier.dossier?.site.responsibleId === actingUserId;
     const isPlatformAdmin = await this.rbac.hasPermission(
       actingUserId,
       PermissionCode.AdminManageCircuits,
@@ -257,7 +479,10 @@ export class MailService {
 
   // Entrant: mark a received courrier as fully treated (10.2.4.8).
   async close(id: string) {
-    const courrier = await this.requireStatus(id, ENTRANT_OPEN_STATUSES);
+    const courrier = await this.requireStatus(id, ENTRANT_CLOSABLE_STATUSES);
+    if (courrier.direction !== CourrierDirection.ENTRANT) {
+      throw new BadRequestException('Only an incoming courrier can be closed');
+    }
     return this.setStatus(courrier.id, CourrierStatus.CLOTURE);
   }
 
@@ -336,6 +561,15 @@ export class MailService {
     return this.getAccess(id);
   }
 
+  // Dossiers on the sites where the caller may read courriers.
+  private readableSites(userId: string) {
+    return this.rbac.siteFilter(
+      userId,
+      PermissionCode.CourrierRead,
+      (siteId): Prisma.DossierWhereInput => ({ siteId }),
+    );
+  }
+
   private async requireStatus(id: string, allowed: CourrierStatus[]) {
     const courrier = await this.findOne(id);
     if (!allowed.includes(courrier.status)) {
@@ -363,4 +597,30 @@ export class MailService {
     }
     return courrier;
   }
+}
+
+// Incoming/outgoing courriers the caller may see: those in dossiers visible
+// to them (see visibleDossierWhere) on the sites they may read courriers at
+// (`sites`), plus their own drafts not yet attached to a dossier.
+function visibleMailsWhere(
+  direction: CourrierDirection,
+  userId: string,
+  sites: Prisma.DossierWhereInput,
+): Prisma.CourrierWhereInput {
+  return {
+    direction,
+    OR: [
+      { dossier: { AND: [visibleDossierWhere(userId), sites] } },
+      { dossierId: null, createdById: userId },
+    ],
+  };
+}
+
+// Free text against the subject, internal number or printed reference.
+function searchWhere(search?: string): Prisma.CourrierWhereInput | undefined {
+  if (!search) return undefined;
+  const contains = { contains: search, mode: 'insensitive' as const };
+  return {
+    OR: [{ subject: contains }, { number: contains }, { reference: contains }],
+  };
 }

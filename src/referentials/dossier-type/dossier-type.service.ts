@@ -9,6 +9,10 @@ import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateDossierTypeDto } from './dto/create-dossier-type.dto';
 import { UpdateDossierTypeDto } from './dto/update-dossier-type.dto';
+import {
+  DEFAULT_TAKE,
+  PaginationQueryDto,
+} from '../../common/dto/pagination.query.dto';
 
 @Injectable()
 export class DossierTypeService {
@@ -27,8 +31,26 @@ export class DossierTypeService {
     return this.database.dossierType.create({ data: dto });
   }
 
-  findAll() {
-    return this.database.dossierType.findMany({ orderBy: { name: 'asc' } });
+  async findAll(query: PaginationQueryDto = {}) {
+    const where: Prisma.DossierTypeWhereInput = {
+      name: query.search
+        ? { contains: query.search, mode: 'insensitive' }
+        : undefined,
+    };
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+
+    const [data, total] = await this.database.$transaction([
+      this.database.dossierType.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        skip,
+        take,
+      }),
+      this.database.dossierType.count({ where }),
+    ]);
+
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

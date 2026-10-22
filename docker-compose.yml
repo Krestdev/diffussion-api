@@ -1,0 +1,73 @@
+# Local infrastructure for diffussion-api: PostgreSQL, Redis (BullMQ) and
+# RustFS (S3-compatible file storage).
+#
+# Credentials come from .env (loaded automatically by Docker Compose):
+#   POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB  -> must match DATABASE_URL
+#   RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY            -> same keys the API uses
+#
+# Host ports match the API's .env:
+#   DATABASE_URL    postgresql://...@localhost:5433/diffusion
+#   REDIS_URL       redis://localhost:6380
+#   RUSTFS_ENDPOINT http://localhost:9001   (RustFS web console on :9002)
+#
+# Start:  docker compose up -d
+# Stop:   docker compose down        (add -v to also delete all data)
+
+name: diffussion
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: diffussion-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-diffusion}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: diffussion-redis
+    restart: unless-stopped
+    # Append-only file so queued BullMQ jobs survive a container restart.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: diffussion-rustfs
+    restart: unless-stopped
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?set RUSTFS_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?set RUSTFS_SECRET_KEY in .env}
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+    ports:
+      - "9001:9000" # S3 API  -> RUSTFS_ENDPOINT=http://localhost:9001
+      - "9002:9001" # web console -> http://localhost:9002
+    volumes:
+      - rustfs-data:/data
+
+volumes:
+  postgres-data:
+  redis-data:
+  rustfs-data:

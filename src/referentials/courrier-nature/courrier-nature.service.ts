@@ -9,6 +9,10 @@ import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCourrierNatureDto } from './dto/create-courrier-nature.dto';
 import { UpdateCourrierNatureDto } from './dto/update-courrier-nature.dto';
+import {
+  DEFAULT_TAKE,
+  PaginationQueryDto,
+} from '../../common/dto/pagination.query.dto';
 
 @Injectable()
 export class CourrierNatureService {
@@ -27,10 +31,26 @@ export class CourrierNatureService {
     return this.database.courrierNature.create({ data: dto });
   }
 
-  findAll() {
-    return this.database.courrierNature.findMany({
-      orderBy: { name: 'asc' },
-    });
+  async findAll(query: PaginationQueryDto = {}) {
+    const where: Prisma.CourrierNatureWhereInput = {
+      name: query.search
+        ? { contains: query.search, mode: 'insensitive' }
+        : undefined,
+    };
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+
+    const [data, total] = await this.database.$transaction([
+      this.database.courrierNature.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        skip,
+        take,
+      }),
+      this.database.courrierNature.count({ where }),
+    ]);
+
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

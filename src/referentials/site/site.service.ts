@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -11,10 +12,14 @@ import {
 } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { assertInScope, RbacService } from '../../auth/rbac/rbac.service';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
+import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
+import { FindSitesQueryDto } from './dto/find-sites.query.dto';
 
 const includeResponsible = {
   responsible: {
@@ -28,12 +33,13 @@ export class SiteService {
     private readonly database: DatabaseService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
+    private readonly rbac: RbacService,
   ) {}
 
   @AuditLog({ action: 'site.created', entityType: 'site', operation: 'CREATE' })
   async create(dto: CreateSiteDto) {
     if (dto.responsibleId) {
-      await this.assertEligibleResponsible(dto.responsibleId);
+      await this.assertEligibleResponsible(dto.responsibleId, null);
     }
     return createWithUniqueReference('ST', (code) =>
       this.database.$transaction(async (tx) => {
@@ -42,18 +48,45 @@ export class SiteService {
           include: includeResponsible,
         });
         if (dto.responsibleId) {
-          await this.ensureAssigned(tx, dto.responsibleId, site.id);
+          await this.moveIntoSite(tx, dto.responsibleId, site.id);
         }
         return site;
       }),
     );
   }
 
-  findAll() {
-    return this.database.site.findMany({
-      orderBy: { name: 'asc' },
-      include: includeResponsible,
-    });
+  async findAll(query: FindSitesQueryDto = {}) {
+    const contains = query.search
+      ? { contains: query.search, mode: 'insensitive' as const }
+      : undefined;
+    const where: Prisma.SiteWhereInput = {
+      status: query.status,
+      responsibleId: query.responsibleId,
+      city: query.city
+        ? { contains: query.city, mode: 'insensitive' }
+        : undefined,
+      OR: contains && [
+        { name: contains },
+        { code: contains },
+        { city: contains },
+        { responsible: { name: contains } },
+      ],
+    };
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+
+    const [data, total] = await this.database.$transaction([
+      this.database.site.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        include: includeResponsible,
+        skip,
+        take,
+      }),
+      this.database.site.count({ where }),
+    ]);
+
+    return { data, total, skip, take };
   }
 
   async findOne(uuid: string) {
@@ -68,18 +101,29 @@ export class SiteService {
   }
 
   @AuditLog({ action: 'site.updated', entityType: 'site', operation: 'UPDATE' })
-  async update(uuid: string, dto: UpdateSiteDto) {
+  async update(uuid: string, dto: UpdateSiteDto, actingUserId: string) {
+    const scope = await this.rbac.administeredSites(
+      actingUserId,
+      PermissionCode.AdminManageSites,
+    );
+    assertInScope(scope, uuid);
     const site = await this.findOne(uuid);
     const newResponsibleId =
       dto.responsibleId && dto.responsibleId !== site.responsibleId
         ? dto.responsibleId
         : null;
     if (newResponsibleId) {
-      await this.assertEligibleResponsible(newResponsibleId);
+      // Naming the responsible names the site's administrator.
+      if (scope !== 'ALL') {
+        throw new ForbiddenException(
+          "Only a platform administrator can change a site's responsible",
+        );
+      }
+      await this.assertEligibleResponsible(newResponsibleId, uuid);
     }
     return this.database.$transaction(async (tx) => {
       if (newResponsibleId) {
-        await this.ensureAssigned(tx, newResponsibleId, uuid);
+        await this.moveIntoSite(tx, newResponsibleId, uuid);
       }
       return tx.site.update({
         where: { id: uuid },
@@ -113,14 +157,14 @@ export class SiteService {
   @AuditLog({ action: 'site.deleted', entityType: 'site', operation: 'DELETE' })
   async remove(uuid: string) {
     await this.findOne(uuid);
-    const [dossiers, assignments] = await Promise.all([
+    const [dossiers, users] = await Promise.all([
       this.database.dossier.count({ where: { siteId: uuid } }),
-      this.database.assignment.count({ where: { siteId: uuid } }),
+      this.database.user.count({ where: { siteId: uuid } }),
     ]);
-    if (dossiers > 0 || assignments > 0) {
+    if (dossiers > 0 || users > 0) {
       const blockers = [
         dossiers > 0 && `${dossiers} dossier(s)`,
-        assignments > 0 && `${assignments} user assignment(s)`,
+        users > 0 && `${users} user(s)`,
       ].filter(Boolean);
       throw new ConflictException(
         `Site still owns ${blockers.join(' and ')} — deactivate it instead, or move/remove those first`,
@@ -129,12 +173,22 @@ export class SiteService {
     await this.database.site.delete({ where: { id: uuid } });
   }
 
-  // The site responsible gets authority over the site's courriers/documents
-  // (owner assignment, ...), so it must be an active user.
-  private async assertEligibleResponsible(userId: string) {
+  // The responsible is the site's administrator (users, delegations, audit
+  // of that site — see RbacService.administeredSites): an active user, not
+  // a platform user, and responsible of no other site. `siteId` is the site
+  // they will manage (null while it's being created).
+  private async assertEligibleResponsible(
+    userId: string,
+    siteId: string | null,
+  ) {
     const user = await this.database.user.findUnique({
       where: { id: userId },
-      select: { status: true, name: true },
+      select: {
+        status: true,
+        name: true,
+        siteId: true,
+        managedSites: { select: { id: true, name: true } },
+      },
     });
     if (!user) {
       throw new BadRequestException(`User ${userId} not found`);
@@ -144,19 +198,39 @@ export class SiteService {
         `${user.name} is suspended and cannot be made site responsible`,
       );
     }
+    if (user.siteId === null) {
+      throw new BadRequestException(
+        `${user.name} is a platform administrator and cannot be a site responsible`,
+      );
+    }
+    const other = user.managedSites.find((managed) => managed.id !== siteId);
+    if (other) {
+      throw new BadRequestException(
+        `${user.name} is already the responsible of site "${other.name}"`,
+      );
+    }
   }
 
-  // A site responsible is necessarily attached to the site they manage —
-  // circuit eligibility and notifications are resolved through assignments.
-  private async ensureAssigned(
+  // A site's responsible belongs to it: someone from another site moves in,
+  // with their roles. Delegations they gave or received at their former
+  // site no longer apply there.
+  private async moveIntoSite(
     tx: Prisma.TransactionClient,
     userId: string,
     siteId: string,
   ) {
-    await tx.assignment.upsert({
-      where: { userId_siteId: { userId, siteId } },
-      update: {},
-      create: { userId, siteId },
+    const user = await tx.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: { siteId: true },
     });
+    if (user.siteId === siteId) return;
+    await tx.delegation.deleteMany({
+      where: {
+        siteId: user.siteId ?? undefined,
+        OR: [{ delegantId: userId }, { delegataireId: userId }],
+      },
+    });
+    await tx.userRole.updateMany({ where: { userId }, data: { siteId } });
+    await tx.user.update({ where: { id: userId }, data: { siteId } });
   }
 }

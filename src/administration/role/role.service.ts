@@ -17,33 +17,16 @@ import { UpdateRoleDto } from './dto/update-role.dto';
 
 const roleInclude = {
   rolePermissions: { include: { permission: true } },
-  _count: { select: { userRoles: true } },
+  // One UserRole row per site the role is held at: count distinct users.
+  userRoles: { select: { userId: true }, distinct: ['userId'] },
 } satisfies Prisma.RoleInclude;
 
-// Listing payload: identity + how many users hold the role. The permission
-// grid and the timestamps belong to the detail view (GET /roles/:id), not to
-// a list that may carry a hundred roles.
-const roleListSelect = {
-  id: true,
-  code: true,
-  name: true,
-  description: true,
-  _count: { select: { userRoles: true } },
-} satisfies Prisma.RoleSelect;
-
-function toListView(
-  role: Prisma.RoleGetPayload<{ select: typeof roleListSelect }>,
-) {
-  const { _count, ...rest } = role;
-  return { ...rest, usersCount: _count.userRoles };
-}
-
 function toView(role: Prisma.RoleGetPayload<{ include: typeof roleInclude }>) {
-  const { rolePermissions, _count, ...rest } = role;
+  const { rolePermissions, userRoles, ...rest } = role;
   return {
     ...rest,
     permissions: rolePermissions.map((rp) => rp.permission),
-    usersCount: _count.userRoles,
+    usersCount: userRoles.length,
   };
 }
 
@@ -95,13 +78,16 @@ export class RoleService {
       this.database.role.findMany({
         where,
         orderBy: { name: 'asc' },
-        select: roleListSelect,
+        // Full view, not a slimmed-down list row: the admin table shows the
+        // permission count and creation date, and its edit/view dialogs
+        // open straight from the row's `permissions`.
+        include: roleInclude,
         skip,
         take,
       }),
       this.database.role.count({ where }),
     ]);
-    return { data: roles.map(toListView), total, skip, take };
+    return { data: roles.map(toView), total, skip, take };
   }
 
   async findOne(id: string) {
@@ -155,7 +141,13 @@ export class RoleService {
   async remove(id: string) {
     await this.ensureExists(id);
     const [usersCount, circuits, steps] = await Promise.all([
-      this.database.userRole.count({ where: { roleId: id } }),
+      this.database.userRole
+        .findMany({
+          where: { roleId: id },
+          select: { userId: true },
+          distinct: ['userId'],
+        })
+        .then((holders) => holders.length),
       this.database.circuit.findMany({
         where: { roleId: id },
         select: { name: true },

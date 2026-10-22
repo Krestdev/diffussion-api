@@ -40,15 +40,22 @@ export class CorrespondantService {
   }
 
   async findAll(query: FindCorrespondantsQueryDto) {
+    const contains = query.search
+      ? { contains: query.search, mode: 'insensitive' as const }
+      : undefined;
     const where: Prisma.CorrespondentWhereInput = {
       typeId: query.typeId,
       city: query.city
         ? { contains: query.city, mode: 'insensitive' }
         : undefined,
       status: query.status,
-      name: query.search
-        ? { contains: query.search, mode: 'insensitive' }
-        : undefined,
+      OR: contains && [
+        { name: contains },
+        { code: contains },
+        { email: contains },
+        { phone: contains },
+        { mainContact: contains },
+      ],
     };
 
     const [data, total] = await this.database.$transaction([

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional } from 'class-validator';
+import { IsEnum, IsOptional, IsUUID } from 'class-validator';
 import { UserStatus } from '../../../../generated/prisma/enums';
 import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 
@@ -8,4 +8,12 @@ export class FindUsersQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(UserStatus)
   status?: UserStatus;
+
+  @ApiPropertyOptional({
+    description:
+      'Only the users of this site. A site administrator only ever sees their own site.',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
 }

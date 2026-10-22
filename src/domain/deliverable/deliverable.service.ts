@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -8,7 +9,13 @@ import {
   LivrableStatus,
   Prisma,
 } from '../../../generated/prisma/client';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RbacService } from '../../auth/rbac/rbac.service';
 import { assertDossierOpenForActivity } from '../../common/utils/dossier-lifecycle';
+import {
+  lastLivrableValidation,
+  withLivrableHistory,
+} from '../../common/utils/livrable-history';
 import { DatabaseService } from '../../database/database.service';
 import { CreateDeliverableDto } from './dto/create-deliverable.dto';
 import { FindDeliverableQueryDto } from './dto/find-deliverable-query.dto';
@@ -17,11 +24,28 @@ import { UpdateDeliverableDto } from './dto/update-deliverable.dto';
 const deliverableInclude = {
   documents: true,
   versions: { orderBy: { version: 'asc' } },
+  // Latest supervisor decision, with its motif when rejected.
+  validations: lastLivrableValidation,
 } satisfies Prisma.LivrableInclude;
+
+// Each earlier version in `history`: its files and its decision.
+const historyInclude = {
+  documents: true,
+  validations: lastLivrableValidation,
+} satisfies Prisma.LivrableInclude;
+
+const SUBMITTABLE_INSTRUCTION_STATUSES: InstructionStatus[] = [
+  InstructionStatus.EN_COURS,
+  InstructionStatus.A_CORRIGER,
+  InstructionStatus.EN_ATTENTE_VALIDATION,
+];
 
 @Injectable()
 export class DeliverableService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly rbac: RbacService,
+  ) {}
 
   async create(dto: CreateDeliverableDto, createdById: string) {
     await this.assertInstructionDossierOpen(dto.instructionId);
@@ -31,10 +55,20 @@ export class DeliverableService {
     });
   }
 
-  async findAll(query: FindDeliverableQueryDto) {
+  async findAll(query: FindDeliverableQueryDto, userId: string) {
+    // One row per livrable: its current version, earlier ones in `history`.
     const where: Prisma.LivrableWhereInput = {
+      isLatest: true,
       instructionId: query.instructionId,
       status: query.status,
+      // Only the sites where the caller may read livrables.
+      ...(await this.rbac.siteFilter(
+        userId,
+        PermissionCode.LivrableRead,
+        (siteId): Prisma.LivrableWhereInput => ({
+          instruction: { dossier: { siteId } },
+        }),
+      )),
     };
 
     const [data, total] = await this.database.$transaction([
@@ -48,7 +82,23 @@ export class DeliverableService {
       this.database.livrable.count({ where }),
     ]);
 
-    return { data, total, skip: query.skip ?? 0, take: query.take ?? 20 };
+    return {
+      data: await withLivrableHistory(this.database, data, historyInclude),
+      total,
+      skip: query.skip ?? 0,
+      take: query.take ?? 20,
+    };
+  }
+
+  // GET /deliverables/:id: the version asked for, with the versions before
+  // it in `history` (an old version shows isLatest: false).
+  async findOneWithHistory(id: string) {
+    const [livrable] = await withLivrableHistory(
+      this.database,
+      [await this.findOne(id)],
+      historyInclude,
+    );
+    return livrable;
   }
 
   async findOne(id: string) {
@@ -78,19 +128,45 @@ export class DeliverableService {
     });
   }
 
+  // A correction answers a rejection: only the latest version, once
+  // REJETE, gets a new version — so history stays linear (v1 -> v2 -> v3)
+  // and InstructionsService.settleValidationRound can rely on `isLatest`.
   async newVersion(id: string, dto: UpdateDeliverableDto, createdById: string) {
     const parent = await this.findOne(id);
+    if (!parent.isLatest) {
+      const latest = await this.latestVersionOf(parent.id);
+      throw new BadRequestException(
+        `Version ${parent.version} has already been replaced — use the latest version (v${latest.version}, ${latest.id})`,
+      );
+    }
+    if (parent.status !== LivrableStatus.REJETE) {
+      throw new BadRequestException(
+        `Livrable is ${parent.status} — a new version can only answer a rejection (REJETE)`,
+      );
+    }
     await this.assertInstructionDossierOpen(parent.instructionId);
-    return this.database.livrable.create({
-      data: {
-        instructionId: parent.instructionId,
-        title: dto.title ?? parent.title,
-        description: dto.description ?? parent.description,
-        version: parent.version + 1,
-        parentVersionId: parent.id,
-        createdById,
-      },
-      include: deliverableInclude,
+    return this.database.$transaction(async (tx) => {
+      // Guarded on isLatest: two concurrent calls can't both branch off it.
+      const { count } = await tx.livrable.updateMany({
+        where: { id: parent.id, isLatest: true },
+        data: { isLatest: false },
+      });
+      if (count !== 1) {
+        throw new ConflictException(
+          'A new version of this livrable was just created — reload it',
+        );
+      }
+      return tx.livrable.create({
+        data: {
+          instructionId: parent.instructionId,
+          title: dto.title ?? parent.title,
+          description: dto.description ?? parent.description,
+          version: parent.version + 1,
+          parentVersionId: parent.id,
+          createdById,
+        },
+        include: deliverableInclude,
+      });
     });
   }
 
@@ -114,8 +190,20 @@ export class DeliverableService {
   // 10.5.4.4: once submitted, the parent instruction moves to
   // EN_ATTENTE_VALIDATION (from EN_COURS or A_CORRIGER, for a resubmission
   // after corrections).
+  // Only while the instruction is being worked on or validated: a
+  // livrable submitted on an instruction in any other state (AFFECTEE,
+  // TERMINEE, ANNULEE...) would sit SOUMIS with nobody able to decide it.
   async submit(id: string) {
     const livrable = await this.requireStatus(id, [LivrableStatus.DEPOSE]);
+    const instruction = await this.database.instruction.findUniqueOrThrow({
+      where: { id: livrable.instructionId },
+      select: { status: true },
+    });
+    if (!SUBMITTABLE_INSTRUCTION_STATUSES.includes(instruction.status)) {
+      throw new BadRequestException(
+        `Instruction is ${instruction.status} — livrables can only be submitted while it is ${SUBMITTABLE_INSTRUCTION_STATUSES.join(', ')}`,
+      );
+    }
     const [updated] = await this.database.$transaction([
       this.database.livrable.update({
         where: { id: livrable.id },
@@ -133,6 +221,20 @@ export class DeliverableService {
       }),
     ]);
     return updated;
+  }
+
+  // Follows the version chain down from `id` to its current version.
+  private async latestVersionOf(id: string) {
+    let current = { id, version: 0 };
+    for (;;) {
+      const next = await this.database.livrable.findFirst({
+        where: { parentVersionId: current.id },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, version: true },
+      });
+      if (!next) return current;
+      current = next;
+    }
   }
 
   private async requireStatus(id: string, allowed: LivrableStatus[]) {

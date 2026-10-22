@@ -1,0 +1,821 @@
+{
+  "info": {
+    "name": "Diffusion API — Courrier entrant & Validation circuit",
+    "description": "The incoming-mail flow and the validation circuit that approves it.\n\nFully automated: run the folders in order with the Collection Runner. Folder 0 builds its own fixtures (dossier type, site, circuit, steps, dossier) with a timestamp suffix, so the collection can be re-run as often as you like.\n\nThe circuit steps require the `Administrateur` role, which the logged-in admin already holds at the site created here — so the same account can drive every step.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000" },
+    { "key": "email", "value": "admin@creaconsult.com" },
+    { "key": "password", "value": "Admin@2026!" },
+    { "key": "accessToken", "value": "" },
+    { "key": "adminUserId", "value": "" },
+    { "key": "adminRoleId", "value": "" },
+    { "key": "siteId", "value": "" },
+    { "key": "dossierTypeId", "value": "" },
+    { "key": "circuitId", "value": "" },
+    { "key": "step1Id", "value": "" },
+    { "key": "step2Id", "value": "" },
+    { "key": "dossierId", "value": "" },
+    { "key": "courrierId", "value": "" },
+    { "key": "instanceId", "value": "" },
+    { "key": "stamp", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "0. Setup",
+      "item": [
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('accessToken', pm.response.json().accessToken);",
+                  "pm.collectionVariables.set('stamp', String(Date.now()).slice(-6));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" }
+          }
+        },
+        {
+          "name": "Who am I",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('adminUserId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": { "raw": "{{baseUrl}}/auth/me", "host": ["{{baseUrl}}"], "path": ["auth", "me"] }
+          }
+        },
+        {
+          "name": "Find the Administrateur role",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const role = pm.response.json().data.find((r) => r.name === 'Administrateur');",
+                  "pm.test('role found', () => pm.expect(role).to.be.an('object'));",
+                  "pm.collectionVariables.set('adminRoleId', role.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/roles?take=100",
+              "host": ["{{baseUrl}}"],
+              "path": ["roles"],
+              "query": [{ "key": "take", "value": "100" }]
+            },
+            "description": "The circuit steps will require this role, which the logged-in admin holds."
+          }
+        },
+        {
+          "name": "Create the site",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('siteId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/sites", "host": ["{{baseUrl}}"], "path": ["sites"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Site circuit {{stamp}}\",\n  \"city\": \"Douala\",\n  \"responsibleId\": \"{{adminUserId}}\"\n}"
+            },
+            "description": "Naming the admin responsible also assigns him to the site — which is what makes him eligible for the circuit steps here."
+          }
+        },
+        {
+          "name": "Create the dossier type",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('dossierTypeId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/dossier-types", "host": ["{{baseUrl}}"], "path": ["dossier-types"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Type circuit {{stamp}}\"\n}" },
+            "description": "A circuit attaches to a dossier type — one circuit per type."
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Circuit configuration",
+      "item": [
+        {
+          "name": "Create the circuit",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('circuitId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/circuits", "host": ["{{baseUrl}}"], "path": ["circuits"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Validation courrier {{stamp}}\",\n  \"dossierTypeId\": \"{{dossierTypeId}}\",\n  \"roleId\": \"{{adminRoleId}}\"\n}"
+            },
+            "description": "roleId here = who may TRIGGER the circuit."
+          }
+        },
+        {
+          "name": "Unknown dossier type → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('the bad id is named', () => pm.expect(pm.response.json().message).to.include('Dossier type'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/circuits", "host": ["{{baseUrl}}"], "path": ["circuits"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Ghost {{stamp}}\",\n  \"dossierTypeId\": \"11111111-1111-4111-8111-111111111111\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 1 — Vérification",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('step1Id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/circuit-steps", "host": ["{{baseUrl}}"], "path": ["circuit-steps"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"circuitId\": \"{{circuitId}}\",\n  \"order\": 1,\n  \"actionType\": \"VERIFICATION\",\n  \"roleId\": \"{{adminRoleId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Step 2 — Approbation (falls back to step 1)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('step2Id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/circuit-steps", "host": ["{{baseUrl}}"], "path": ["circuit-steps"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"circuitId\": \"{{circuitId}}\",\n  \"order\": 2,\n  \"actionType\": \"APPROBATION\",\n  \"roleId\": \"{{adminRoleId}}\",\n  \"parentStepId\": \"{{step1Id}}\"\n}"
+            },
+            "description": "parentStepId = where a rejection sends it back to."
+          }
+        },
+        {
+          "name": "RULE — duplicate order → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('message', () => pm.expect(pm.response.json().message).to.include('already has order'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/circuit-steps", "host": ["{{baseUrl}}"], "path": ["circuit-steps"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"circuitId\": \"{{circuitId}}\",\n  \"order\": 1,\n  \"roleId\": \"{{adminRoleId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "RULE — rejection target after the step → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('message explains the loop', () => pm.expect(pm.response.json().message).to.include('must be an earlier step'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/circuit-steps", "host": ["{{baseUrl}}"], "path": ["circuit-steps"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"circuitId\": \"{{circuitId}}\",\n  \"order\": 3,\n  \"roleId\": \"{{adminRoleId}}\",\n  \"parentStepId\": \"{{step2Id}}\",\n  \"condition\": \"this is fine — parent is order 2, step is order 3\"\n}"
+            },
+            "description": "⚠️ This one is actually VALID (parent 2 < step 3) and returns 201. Change `order` to 1 to see the refusal. Kept as a reminder of the rule's direction."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. The delivery",
+      "item": [
+        {
+          "name": "Create the dossier",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('dossierId', body.id);",
+                  "pm.test('number generated (D-xxxxxx)', () => pm.expect(body.number).to.match(/^D-/));",
+                  "pm.test('starts OPEN', () => pm.expect(body.status).to.eql('OPEN'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/dossiers", "host": ["{{baseUrl}}"], "path": ["dossiers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Dossier circuit {{stamp}}\",\n  \"siteId\": \"{{siteId}}\",\n  \"typeId\": \"{{dossierTypeId}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Register the incoming courrier",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('courrierId', body.id);",
+                  "pm.test('number generated (M-xxxxxx)', () => pm.expect(body.number).to.match(/^M-/));",
+                  "pm.test('status RECU', () => pm.expect(body.status).to.eql('RECU'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/courriers", "host": ["{{baseUrl}}"], "path": ["courriers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dossierId\": \"{{dossierId}}\",\n  \"direction\": \"ENTRANT\",\n  \"subject\": \"Demande de raccordement {{stamp}}\"\n}"
+            },
+            "description": "Note the route is /courriers (not /mails)."
+          }
+        },
+        {
+          "name": "Transmit it",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('status TRANSMIS', () => pm.expect(pm.response.json().status).to.eql('TRANSMIS'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/transmit",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "transmit"]
+            },
+            "description": "An incoming courrier must be transmitted before it can enter a circuit."
+          }
+        },
+        {
+          "name": "Submit for verification (starts the circuit)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('status EN_CIRCUIT', () => pm.expect(pm.response.json().status).to.eql('EN_CIRCUIT'));",
+                  "console.log('The response is the COURRIER — fetch the instance with the next request.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/submit-for-verification",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "submit-for-verification"]
+            }
+          }
+        },
+        {
+          "name": "Fetch the circuit instance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const rows = pm.response.json();",
+                  "const list = Array.isArray(rows) ? rows : rows.data;",
+                  "pm.test('an instance exists', () => pm.expect(list.length).to.be.above(0));",
+                  "pm.collectionVariables.set('instanceId', list[0].id);",
+                  "pm.test('IN_PROGRESS at step 1', () => {",
+                  "  pm.expect(list[0].status).to.eql('IN_PROGRESS');",
+                  "  pm.expect(list[0].currentStep.order).to.eql(1);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances?courrierId={{courrierId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances"],
+              "query": [{ "key": "courrierId", "value": "{{courrierId}}" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Decisions",
+      "item": [
+        {
+          "name": "RULE — a step cannot be edited while a run is in progress → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "console.log(JSON.stringify(pm.response.json().message));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-steps/{{step2Id}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-steps", "{{step2Id}}"]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"actionType\": \"MODIFIE EN COURS DE ROUTE\"\n}" },
+            "description": "Protects runs already in flight: the template can't change under them."
+          }
+        },
+        {
+          "name": "Approve step 1 → moves to step 2",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('now at step 2', () => pm.expect(body.currentStep.order).to.eql(2));",
+                  "pm.test('one validation recorded', () => pm.expect(body.validations.length).to.eql(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances/{{instanceId}}/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances", "{{instanceId}}", "decide"]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"VALIDE\"\n}" }
+          }
+        },
+        {
+          "name": "Reject step 2 → falls back to step 1",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('back to step 1', () => pm.expect(body.currentStep.order).to.eql(1));",
+                  "pm.test('still IN_PROGRESS', () => pm.expect(body.status).to.eql('IN_PROGRESS'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances/{{instanceId}}/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances", "{{instanceId}}", "decide"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"REJETE\",\n  \"motif\": \"Pièce jointe manquante\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Approve step 1 again → step 2",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('at step 2', () => pm.expect(pm.response.json().currentStep.order).to.eql(2));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances/{{instanceId}}/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances", "{{instanceId}}", "decide"]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"VALIDE\"\n}" }
+          }
+        },
+        {
+          "name": "Approve the last step → COMPLETED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('COMPLETED', () => pm.expect(body.status).to.eql('COMPLETED'));",
+                  "pm.test('completedAt set', () => pm.expect(body.completedAt).to.not.be.null);",
+                  "pm.test('path recorded: 1,2,1,2', () => pm.expect(body.stepHistory.map((h) => h.circuitStep.order)).to.eql([1, 2, 1, 2]));",
+                  "pm.test('4 decisions recorded', () => pm.expect(body.validations.length).to.eql(4));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances/{{instanceId}}/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances", "{{instanceId}}", "decide"]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"VALIDE\"\n}" }
+          }
+        },
+        {
+          "name": "The courrier is now VALIDE",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status VALIDE', () => pm.expect(pm.response.json().status).to.eql('VALIDE'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}"]
+            }
+          }
+        },
+        {
+          "name": "RULE — deciding a completed instance → 400",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('message', () => pm.expect(pm.response.json().message).to.include('COMPLETED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances/{{instanceId}}/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances", "{{instanceId}}", "decide"]
+            },
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"VALIDE\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Cancel path (second courrier)",
+      "item": [
+        {
+          "name": "Register a second courrier",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('courrierId', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{baseUrl}}/courriers", "host": ["{{baseUrl}}"], "path": ["courriers"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dossierId\": \"{{dossierId}}\",\n  \"direction\": \"ENTRANT\",\n  \"subject\": \"Courrier a rejeter {{stamp}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Transmit",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/transmit",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "transmit"]
+            }
+          }
+        },
+        {
+          "name": "Submit for verification",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}/submit-for-verification",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}", "submit-for-verification"]
+            }
+          }
+        },
+        {
+          "name": "Fetch its instance",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const rows = pm.response.json();",
+                  "const list = Array.isArray(rows) ? rows : rows.data;",
+                  "pm.collectionVariables.set('instanceId', list[0].id);",
+                  "pm.test('at step 1', () => pm.expect(list[0].currentStep.order).to.eql(1));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances?courrierId={{courrierId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances"],
+              "query": [{ "key": "courrierId", "value": "{{courrierId}}" }]
+            }
+          }
+        },
+        {
+          "name": "Reject on step 1 (no fallback) → CANCELLED",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "pm.test('CANCELLED', () => pm.expect(pm.response.json().status).to.eql('CANCELLED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/circuit-instances/{{instanceId}}/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["circuit-instances", "{{instanceId}}", "decide"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"REJETE\",\n  \"motif\": \"Dossier incomplet, a refaire\"\n}"
+            },
+            "description": "Step 1 has no parentStepId, so a rejection there cancels the whole run."
+          }
+        },
+        {
+          "name": "The courrier is A_CORRIGER",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('status A_CORRIGER', () => pm.expect(pm.response.json().status).to.eql('A_CORRIGER'));",
+                  "console.log('From here the courrier can be resubmitted, which starts a fresh instance.');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/courriers/{{courrierId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["courriers", "{{courrierId}}"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

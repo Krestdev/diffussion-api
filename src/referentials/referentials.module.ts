@@ -1,8 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CorrespondantController } from './correspondent/correspondent.controller';
 import { CorrespondantService } from './correspondent/correspondent.service';
-import { ServiceController } from './service/service.controller';
-import { ServiceService } from './service/service.service';
 import { SiteController } from './site/site.controller';
 import { SiteService } from './site/site.service';
 import { CategoryModule } from './category/category.module';
@@ -13,9 +11,9 @@ import { CorrespondentTypeModule } from './correspondent-type/correspondent-type
 import { ProjectModule } from './project/project.module';
 
 @Module({
-  controllers: [SiteController, ServiceController, CorrespondantController],
-  providers: [SiteService, ServiceService, CorrespondantService],
-  exports: [SiteService, ServiceService, CorrespondantService],
+  controllers: [SiteController, CorrespondantController],
+  providers: [SiteService, CorrespondantService],
+  exports: [SiteService, CorrespondantService],
   imports: [
     CategoryModule,
     DossierTypeModule,

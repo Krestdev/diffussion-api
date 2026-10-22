@@ -7,11 +7,20 @@ import {
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
 import { JwtPayload } from '../types/jwt-payload.type';
-import { PERMISSION_METADATA_KEY, PermissionCode } from './rbac.constants';
+import {
+  PERMISSION_METADATA_KEY,
+  PermissionCode,
+  PLATFORM_PERMISSIONS,
+} from './rbac.constants';
 import { RbacService } from './rbac.service';
+import { PLATFORM_ONLY_METADATA_KEY } from './require-permission.decorator';
+import { SITE_SCOPE_METADATA_KEY, SiteSource } from './site-scope.decorator';
 
 // Runs after JwtAuthGuard (req.user must already be set). No-op if the
-// route/controller carries no @RequirePermission metadata.
+// route/controller carries no @RequirePermission metadata. With @SiteScope,
+// the permission must be held at the targeted resource's site; without it,
+// at any site. Platform permissions (and @PlatformOnly routes) need a
+// global grant.
 @Injectable()
 export class PermissionGuard implements CanActivate {
   constructor(
@@ -35,10 +44,62 @@ export class PermissionGuard implements CanActivate {
       throw new ForbiddenException('Missing authenticated user');
     }
 
-    const granted = await this.rbacService.hasPermission(user.sub, required);
+    const platformOnly =
+      PLATFORM_PERMISSIONS.has(required) ||
+      this.reflector.getAllAndOverride<boolean | undefined>(
+        PLATFORM_ONLY_METADATA_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+    if (platformOnly) {
+      if (!(await this.rbacService.hasGlobalPermission(user.sub, required))) {
+        throw new ForbiddenException(
+          `Reserved to platform administrators: ${required}`,
+        );
+      }
+      return true;
+    }
+
+    const sources = this.reflector.getAllAndOverride<SiteSource[] | undefined>(
+      SITE_SCOPE_METADATA_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    const siteIds = sources ? await this.targetSites(sources, request) : [];
+
+    const granted = siteIds.length
+      ? (
+          await Promise.all(
+            siteIds.map((siteId) =>
+              this.rbacService.hasPermissionAtSite(user.sub, required, siteId),
+            ),
+          )
+        ).every(Boolean)
+      : await this.rbacService.hasPermission(user.sub, required);
     if (!granted) {
-      throw new ForbiddenException(`Missing permission: ${required}`);
+      throw new ForbiddenException(
+        siteIds.length
+          ? `Missing permission at this site: ${required}`
+          : `Missing permission: ${required}`,
+      );
     }
     return true;
+  }
+
+  // Sites of the resources the request targets. Missing ids and unknown
+  // resources are skipped: the service then answers 400/404 as usual.
+  private async targetSites(
+    sources: SiteSource[],
+    request: Request,
+  ): Promise<string[]> {
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const siteIds = await Promise.all(
+      sources.map(async (source) => {
+        const id =
+          'param' in source ? request.params[source.param] : body[source.body];
+        return typeof id === 'string' && id
+          ? this.rbacService.resolveSiteId(source.entity, id)
+          : null;
+      }),
+    );
+    return [...new Set(siteIds.filter((id): id is string => !!id))];
   }
 }

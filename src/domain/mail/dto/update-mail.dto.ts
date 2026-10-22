@@ -7,5 +7,5 @@ import { CreateMailDto } from './create-mail.dto';
 // reassignment must stay possible outside the EDITABLE_STATUSES window this
 // generic update() is restricted to.
 export class UpdateMailDto extends PartialType(
-  OmitType(CreateMailDto, ['direction', 'ownerId'] as const),
+  OmitType(CreateMailDto, ['direction', 'ownerId', 'documents'] as const),
 ) {}

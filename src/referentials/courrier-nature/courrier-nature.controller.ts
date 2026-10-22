@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -16,6 +17,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { CourrierNatureService } from './courrier-nature.service';
 import { CreateCourrierNatureDto } from './dto/create-courrier-nature.dto';
 import { UpdateCourrierNatureDto } from './dto/update-courrier-nature.dto';
@@ -34,8 +36,8 @@ export class CourrierNatureController {
   }
 
   @Get()
-  findAll() {
-    return this.courrierNatureService.findAll();
+  findAll(@Query() query: PaginationQueryDto) {
+    return this.courrierNatureService.findAll(query);
   }
 
   @Get(':id')

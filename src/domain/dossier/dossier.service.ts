@@ -22,6 +22,11 @@ import {
   PaginationQueryDto,
 } from '../../common/dto/pagination.query.dto';
 import { computeDossierProgress } from '../../common/utils/dossier-lifecycle';
+import {
+  lastLivrableValidation,
+  withLivrableHistory,
+} from '../../common/utils/livrable-history';
+import { visibleDossierWhere } from '../../common/utils/dossier-visibility';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { assertSiteActive } from '../../common/utils/referential-guards';
 import { DatabaseService } from '../../database/database.service';
@@ -139,14 +144,15 @@ export class DossierService {
 
     if (userId) {
       where.AND = [
-        {
-          OR: [
-            { confidentiality: DossierConfidentiality.PUBLIC },
-            { createdById: userId },
-            { responsibleId: userId },
-            { accesses: { some: { userId, canView: true } } },
-          ],
-        },
+        visibleDossierWhere(userId),
+        // Only the sites where the caller may read dossiers.
+        await this.rbac.siteFilter(
+          userId,
+          PermissionCode.DossierRead,
+          (siteId) => ({
+            siteId,
+          }),
+        ),
       ];
     }
 
@@ -173,7 +179,10 @@ export class DossierService {
       throw new NotFoundException(`Dossier ${id} not found`);
     }
 
-    if (userId && dossier.confidentiality === DossierConfidentiality.RESTRICTED) {
+    if (
+      userId &&
+      dossier.confidentiality === DossierConfidentiality.RESTRICTED
+    ) {
       if (dossier.createdById !== userId && dossier.responsibleId !== userId) {
         const access = await this.database.dossierAccess.findUnique({
           where: { dossierId_userId: { dossierId: id, userId } },
@@ -388,7 +397,11 @@ export class DossierService {
     return { data, total, skip, take };
   }
 
-  async getInstructions(id: string, query: PaginationQueryDto, userId?: string) {
+  async getInstructions(
+    id: string,
+    query: PaginationQueryDto,
+    userId?: string,
+  ) {
     await this.findOne(id, userId);
     const { skip, take } = paging(query);
     const where: Prisma.InstructionWhereInput = {
@@ -413,7 +426,9 @@ export class DossierService {
   async getLivrables(id: string, query: PaginationQueryDto, userId?: string) {
     await this.findOne(id, userId);
     const { skip, take } = paging(query);
+    // One row per livrable: its current version, earlier ones in `history`.
     const where: Prisma.LivrableWhereInput = {
+      isLatest: true,
       instruction: { dossierId: id },
       title: query.search
         ? { contains: query.search, mode: 'insensitive' }
@@ -422,13 +437,17 @@ export class DossierService {
     const [data, total] = await this.database.$transaction([
       this.database.livrable.findMany({
         where,
+        include: { validations: lastLivrableValidation },
         orderBy: { createdAt: 'desc' },
         skip,
         take,
       }),
       this.database.livrable.count({ where }),
     ]);
-    return { data, total, skip, take };
+    const withHistory = await withLivrableHistory(this.database, data, {
+      validations: lastLivrableValidation,
+    });
+    return { data: withHistory, total, skip, take };
   }
 
   // RG-AUD-*: full trail of everything recorded against this dossier.
@@ -522,15 +541,15 @@ export class DossierService {
   }
 
   // RG-DOS-004: the responsible must be able to act on the dossier —
-  // an active user attached to its owning site (circuit eligibility and
-  // notifications are resolved through site assignments).
+  // an active user of its owning site (circuit eligibility and
+  // notifications are resolved through the users' sites).
   private async assertEligibleResponsible(userId: string, siteId: string) {
     const user = await this.database.user.findUnique({
       where: { id: userId },
       select: {
         name: true,
         status: true,
-        assignments: { where: { siteId }, select: { siteId: true } },
+        siteId: true,
       },
     });
     if (!user) {
@@ -541,9 +560,9 @@ export class DossierService {
         `${user.name} is suspended and cannot be responsible for a dossier`,
       );
     }
-    if (user.assignments.length === 0) {
+    if (user.siteId !== siteId) {
       throw new BadRequestException(
-        `${user.name} is not assigned to the dossier's site — assign them to it first, or pick another responsible`,
+        `${user.name} does not belong to the dossier's site — pick another responsible`,
       );
     }
   }

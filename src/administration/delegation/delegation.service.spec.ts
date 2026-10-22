@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ActivityService } from '../../activity/activity.service';
+import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { DelegationService } from './delegation.service';
 
@@ -21,7 +22,9 @@ describe('DelegationService', () => {
     user: Record<string, jest.Mock>;
     role: Record<string, jest.Mock>;
     site: Record<string, jest.Mock>;
+    userRole: Record<string, jest.Mock>;
   };
+  let rbac: { administeredSites: jest.Mock };
 
   beforeEach(async () => {
     database = {
@@ -36,10 +39,12 @@ describe('DelegationService', () => {
         findUnique: jest.fn().mockResolvedValue({
           name: 'Someone',
           status: 'ACTIVE',
-          assignments: [{ siteId: 's-1' }],
+          siteId: 's-1',
         }),
       },
       role: { findUnique: jest.fn().mockResolvedValue({ name: 'Chef' }) },
+      // The delegant holds the role they hand over.
+      userRole: { findFirst: jest.fn().mockResolvedValue({ id: 'ur-1' }) },
       site: {
         findUnique: jest
           .fn()
@@ -47,10 +52,14 @@ describe('DelegationService', () => {
       },
     };
 
+    // A platform administrator unless a test says otherwise.
+    rbac = { administeredSites: jest.fn().mockResolvedValue('ALL') };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DelegationService,
         { provide: DatabaseService, useValue: database },
+        { provide: RbacService, useValue: rbac },
         {
           provide: ActivityService,
           useValue: {
@@ -65,7 +74,7 @@ describe('DelegationService', () => {
   });
 
   it('creates a valid delegation, converting the ISO strings to Dates', async () => {
-    await service.create(VALID);
+    await service.create(VALID, 'admin');
 
     const { data } = database.delegation.create.mock.calls[0][0] as {
       data: { startDate: Date; endDate: Date; roleId: string; siteId: string };
@@ -78,11 +87,10 @@ describe('DelegationService', () => {
 
   it('refuses an end date before the start date', async () => {
     await expect(
-      service.create({
-        ...VALID,
-        startDate: '2026-10-05',
-        endDate: '2026-09-22',
-      }),
+      service.create(
+        { ...VALID, startDate: '2026-10-05', endDate: '2026-09-22' },
+        'admin',
+      ),
     ).rejects.toThrow(
       new BadRequestException('endDate must not be before startDate'),
     );
@@ -91,25 +99,25 @@ describe('DelegationService', () => {
 
   it('refuses a delegation to oneself', async () => {
     await expect(
-      service.create({ ...VALID, delegataireId: VALID.delegantId }),
+      service.create({ ...VALID, delegataireId: VALID.delegantId }, 'admin'),
     ).rejects.toThrow(
       new BadRequestException('A user cannot delegate to themselves'),
     );
   });
 
-  it('refuses when the delegataire is not assigned to the site', async () => {
+  it('refuses when the delegataire does not belong to the site', async () => {
     database.user.findUnique.mockImplementation(
       ({ where }: { where: { id: string } }) =>
         Promise.resolve({
           name: where.id === 'u-2' ? 'Paul' : 'Awa',
           status: 'ACTIVE',
-          assignments: where.id === 'u-2' ? [] : [{ siteId: 's-1' }],
+          siteId: where.id === 'u-2' ? 's-2' : 's-1',
         }),
     );
 
-    await expect(service.create(VALID)).rejects.toThrow(
+    await expect(service.create(VALID, 'admin')).rejects.toThrow(
       new BadRequestException(
-        'Paul is not assigned to site "Cristal" — assign them to it before delegating a role there',
+        'Paul does not belong to site "Cristal" — a role can only be delegated within the site',
       ),
     );
   });
@@ -120,11 +128,11 @@ describe('DelegationService', () => {
         Promise.resolve({
           name: where.id === 'u-2' ? 'Paul' : 'Awa',
           status: where.id === 'u-2' ? 'SUSPENDED' : 'ACTIVE',
-          assignments: [{ siteId: 's-1' }],
+          siteId: 's-1',
         }),
     );
 
-    await expect(service.create(VALID)).rejects.toThrow(
+    await expect(service.create(VALID, 'admin')).rejects.toThrow(
       new BadRequestException(
         'Paul is suspended and cannot receive a delegation',
       ),
@@ -137,7 +145,9 @@ describe('DelegationService', () => {
       status: 'INACTIVE',
     });
 
-    await expect(service.create(VALID)).rejects.toThrow(BadRequestException);
+    await expect(service.create(VALID, 'admin')).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('refuses a second delegation of the same role/site overlapping in time', async () => {
@@ -146,7 +156,7 @@ describe('DelegationService', () => {
       endDate: new Date('2026-09-30'),
     });
 
-    await expect(service.create(VALID)).rejects.toThrow(
+    await expect(service.create(VALID, 'admin')).rejects.toThrow(
       /already holds this role at "Cristal"/,
     );
   });
@@ -162,12 +172,54 @@ describe('DelegationService', () => {
       endDate: new Date('2026-10-05'),
     });
 
-    await service.update('d-1', { endDate: '2026-11-30' });
+    await service.update('d-1', { endDate: '2026-11-30' }, 'admin');
 
     const { data } = database.delegation.update.mock.calls[0][0] as {
       data: Record<string, unknown>;
     };
     expect(data.endDate).toBeInstanceOf(Date);
     expect(data).not.toHaveProperty('startDate');
+  });
+
+  describe("site responsible (the site's administrator)", () => {
+    beforeEach(() => rbac.administeredSites.mockResolvedValue(['s-1']));
+
+    it('creates a delegation at their own site', async () => {
+      await service.create(VALID, 'site-admin');
+      expect(database.delegation.create).toHaveBeenCalled();
+    });
+
+    it('cannot create a delegation at another site', async () => {
+      await expect(
+        service.create({ ...VALID, siteId: 's-2' }, 'site-admin'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(database.delegation.create).not.toHaveBeenCalled();
+    });
+
+    it("cannot read another site's delegation", async () => {
+      database.delegation.findUnique.mockResolvedValue({
+        id: 'd-1',
+        siteId: 's-2',
+      });
+      await expect(service.findOne('d-1', 'site-admin')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+    });
+
+    it('only lists their own site', async () => {
+      database.delegation.findMany = jest.fn().mockReturnValue('rows');
+      database.delegation.count = jest.fn().mockReturnValue('count');
+      (database as unknown as { $transaction: jest.Mock }).$transaction = jest
+        .fn()
+        .mockResolvedValue([[], 0]);
+
+      await service.findAll({}, 'site-admin');
+
+      expect(database.delegation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { AND: [{}, { siteId: { in: ['s-1'] } }] },
+        }),
+      );
+    });
   });
 });

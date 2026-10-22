@@ -11,41 +11,126 @@ import {
   Post,
   Put,
   Query,
+  UploadedFiles,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
+import { memoryStorage } from 'multer';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import {
+  SiteScope,
+  fromBody,
+  fromParam,
+} from '../../auth/rbac/site-scope.decorator';
 import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { SetOwnerDto } from '../../common/dto/set-owner.dto';
 import { CreateMailDto } from './dto/create-mail.dto';
+import { CreateOutgoingMailDto } from './dto/create-outgoing-mail.dto';
+import { FindIncomingMailsQueryDto } from './dto/find-incoming-mails.query.dto';
 import { FindMailsQueryDto } from './dto/find-mails.query.dto';
+import { FindOutgoingMailsQueryDto } from './dto/find-outgoing-mails.query.dto';
 import { UpdateMailDto } from './dto/update-mail.dto';
 import { MailService } from './mail.service';
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 @ApiTags('courriers')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionGuard)
+// Permissions are checked at the site of the targeted resource.
+@SiteScope(fromParam('courrier'))
 @Controller('courriers')
 export class MailController {
   constructor(private readonly mailService: MailService) {}
 
   @Post()
   @RequirePermission(PermissionCode.CourrierRegisterEntrant)
+  @SiteScope(fromBody('dossier', 'dossierId'))
+  @ApiConsumes('multipart/form-data', 'application/json')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['dossierId', 'direction', 'subject'],
+      properties: {
+        dossierId: { type: 'string', format: 'uuid' },
+        direction: { type: 'string', enum: ['ENTRANT', 'SORTANT'] },
+        subject: { type: 'string' },
+        correspondentId: { type: 'string', format: 'uuid' },
+        natureId: { type: 'string', format: 'uuid' },
+        canalId: { type: 'string', format: 'uuid' },
+        reference: { type: 'string', maxLength: 60 },
+        copies: { type: 'integer', minimum: 1 },
+        receivedAt: { type: 'string', format: 'date-time' },
+        scanUrl: { type: 'string' },
+        ownerId: { type: 'string', format: 'uuid' },
+        respondsToId: { type: 'string', format: 'uuid' },
+        files: {
+          type: 'array',
+          items: { type: 'string', format: 'binary' },
+          description: 'Document files to attach to this courrier',
+        },
+        documents: {
+          type: 'string',
+          description:
+            'Document metadata JSON string (e.g. [{"name": "Facture"}]) matching the order of uploaded files',
+        },
+      },
+    },
+  })
+  @UseInterceptors(
+    FilesInterceptor('files', 10, {
+      storage: memoryStorage(),
+      limits: { fileSize: MAX_UPLOAD_BYTES },
+    }),
+  )
   create(
     @Body() dto: CreateMailDto,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @UploadedFiles() files?: Express.Multer.File[],
   ) {
-    return this.mailService.create(dto, user.sub);
+    return this.mailService.create(dto, user.sub, files);
+  }
+
+  // Sortant draft from its subject alone — returns its generated number,
+  // in BROUILLON; the rest is filled in through PATCH /courriers/:id.
+  @Post('sortants')
+  @RequirePermission(PermissionCode.CourrierWriteSortant)
+  createOutgoing(
+    @Body() dto: CreateOutgoingMailDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.createOutgoingDraft(dto, user.sub);
   }
 
   @Get()
   findAll(@Query() query: FindMailsQueryDto) {
     return this.mailService.findAll(query);
+  }
+
+  // Declared before @Get(':id') so "entrants" isn't parsed as an id.
+  @Get('entrants')
+  @RequirePermission(PermissionCode.CourrierRead)
+  findIncoming(
+    @Query() query: FindIncomingMailsQueryDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.findIncoming(query, user.sub);
+  }
+
+  @Get('sortants')
+  @RequirePermission(PermissionCode.CourrierRead)
+  findOutgoing(
+    @Query() query: FindOutgoingMailsQueryDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.findOutgoing(query, user.sub);
   }
 
   @Get(':id')

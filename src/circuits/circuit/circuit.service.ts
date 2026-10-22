@@ -7,6 +7,10 @@ import { Prisma } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCircuitDto } from './dto/create-circuit.dto';
 import { UpdateCircuitDto } from './dto/update-circuit.dto';
+import {
+  DEFAULT_TAKE,
+  PaginationQueryDto,
+} from '../../common/dto/pagination.query.dto';
 
 const include = {
   dossierType: true,
@@ -23,11 +27,27 @@ export class CircuitService {
     return this.database.circuit.create({ data: dto, include });
   }
 
-  findAll() {
-    return this.database.circuit.findMany({
-      orderBy: { name: 'asc' },
-      include,
-    });
+  async findAll(query: PaginationQueryDto = {}) {
+    const where: Prisma.CircuitWhereInput = {
+      name: query.search
+        ? { contains: query.search, mode: 'insensitive' }
+        : undefined,
+    };
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+
+    const [data, total] = await this.database.$transaction([
+      this.database.circuit.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        include,
+        skip,
+        take,
+      }),
+      this.database.circuit.count({ where }),
+    ]);
+
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

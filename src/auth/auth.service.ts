@@ -7,6 +7,7 @@ import {
 import { JwtService, JwtSignOptions } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
+import { RbacService } from './rbac/rbac.service';
 import { DatabaseService } from '../database/database.service';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
@@ -44,6 +45,7 @@ export class AuthService {
     private readonly database: DatabaseService,
     private readonly jwtService: JwtService,
     private readonly mailer: MailerService,
+    private readonly rbac: RbacService,
   ) {}
 
   /**
@@ -75,10 +77,14 @@ export class AuthService {
       }),
     ]);
 
+    // CORS_ORIGINS may be "*" (any origin) — not a usable link base.
+    const firstCorsOrigin = process.env.CORS_ORIGINS?.split(',')[0]?.trim();
     const baseUrl = (
       process.env.APP_WEB_URL ??
-      process.env.CORS_ORIGINS?.split(',')[0] ??
-      'http://localhost:3000'
+      (firstCorsOrigin && firstCorsOrigin !== '*'
+        ? firstCorsOrigin
+        : undefined) ??
+      'http://localhost:4000'
     ).replace(/\/$/, '');
 
     await this.mailer.sendPasswordReset({
@@ -188,15 +194,17 @@ export class AuthService {
             role: {
               include: { rolePermissions: { include: { permission: true } } },
             },
+            site: { select: { id: true, name: true } },
           },
         },
-        assignments: { include: { site: true } },
+        site: true,
       },
     });
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { password, refreshToken, userRoles, assignments, ...rest } = user;
-    const roles = userRoles.map((ur) => ur.role.name);
+    const { password, refreshToken, userRoles, ...rest } = user;
+    // One UserRole row per site: a role held at several sites is listed once.
+    const roles = [...new Set(userRoles.map((ur) => ur.role.name))];
     const permissions = [
       ...new Set(
         userRoles.flatMap((ur) =>
@@ -208,8 +216,16 @@ export class AuthService {
     return {
       ...rest,
       roles,
+      // Where each role is held: `site` null means global (every site).
+      roleGrants: userRoles.map((ur) => ({
+        role: { id: ur.role.id, name: ur.role.name },
+        site: ur.site,
+      })),
+      // Held somewhere — kept for the existing menu checks.
       permissions,
-      sites: assignments.map((a) => a.site),
+      // What applies at each site (global + bySite[siteId]), delegations
+      // included: what an action on a given resource is checked against.
+      sitePermissions: await this.rbac.permissionsBySite(userUuid),
     };
   }
 

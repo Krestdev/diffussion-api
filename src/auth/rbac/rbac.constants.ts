@@ -43,7 +43,6 @@ export enum PermissionCode {
   // Administration (7.6.4.6)
   AdminManageUsers = 'ADMIN_MANAGE_USERS',
   AdminManageSites = 'ADMIN_MANAGE_SITES',
-  AdminManageServices = 'ADMIN_MANAGE_SERVICES',
   AdminManageCategories = 'ADMIN_MANAGE_CATEGORIES',
   AdminManageReferentials = 'ADMIN_MANAGE_REFERENTIALS',
   AdminManageRoles = 'ADMIN_MANAGE_ROLES',
@@ -63,3 +62,17 @@ export enum PermissionCode {
 }
 
 export const PERMISSION_METADATA_KEY = 'rbac:permission';
+
+/**
+ * Organisation-wide administration: roles and referentials are shared by
+ * every site, so these only count when held through a global grant — a
+ * site administrator holding them at their site can't use them.
+ */
+export const PLATFORM_PERMISSIONS: ReadonlySet<PermissionCode> = new Set([
+  PermissionCode.AdminManageRoles,
+  PermissionCode.AdminManageCategories,
+  PermissionCode.AdminManageReferentials,
+  PermissionCode.AdminManageCircuits,
+  PermissionCode.AdminManageSettings,
+  PermissionCode.AdminManageAnalysisCriteria,
+]);

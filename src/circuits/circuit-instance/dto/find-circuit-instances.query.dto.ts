@@ -10,6 +10,7 @@ import {
   Min,
 } from 'class-validator';
 import { CircuitInstanceStatus } from 'generated/prisma/enums';
+import { MAX_TAKE } from '../../../common/dto/pagination.query.dto';
 
 export const DEFAULT_CIRCUIT_TAKE = 20;
 
@@ -55,11 +56,11 @@ export class FindCircuitInstancesQueryDto {
   @Min(0)
   skip?: number;
 
-  @ApiPropertyOptional({ default: DEFAULT_CIRCUIT_TAKE, maximum: 100 })
+  @ApiPropertyOptional({ default: DEFAULT_CIRCUIT_TAKE, maximum: MAX_TAKE })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(100)
+  @Max(MAX_TAKE)
   take?: number;
 }

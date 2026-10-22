@@ -7,5 +7,8 @@ import { InstructionsController } from './instructions.controller';
   imports: [NotificationsModule],
   controllers: [InstructionsController],
   providers: [InstructionsService],
+  // Livrable decisions (DeliverableController.reject) live with the rest of
+  // the instruction's validation round.
+  exports: [InstructionsService],
 })
 export class InstructionsModule {}

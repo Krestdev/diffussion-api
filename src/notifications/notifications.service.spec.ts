@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { DatabaseService } from '../database/database.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { NotificationStatus } from '../../generated/prisma/client';
 
 describe('NotificationsService', () => {
@@ -25,6 +26,10 @@ describe('NotificationsService', () => {
       providers: [
         NotificationsService,
         { provide: DatabaseService, useValue: database },
+        {
+          provide: RealtimeGateway,
+          useValue: { emitToUsers: jest.fn(), broadcast: jest.fn() },
+        },
       ],
     }).compile();
 

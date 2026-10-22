@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -9,7 +10,11 @@ import {
   NotificationCanal,
   Prisma,
   UserInstructionRole,
+  ValidationDecision,
 } from '../../generated/prisma/client';
+import { DEFAULT_TAKE } from '../common/dto/pagination.query.dto';
+import { dateRange } from '../common/utils/date-range';
+import { lastLivrableValidation } from '../common/utils/livrable-history';
 import { createWithUniqueReference } from '../common/utils/generate-reference';
 import {
   assertDossierOpenForActivity,
@@ -21,14 +26,32 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { AssignInstructionDto } from './dto/assign-instruction.dto';
 import { CreateInstructionsDto } from './dto/create-instruction.dto';
 import { FindInstructionsQueryDto } from './dto/find-instructions.query.dto';
+import {
+  FindMyTasksQueryDto,
+  TASK_TABS,
+  TaskTab,
+} from './dto/find-my-tasks.query.dto';
 import { RefuseInstructionDto } from './dto/refuse-instruction.dto';
+import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 import { UpdateInstructionDto } from './dto/update-instruction.dto';
 
 const dependencyRefSelect = { id: true, number: true, title: true } as const;
 
+// Statuses in which submitted livrables can be decided (approved or
+// rejected). A_CORRIGER included: when only some livrables were sent back
+// for corrections, the other submitted ones can still be decided
+// without waiting for the next submission.
+const DECIDING_STATUSES: InstructionStatus[] = [
+  InstructionStatus.EN_ATTENTE_VALIDATION,
+  InstructionStatus.A_CORRIGER,
+];
+
 const instructionInclude = {
   assignees: { include: { user: { select: { id: true, name: true } } } },
-  livrables: true,
+  livrables: {
+    include: { validations: lastLivrableValidation },
+    orderBy: { createdAt: 'asc' },
+  },
   dossier: { select: { id: true, number: true, title: true } },
   courrier: { select: { id: true, number: true, subject: true } },
   // Sub-tasks (parentTask in the frontend's AddTaskDialog): the parent
@@ -197,6 +220,75 @@ export class InstructionsService {
     return { data, total, skip: query.skip ?? 0, take: query.take ?? 20 };
   }
 
+  /**
+   * Everything the "Tâches" page needs in one call: the caller's tasks in
+   * one tab (see TASK_TABS), filtered and paginated server-side, plus each
+   * tab's count. "Mine" = I'm an assignee (executant or superviseur, or
+   * just one of them with `role`). `metrics` ignore the filters, so the
+   * tab counts stay put while the user searches.
+   */
+  async findMyTasks(query: FindMyTasksQueryDto, userId: string) {
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+    const tab = query.tab ?? 'en-cours';
+    const mine: Prisma.InstructionWhereInput = {
+      assignees: { some: { userId, role: query.role } },
+    };
+    const inTab = (name: TaskTab): Prisma.InstructionWhereInput => ({
+      ...mine,
+      status: { in: [...TASK_TABS[name]] },
+    });
+
+    const contains = query.search
+      ? { contains: query.search, mode: 'insensitive' as const }
+      : undefined;
+    const where: Prisma.InstructionWhereInput = {
+      AND: [
+        inTab(tab),
+        {
+          status: query.status,
+          priority: query.priority,
+          dossierId: query.dossierId,
+          createdAt: dateRange(query.createdFrom, query.createdTo),
+        },
+        ...(contains
+          ? [
+              {
+                OR: [
+                  { number: contains },
+                  { title: contains },
+                  { dossier: { number: contains } },
+                  { dossier: { title: contains } },
+                ],
+              },
+            ]
+          : []),
+      ],
+    };
+
+    const [data, total, inProgress, completed] =
+      await this.database.$transaction([
+        this.database.instruction.findMany({
+          where,
+          include: instructionInclude,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take,
+        }),
+        this.database.instruction.count({ where }),
+        this.database.instruction.count({ where: inTab('en-cours') }),
+        this.database.instruction.count({ where: inTab('terminees') }),
+      ]);
+
+    return {
+      data,
+      total,
+      skip,
+      take,
+      metrics: { inProgress, completed },
+    };
+  }
+
   async findOne(id: string) {
     const instruction = await this.database.instruction.findUnique({
       where: { id },
@@ -298,9 +390,12 @@ export class InstructionsService {
       InstructionStatus.EN_ATTENTE_VALIDATION,
     ]);
 
+    // Current versions only: a rejected version replaced by a validated
+    // one is history, not an outstanding livrable.
     const outstanding = await this.database.livrable.count({
       where: {
         instructionId: instruction.id,
+        isLatest: true,
         status: { not: LivrableStatus.VALIDE },
       },
     });
@@ -330,47 +425,273 @@ export class InstructionsService {
   }
 
   // 10.4.4.6 "Contrôle par le superviseur" — the approving half. Livrables
-  // submitted for this round move to VALIDE; the instruction stays
-  // EN_ATTENTE_VALIDATION so the responsable still explicitly calls
-  // `close()` (RG-LIV-005: the pronouncement is on the instruction, closing
-  // it is a separate, deliberate step).
-  async approveLivrables(id: string) {
-    const instruction = await this.requireStatus(id, [
-      InstructionStatus.EN_ATTENTE_VALIDATION,
-    ]);
-    await this.database.livrable.updateMany({
-      where: { instructionId: instruction.id, status: LivrableStatus.SOUMIS },
-      data: { status: LivrableStatus.VALIDE },
-    });
-    return this.findOne(instruction.id);
+  // submitted for this round move to VALIDE; once every current version is
+  // validated the instruction closes itself (TERMINEE), and if livrables
+  // rejected one by one earlier in the round are still open it goes back
+  // for corrections instead (see settleValidationRound).
+  async approveLivrables(id: string, validatorId: string) {
+    return this.approve(id, undefined, validatorId);
   }
 
-  // 10.4.4.6, rejection branch: submitted livrables go back to REJETE and
-  // the instruction returns to EN_COURS for the executant to address the
-  // observations (motif carried on `refusalReason`, reused for both refusal
-  // paths of an instruction's lifecycle).
-  async requestCorrections(id: string, motif: string) {
-    const instruction = await this.requireStatus(id, [
-      InstructionStatus.EN_ATTENTE_VALIDATION,
-    ]);
-    await this.database.livrable.updateMany({
-      where: { instructionId: instruction.id, status: LivrableStatus.SOUMIS },
-      data: { status: LivrableStatus.REJETE },
+  // Same, for a selection of the submitted livrables only; the others stay
+  // SOUMIS.
+  async approveSelectedLivrables(
+    id: string,
+    livrableIds: string[],
+    validatorId: string,
+  ) {
+    if (!livrableIds || livrableIds.length === 0) {
+      throw new BadRequestException(
+        'Provide at least one livrable ID to approve',
+      );
+    }
+    return this.approve(id, livrableIds, validatorId);
+  }
+
+  // 10.4.4.6, rejection branch: the listed submitted livrables go to REJETE,
+  // each with its own motif (a Validation row), and the instruction moves
+  // to A_CORRIGER for the executant to address them. Submitted livrables
+  // not listed stay SOUMIS. `refusalReason` keeps a readable summary for
+  // the task view (it is shared with the instruction refusal path).
+  async requestCorrections(
+    id: string,
+    dto: RequestCorrectionsDto,
+    validatorId: string,
+  ) {
+    const instruction = await this.requireStatus(id, DECIDING_STATUSES);
+    const livrables = await this.requireSubmitted(
+      instruction.id,
+      dto.livrables.map((entry) => entry.livrableId),
+    );
+    const motifs = new Map(
+      dto.livrables.map((entry) => [entry.livrableId, entry.motif]),
+    );
+
+    const updated = await this.database.$transaction(async (tx) => {
+      await this.recordDecisions(tx, instruction.id, validatorId, {
+        decision: ValidationDecision.REJETE,
+        livrables: livrables.map((livrable) => ({
+          id: livrable.id,
+          motif: motifs.get(livrable.id)!,
+        })),
+      });
+      return tx.instruction.update({
+        where: { id: instruction.id },
+        data: {
+          status: InstructionStatus.A_CORRIGER,
+          refusalReason:
+            dto.comment ??
+            livrables
+              .map(
+                (livrable) => `${livrable.title} : ${motifs.get(livrable.id)}`,
+              )
+              .join('\n'),
+        },
+        include: instructionInclude,
+      });
     });
-    const updated = await this.database.instruction.update({
-      where: { id: instruction.id },
-      data: { status: InstructionStatus.A_CORRIGER, refusalReason: motif },
-      include: instructionInclude,
-    });
+
     this.notifyInstruction(
       updated,
       updated.assignees.map((assignee) => assignee.user.id),
       {
         type: 'TASK_CORRECTIONS_REQUESTED',
-        message: `Des corrections sont demandées sur la tâche « ${updated.title} ».`,
+        message: `Des corrections sont demandées sur la tâche « ${updated.title} » : ${livrables
+          .map((livrable) => `${livrable.title} — ${motifs.get(livrable.id)}`)
+          .join(' ; ')}`,
       },
+      validatorId,
     );
     return updated;
+  }
+
+  // One submitted livrable rejected on its own, with its motif. The
+  // instruction moves to A_CORRIGER once no submitted livrable is left
+  // to decide (see settleValidationRound).
+  async rejectLivrable(livrableId: string, motif: string, validatorId: string) {
+    const livrable = await this.database.livrable.findUnique({
+      where: { id: livrableId },
+      select: { instructionId: true },
+    });
+    if (!livrable) {
+      throw new NotFoundException(`Livrable ${livrableId} not found`);
+    }
+    const instruction = await this.requireStatus(
+      livrable.instructionId,
+      DECIDING_STATUSES,
+    );
+    const [rejected] = await this.requireSubmitted(instruction.id, [
+      livrableId,
+    ]);
+
+    const settled = await this.database.$transaction(async (tx) => {
+      await this.recordDecisions(tx, instruction.id, validatorId, {
+        decision: ValidationDecision.REJETE,
+        livrables: [{ id: rejected.id, motif }],
+      });
+      return this.settleValidationRound(tx, instruction.id);
+    });
+
+    this.notifyInstruction(
+      instruction,
+      instruction.assignees.map((assignee) => assignee.user.id),
+      {
+        type:
+          settled === InstructionStatus.A_CORRIGER
+            ? 'TASK_CORRECTIONS_REQUESTED'
+          : 'TASK_LIVRABLE_REJECTED',
+        message: `Le livrable « ${rejected.title} » de la tâche « ${instruction.title} » est rejeté : ${motif}`,
+      },
+      validatorId,
+    );
+    return this.database.livrable.findUniqueOrThrow({
+      where: { id: livrableId },
+      include: { validations: lastLivrableValidation },
+    });
+  }
+
+  private async approve(
+    id: string,
+    livrableIds: string[] | undefined,
+    validatorId: string,
+  ) {
+    const instruction = await this.requireStatus(id, DECIDING_STATUSES);
+    const livrables = livrableIds
+      ? await this.requireSubmitted(instruction.id, livrableIds)
+      : instruction.livrables.filter(
+          (livrable) => livrable.status === LivrableStatus.SOUMIS,
+        );
+    if (livrables.length === 0) {
+      throw new BadRequestException('No submitted livrable to approve');
+    }
+
+    const settled = await this.database.$transaction(async (tx) => {
+      await this.recordDecisions(tx, instruction.id, validatorId, {
+        decision: ValidationDecision.VALIDE,
+        livrables: livrables.map((livrable) => ({ id: livrable.id })),
+      });
+      return this.settleValidationRound(tx, instruction.id);
+    });
+    if (settled === InstructionStatus.TERMINEE) {
+      this.notifyInstruction(
+        instruction,
+        instruction.assignees.map((assignee) => assignee.user.id),
+        {
+          type: 'TASK_COMPLETED',
+          message: `Tous les livrables de la tâche « ${instruction.title} » sont validés : la tâche est terminée`,
+        },
+        validatorId,
+      );
+    }
+    return this.findOne(instruction.id);
+  }
+
+  // The given livrables, which must all be SOUMIS livrables of this
+  // instruction — anything else is a 400 naming the offenders.
+  private async requireSubmitted(instructionId: string, livrableIds: string[]) {
+    const ids = [...new Set(livrableIds)];
+    if (ids.length !== livrableIds.length) {
+      throw new BadRequestException('A livrable is listed more than once');
+    }
+    const livrables = await this.database.livrable.findMany({
+      where: {
+        id: { in: ids },
+        instructionId,
+        status: LivrableStatus.SOUMIS,
+      },
+      select: { id: true, title: true },
+    });
+    const missing = ids.filter((id) => !livrables.some((l) => l.id === id));
+    if (missing.length) {
+      throw new BadRequestException(
+        `Not submitted livrables of this instruction: ${missing.join(', ')}`,
+      );
+    }
+    return livrables;
+  }
+
+  // Moves the livrables to the decision's status and records one
+  // Validation per livrable. The status update is guarded on SOUMIS, so
+  // a concurrent decision on the same livrable makes the second one fail.
+  private async recordDecisions(
+    tx: Prisma.TransactionClient,
+    instructionId: string,
+    validatorId: string,
+    round: {
+      decision:
+        typeof ValidationDecision.VALIDE | typeof ValidationDecision.REJETE;
+      livrables: { id: string; motif?: string }[];
+    },
+  ) {
+    const ids = round.livrables.map((livrable) => livrable.id);
+    const { count } = await tx.livrable.updateMany({
+      where: { id: { in: ids }, status: LivrableStatus.SOUMIS },
+      data: {
+        status:
+          round.decision === ValidationDecision.VALIDE
+            ? LivrableStatus.VALIDE
+            : LivrableStatus.REJETE,
+      },
+    });
+    if (count !== ids.length) {
+      throw new ConflictException(
+        'A livrable was decided meanwhile — reload and try again',
+      );
+    }
+    await tx.validation.createMany({
+      data: round.livrables.map((livrable) => ({
+        instructionId,
+        livrableId: livrable.id,
+        validatorId,
+        decision: round.decision,
+        motif: livrable.motif,
+      })),
+    });
+  }
+
+  // Ends a validation round once nothing is left SOUMIS: an instruction
+  // with rejected livrables not yet replaced by a new version goes to
+  // A_CORRIGER; one whose current versions are all VALIDE is done — it
+  // closes itself (TERMINEE) and the dossier progress is refreshed.
+  // Returns the status it moved to, or null while the round is open.
+  private async settleValidationRound(
+    tx: Prisma.TransactionClient,
+    instructionId: string,
+  ) {
+    const [submitted, openRejections, current, validated] = await Promise.all([
+      tx.livrable.count({
+        where: { instructionId, status: LivrableStatus.SOUMIS },
+      }),
+      tx.livrable.count({
+        where: {
+          instructionId,
+          status: LivrableStatus.REJETE,
+          isLatest: true,
+        },
+      }),
+      tx.livrable.count({ where: { instructionId, isLatest: true } }),
+      tx.livrable.count({
+        where: { instructionId, isLatest: true, status: LivrableStatus.VALIDE },
+      }),
+    ]);
+    if (submitted > 0) return null;
+    if (openRejections > 0) {
+      await tx.instruction.update({
+        where: { id: instructionId },
+        data: { status: InstructionStatus.A_CORRIGER },
+      });
+      return InstructionStatus.A_CORRIGER;
+    }
+    if (current > 0 && validated === current) {
+      const { dossierId } = await tx.instruction.update({
+        where: { id: instructionId },
+        data: { status: InstructionStatus.TERMINEE, closedAt: new Date() },
+        select: { dossierId: true },
+      });
+      await refreshDossierProgress(tx, dossierId);
+      return InstructionStatus.TERMINEE;
+    }
+    return null;
   }
 
   private async requireStatus(id: string, allowed: InstructionStatus[]) {

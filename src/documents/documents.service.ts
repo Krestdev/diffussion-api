@@ -46,10 +46,12 @@ export class DocumentsService {
       );
     }
 
-    await assertDossierOpenForActivity(
-      this.database,
-      await this.resolveDossierId(dto),
-    );
+    // Null only for a sortant draft not yet attached to its dossier: its
+    // letter can be uploaded before the dossier is chosen.
+    const dossierId = await this.resolveDossierId(dto);
+    if (dossierId) {
+      await assertDossierOpenForActivity(this.database, dossierId);
+    }
 
     const prefix = dto.dossierId
       ? `dossiers/${dto.dossierId}`
@@ -66,6 +68,7 @@ export class DocumentsService {
     return this.database.document.create({
       data: {
         originalName: file.originalname,
+        name: dto.name ?? file.originalname,
         storageKey: key,
         mimeType: file.mimetype,
         sizeBytes: file.size,
@@ -78,15 +81,54 @@ export class DocumentsService {
     });
   }
 
-  findAll(query: FindDocumentsQueryDto) {
+  /**
+   * Same rule as assertCanAccessDocument, expressed as a filter: a list must
+   * not leak the existence (name, and above all storage key) of documents the
+   * caller could not open anyway.
+   */
+  async findAll(query: FindDocumentsQueryDto, actingUserId: string) {
+    const isAdmin = await this.rbac.hasPermission(
+      actingUserId,
+      PermissionCode.AdminManageCircuits,
+    );
     const where: Prisma.DocumentWhereInput = {
       dossierId: query.dossierId,
       courrierId: query.courrierId,
       livrableId: query.livrableId,
+      ...(isAdmin
+        ? {}
+        : {
+            OR: [
+              { uploadedById: actingUserId },
+              { ownerId: actingUserId },
+              { accesses: { some: { userId: actingUserId } } },
+              { dossier: { site: { responsibleId: actingUserId } } },
+              {
+                courrier: {
+                  dossier: { site: { responsibleId: actingUserId } },
+                },
+              },
+            ],
+          }),
     };
     return this.database.document.findMany({
       where,
       orderBy: { createdAt: 'desc' },
+      // storageKey stays out of listings: downloads go through
+      // /documents/:id/download-url, which checks access first.
+      select: {
+        id: true,
+        originalName: true,
+        name: true,
+        mimeType: true,
+        sizeBytes: true,
+        dossierId: true,
+        courrierId: true,
+        livrableId: true,
+        ownerId: true,
+        uploadedById: true,
+        createdAt: true,
+      },
     });
   }
 
@@ -130,7 +172,7 @@ export class DocumentsService {
       ownerId: string | null;
       dossier: { site: { responsibleId: string | null } | null } | null;
       courrier: {
-        dossier: { site: { responsibleId: string | null } | null };
+        dossier: { site: { responsibleId: string | null } | null } | null;
       } | null;
       accesses: { userId: string }[];
     },
@@ -140,7 +182,7 @@ export class DocumentsService {
     if (document.ownerId === actingUserId) return;
     if (document.accesses.length > 0) return;
 
-    const site = document.dossier?.site ?? document.courrier?.dossier.site;
+    const site = document.dossier?.site ?? document.courrier?.dossier?.site;
     if (site?.responsibleId === actingUserId) return;
 
     const isAdmin = await this.rbac.hasPermission(
@@ -156,7 +198,9 @@ export class DocumentsService {
 
   // The dossier a new document ultimately lands in: directly, through its
   // courrier, or through its livrable's instruction.
-  private async resolveDossierId(dto: UploadDocumentDto): Promise<string> {
+  private async resolveDossierId(
+    dto: UploadDocumentDto,
+  ): Promise<string | null> {
     if (dto.dossierId) return dto.dossierId;
     if (dto.courrierId) {
       const courrier = await this.database.courrier.findUnique({
@@ -193,7 +237,7 @@ export class DocumentsService {
     if (!document) {
       throw new NotFoundException(`Document ${id} not found`);
     }
-    const site = document.dossier?.site ?? document.courrier?.dossier.site;
+    const site = document.dossier?.site ?? document.courrier?.dossier?.site;
     const isUploader = document.uploadedById === actingUserId;
     const isSiteAdmin = site?.responsibleId === actingUserId;
     const isPlatformAdmin = await this.rbac.hasPermission(

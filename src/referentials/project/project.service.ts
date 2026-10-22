@@ -4,6 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import {
+  DEFAULT_TAKE,
+  PaginationQueryDto,
+} from '../../common/dto/pagination.query.dto';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
@@ -27,8 +31,26 @@ export class ProjectService {
     return this.database.project.create({ data: dto });
   }
 
-  findAll() {
-    return this.database.project.findMany({ orderBy: { name: 'asc' } });
+  async findAll(query: PaginationQueryDto = {}) {
+    const where: Prisma.ProjectWhereInput = {
+      name: query.search
+        ? { contains: query.search, mode: 'insensitive' }
+        : undefined,
+    };
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+
+    const [data, total] = await this.database.$transaction([
+      this.database.project.findMany({
+        where,
+        orderBy: { name: 'asc' },
+        skip,
+        take,
+      }),
+      this.database.project.count({ where }),
+    ]);
+
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {

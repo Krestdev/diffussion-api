@@ -6,6 +6,7 @@ import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
 import { DatabaseService } from '../database/database.service';
 import { MailerService } from '../mail/mailer.service';
+import { RbacService } from './rbac/rbac.service';
 import { UserStatus } from '../../generated/prisma/enums';
 
 const sha256 = (value: string) =>
@@ -39,6 +40,7 @@ describe('AuthService — password reset', () => {
         { provide: DatabaseService, useValue: database },
         { provide: JwtService, useValue: { signAsync: jest.fn() } },
         { provide: MailerService, useValue: mailer },
+        { provide: RbacService, useValue: {} },
       ],
     }).compile();
 

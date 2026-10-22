@@ -19,6 +19,11 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../auth/rbac/permission.guard';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RequirePermission } from '../auth/rbac/require-permission.decorator';
+import {
+  SiteScope,
+  fromBody,
+  fromParam,
+} from '../auth/rbac/site-scope.decorator';
 import { JwtPayload } from '../auth/types/jwt-payload.type';
 import { AnalysisSheetService } from './analysis-sheet.service';
 import {
@@ -34,20 +39,26 @@ import {
 @ApiTags('analysis-sheets')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionGuard)
+// Permissions are checked at the site of the targeted resource.
+@SiteScope(fromParam('analysisSheet'))
 @Controller('analysis-sheets')
 export class AnalysisController {
   constructor(private readonly sheets: AnalysisSheetService) {}
 
   @Post()
   @RequirePermission(PermissionCode.AnalysisCreate)
+  @SiteScope(fromBody('courrier', 'courrierId'))
   create(@Body() dto: CreateAnalysisSheetDto, @CurrentUser() user: JwtPayload) {
     return this.sheets.create(dto, user.sub);
   }
 
   @Get()
   @RequirePermission(PermissionCode.AnalysisRead)
-  findAll(@Query() query: FindAnalysisSheetsQueryDto) {
-    return this.sheets.findAll(query);
+  findAll(
+    @Query() query: FindAnalysisSheetsQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.sheets.findAll(query, user.sub);
   }
 
   @Get(':id')
@@ -83,6 +94,7 @@ export class AnalysisController {
 
   @Patch('items/:itemId')
   @RequirePermission(PermissionCode.AnalysisUpdate)
+  @SiteScope(fromParam('analysisItem', 'itemId'))
   updateItem(
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Body() dto: UpdateAnalysisItemDto,
@@ -91,6 +103,7 @@ export class AnalysisController {
   }
 
   @Delete('items/:itemId')
+  @SiteScope(fromParam('analysisItem', 'itemId'))
   @RequirePermission(PermissionCode.AnalysisUpdate)
   removeItem(@Param('itemId', ParseUUIDPipe) itemId: string) {
     return this.sheets.removeItem(itemId);
@@ -99,6 +112,7 @@ export class AnalysisController {
   /** Full-replace of one element's criteria grid. */
   @Put('items/:itemId/criteria')
   @RequirePermission(PermissionCode.AnalysisUpdate)
+  @SiteScope(fromParam('analysisItem', 'itemId'))
   setCriteria(
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Body() dto: SetCriteriaDto,

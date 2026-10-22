@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CircuitsModule } from '../circuits/circuits.module';
+import { InstructionsModule } from '../instructions/instructions.module';
 import { DossierController } from './dossier/dossier.controller';
 import { DossierService } from './dossier/dossier.service';
 import { DossierLatenessService } from './dossier/dossier-lateness.service';
@@ -8,7 +9,7 @@ import { MailService } from './mail/mail.service';
 import { DeliverableController } from './deliverable/deliverable.controller';
 import { DeliverableService } from './deliverable/deliverable.service';
 @Module({
-  imports: [CircuitsModule],
+  imports: [CircuitsModule, InstructionsModule],
   controllers: [DossierController, MailController, DeliverableController],
   providers: [
     DossierService,

@@ -9,6 +9,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -16,6 +17,7 @@ import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { CircuitService } from './circuit.service';
 import { CreateCircuitDto } from './dto/create-circuit.dto';
 import { UpdateCircuitDto } from './dto/update-circuit.dto';
@@ -34,8 +36,8 @@ export class CircuitController {
   }
 
   @Get()
-  findAll() {
-    return this.circuitService.findAll();
+  findAll(@Query() query: PaginationQueryDto) {
+    return this.circuitService.findAll(query);
   }
 
   @Get(':id')

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { DeliverableService } from './deliverable.service';
 import { DatabaseService } from '../../database/database.service';
+import { RbacService } from '../../auth/rbac/rbac.service';
 import { LivrableStatus } from '../../../generated/prisma/client';
 
 // Dossier-state rules (RG-DOS-007, site activity, progress) are covered by
@@ -42,6 +43,7 @@ describe('DeliverableService', () => {
       providers: [
         DeliverableService,
         { provide: DatabaseService, useValue: database },
+        { provide: RbacService, useValue: {} },
       ],
     }).compile();
 

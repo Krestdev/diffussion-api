@@ -17,6 +17,11 @@ import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import {
+  SiteScope,
+  fromBody,
+  fromParam,
+} from '../../auth/rbac/site-scope.decorator';
+import {
   JwtPayload,
   JwtPayloadWithRefreshToken,
 } from '../../auth/types/jwt-payload.type';
@@ -30,6 +35,8 @@ import { UpdateDossierDto } from './dto/update-dossier.dto';
 @ApiTags('dossiers')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionGuard)
+// Permissions are checked at the site of the targeted resource.
+@SiteScope(fromParam('dossier'))
 @Controller('dossiers')
 export class DossierController {
   constructor(private readonly dossierService: DossierService) {}
@@ -45,6 +52,7 @@ export class DossierController {
 
   @Post()
   @RequirePermission(PermissionCode.DossierCreate)
+  @SiteScope(fromBody('site', 'siteId'))
   create(
     @Body() dto: CreateDossierDto,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
@@ -63,6 +71,7 @@ export class DossierController {
 
   @Patch(':id')
   @RequirePermission(PermissionCode.DossierUpdate)
+  @SiteScope(fromParam('dossier'), fromBody('site', 'siteId'))
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDossierDto,

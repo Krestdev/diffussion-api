@@ -75,7 +75,8 @@ async function seedSite() {
   return site;
 }
 
-async function seedAdminUser(roleId: string, siteId: string) {
+// The platform administrator (super-admin): no site, global roles.
+async function seedAdminUser(roleId: string) {
   const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, SALT_ROUNDS);
 
   const user = await prisma.user.upsert({
@@ -91,26 +92,47 @@ async function seedAdminUser(roleId: string, siteId: string) {
     },
   });
 
-  await prisma.userRole.upsert({
-    where: { userId_roleId: { userId: user.id, roleId } },
-    update: {},
-    create: { userId: user.id, roleId },
-  });
-
-  await prisma.assignment.upsert({
-    where: { userId_siteId: { userId: user.id, siteId } },
-    update: {},
-    create: { userId: user.id, siteId },
-  });
-
-  // The site needs a responsible; default to the admin if none is set yet.
-  await prisma.site.updateMany({
-    where: { id: siteId, responsibleId: null },
-    data: { responsibleId: user.id },
+  // Global grant (siteId null). skipDuplicates relies on the
+  // NULLS NOT DISTINCT unique index to keep re-runs idempotent.
+  await prisma.userRole.createMany({
+    data: [{ userId: user.id, roleId, siteId: null }],
+    skipDuplicates: true,
   });
 
   console.log(`✓ Admin user ensured: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
   return user;
+}
+
+/// Test-only: RESTRICTED dossiers need a DossierAccess row — holding every
+/// permission doesn't cover them. Give the admin every role (globally) and
+/// every restricted dossier. Re-run the seed after creating new
+/// roles/dossiers to catch up. Circuit steps are decided at a site
+/// (hasRoleAtSite), which a platform user has none of: walk circuits as the
+/// courrier's owner, or with a user of the dossier's site.
+async function grantAdminFullAccess(userId: string) {
+  const [roles, restrictedDossiers] = await Promise.all([
+    prisma.role.findMany({ select: { id: true } }),
+    prisma.dossier.findMany({
+      where: { confidentiality: 'RESTRICTED' },
+      select: { id: true },
+    }),
+  ]);
+
+  await prisma.userRole.createMany({
+    data: roles.map((role) => ({ userId, roleId: role.id, siteId: null })),
+    skipDuplicates: true,
+  });
+  for (const dossier of restrictedDossiers) {
+    await prisma.dossierAccess.upsert({
+      where: { dossierId_userId: { dossierId: dossier.id, userId } },
+      update: { canView: true, canEdit: true },
+      create: { dossierId: dossier.id, userId, canView: true, canEdit: true },
+    });
+  }
+
+  console.log(
+    `✓ Admin granted ${roles.length} roles, ${restrictedDossiers.length} restricted dossiers`,
+  );
 }
 
 async function seedReferentials() {
@@ -209,10 +231,11 @@ async function seedAnalysisCriteria() {
 async function main() {
   const permissionCodes = await seedPermissions();
   const role = await seedAdminRole(permissionCodes);
-  const site = await seedSite();
-  await seedAdminUser(role.id, site.id);
+  await seedSite();
+  const admin = await seedAdminUser(role.id);
   await seedReferentials();
   await seedAnalysisCriteria();
+  await grantAdminFullAccess(admin.id);
 
   console.log('\nSeed complete. Log in with:');
   console.log(`  email:    ${ADMIN_EMAIL}`);

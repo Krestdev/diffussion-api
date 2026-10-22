@@ -14,6 +14,8 @@ import {
 } from '../../generated/prisma/client';
 import { ActivityService } from '../activity/activity.service';
 import { AuditLog } from '../activity/decorators/audit-log.decorator';
+import { PermissionCode } from '../auth/rbac/rbac.constants';
+import { RbacService } from '../auth/rbac/rbac.service';
 import { DEFAULT_TAKE } from '../common/dto/pagination.query.dto';
 import {
   assertDossierOpenForActivity,
@@ -85,6 +87,7 @@ const sheetInclude = {
 export class AnalysisSheetService {
   constructor(
     private readonly database: DatabaseService,
+    private readonly rbac: RbacService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
   ) {}
@@ -107,7 +110,13 @@ export class AnalysisSheetService {
     if (!courrier) {
       throw new NotFoundException(`Courrier ${dto.courrierId} not found`);
     }
-    await assertDossierOpenForActivity(this.database, courrier.dossierId);
+    const { dossierId } = courrier;
+    if (!dossierId) {
+      throw new BadRequestException(
+        `Courrier ${courrier.number} is not attached to a dossier yet`,
+      );
+    }
+    await assertDossierOpenForActivity(this.database, dossierId);
 
     await this.assertNoLiveSheet(dto.courrierId, courrier.number);
 
@@ -122,7 +131,7 @@ export class AnalysisSheetService {
     if (!instruction) {
       throw new NotFoundException(`Instruction ${dto.instructionId} not found`);
     }
-    if (instruction.dossierId !== courrier.dossierId) {
+    if (instruction.dossierId !== dossierId) {
       throw new BadRequestException(
         'The instruction and the courrier belong to different dossiers',
       );
@@ -140,7 +149,7 @@ export class AnalysisSheetService {
       );
     }
 
-    const templates = await this.activeTemplates(courrier.dossierId);
+    const templates = await this.activeTemplates(dossierId);
     const seedItems = dto.seedItemsFromCourrier ?? true;
 
     const { courrierId, instructionId, projectId, remise, ...rest } = dto;
@@ -162,7 +171,7 @@ export class AnalysisSheetService {
             reference,
             livrableId: livrable.id,
             courrierId,
-            dossierId: courrier.dossierId,
+            dossierId,
             projectId,
             authorId,
             remise: remise ? new Date(remise) : undefined,
@@ -190,10 +199,16 @@ export class AnalysisSheetService {
     });
   }
 
-  async findAll(query: FindAnalysisSheetsQueryDto) {
+  async findAll(query: FindAnalysisSheetsQueryDto, userId: string) {
     const skip = query.skip ?? 0;
     const take = query.take ?? DEFAULT_TAKE;
     const where: Prisma.AnalysisSheetWhereInput = {
+      // Only the sites where the caller may read analyses.
+      ...(await this.rbac.siteFilter(
+        userId,
+        PermissionCode.AnalysisRead,
+        (siteId): Prisma.AnalysisSheetWhereInput => ({ dossier: { siteId } }),
+      )),
       dossierId: query.dossierId,
       courrierId: query.courrierId,
       authorId: query.authorId,
@@ -515,11 +530,15 @@ export class AnalysisSheetService {
       });
 
       if (accepted) {
-        // The task is done once nothing else is pending on it.
+        // The task is done once nothing else is *pending* on it. Rejected or
+        // archived versions are superseded history, not outstanding work —
+        // counting them would leave the instruction open for ever.
         const outstanding = await tx.livrable.count({
           where: {
             instructionId,
-            status: { not: LivrableStatus.VALIDE },
+            status: {
+              notIn: [LivrableStatus.VALIDE, ...CLOSED_LIVRABLE_STATUSES],
+            },
           },
         });
         if (outstanding === 0) {
@@ -536,7 +555,11 @@ export class AnalysisSheetService {
           where: { id: instructionId },
           data: {
             status: InstructionStatus.A_CORRIGER,
-            refusalReason: dto.motif,
+            // Always leave a reason on the task, even when the avis followed
+            // the grid and needed no motif of its own.
+            refusalReason:
+              dto.motif ??
+              `Fiche ${sheet.reference} rejetée (avis ${dto.overallOpinion})`,
           },
         });
       }

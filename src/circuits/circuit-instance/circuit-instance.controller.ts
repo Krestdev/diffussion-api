@@ -20,6 +20,7 @@ import {
 import { CircuitInstanceService } from './circuit-instance.service';
 import { CreateCircuitInstanceDto } from './dto/create-circuit-instance.dto';
 import { DecideCircuitInstanceDto } from './dto/decide-circuit-instance.dto';
+import { FindApprobationQueryDto } from './dto/find-approbation.query.dto';
 import { FindCircuitInstancesQueryDto } from './dto/find-circuit-instances.query.dto';
 
 // No blanket @RequirePermission here: eligibility to trigger/act on a given
@@ -41,6 +42,16 @@ export class CircuitInstanceController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.circuitInstanceService.findAll(query, user.sub);
+  }
+
+  // The Approbation page in one call: a tab of rows + every tab's count.
+  // Registered before ':id', like eligible-owners below.
+  @Get('approbation')
+  findApprobation(
+    @Query() query: FindApprobationQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.circuitInstanceService.findApprobation(query, user.sub);
   }
 
   // Registered before ':id' — otherwise "eligible-owners" would be parsed

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsUUID } from 'class-validator';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { EmptyToUndefined } from '../../common/transforms/empty-to-undefined.transform';
 
 // Exactly one owner must be set — enforced in DocumentsService, since
@@ -34,4 +34,16 @@ export class UploadDocumentDto {
   @EmptyToUndefined()
   @IsUUID()
   ownerId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Human-readable display name for the document. ' +
+      'If omitted, the original filename is used as the display name.',
+    maxLength: 200,
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsString()
+  @MaxLength(200)
+  name?: string;
 }

@@ -1,7 +1,12 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { Prisma, UserStatus } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
 import { PermissionCode } from './rbac.constants';
+import { SiteEntity } from './site-scope.decorator';
 
 // Permissions that must always be held by at least one active user,
 // otherwise nobody could ever manage users/roles again (lockout).
@@ -9,6 +14,30 @@ const LOCKOUT_CRITICAL_PERMISSIONS = [
   PermissionCode.AdminManageUsers,
   PermissionCode.AdminManageRoles,
 ];
+
+/**
+ * Where an administrator may act: 'ALL' for a platform user (global grant),
+ * otherwise the sites they hold the permission at — their own site.
+ */
+export type SiteScopeList = 'ALL' | string[];
+
+export function isInScope(scope: SiteScopeList, siteId: string | null) {
+  return scope === 'ALL' || (siteId !== null && scope.includes(siteId));
+}
+
+/** 403 when the user administers nothing at all. */
+export function assertAdministers(scope: SiteScopeList) {
+  if (scope !== 'ALL' && scope.length === 0) {
+    throw new ForbiddenException('Reserved to administrators');
+  }
+}
+
+/** 403 unless `siteId` is within the administrator's scope. */
+export function assertInScope(scope: SiteScopeList, siteId: string | null) {
+  if (!isInScope(scope, siteId)) {
+    throw new ForbiddenException('This belongs to another site');
+  }
+}
 
 @Injectable()
 export class RbacService {
@@ -38,8 +67,18 @@ export class RbacService {
   }
 
   /**
+   * UserRole rows that let their holder act at `siteId`: a grant at that
+   * site, or a global grant of a user belonging to it.
+   */
+  private grantsAtSiteWhere(siteId: string): Prisma.UserRoleWhereInput {
+    return {
+      OR: [{ siteId }, { siteId: null, user: { siteId } }],
+    };
+  }
+
+  /**
    * "Does this user act with `roleId` at `siteId` right now?" — either they
-   * hold the role and are assigned to the site, or a delegation currently
+   * hold the role there (see grantsAtSiteWhere), or a delegation currently
    * grants them exactly that role there.
    */
   async hasRoleAtSite(
@@ -48,10 +87,10 @@ export class RbacService {
     siteId: string | null,
   ): Promise<boolean> {
     if (!siteId) return false;
-    const [hasRole, isAssigned, delegated] = await Promise.all([
-      this.database.userRole.findFirst({ where: { userId: userUuid, roleId } }),
-      this.database.assignment.findFirst({
-        where: { userId: userUuid, siteId },
+    const [held, delegated] = await Promise.all([
+      this.database.userRole.findFirst({
+        where: { userId: userUuid, roleId, ...this.grantsAtSiteWhere(siteId) },
+        select: { id: true },
       }),
       this.database.delegation.findFirst({
         where: {
@@ -63,7 +102,7 @@ export class RbacService {
         select: { id: true },
       }),
     ]);
-    return (hasRole !== null && isAssigned !== null) || delegated !== null;
+    return held !== null || delegated !== null;
   }
 
   /** Everyone who can act with `roleId` at `siteId` right now. */
@@ -73,12 +112,9 @@ export class RbacService {
   ): Promise<string[]> {
     if (!roleId || !siteId) return [];
     const [holders, delegates] = await Promise.all([
-      this.database.user.findMany({
-        where: {
-          userRoles: { some: { roleId } },
-          assignments: { some: { siteId } },
-        },
-        select: { id: true },
+      this.database.userRole.findMany({
+        where: { roleId, ...this.grantsAtSiteWhere(siteId) },
+        select: { userId: true },
       }),
       this.database.delegation.findMany({
         where: { roleId, siteId, ...this.activeDelegationsFilter() },
@@ -87,7 +123,7 @@ export class RbacService {
     ]);
     return [
       ...new Set([
-        ...holders.map((u) => u.id),
+        ...holders.map((h) => h.userId),
         ...delegates.map((d) => d.delegataireId),
       ]),
     ];
@@ -96,21 +132,21 @@ export class RbacService {
   /**
    * All (roleId, siteId) pairs the given user can act on right now —
    * used by the "awaiting my decision" filter in CircuitInstanceService.
-   * Combines direct role+assignment pairs with active delegations.
+   * Combines site grants, global grants at the user's own site, and active
+   * delegations.
    */
   async eligibleRoleSitePairs(
     userId: string,
   ): Promise<{ roleId: string; siteId: string }[]> {
-    const [direct, delegated] = await Promise.all([
-      // Roles the user holds directly × sites they are assigned to
+    const [grants, user, delegated] = await Promise.all([
       this.database.userRole.findMany({
         where: { userId },
-        select: {
-          roleId: true,
-          user: { select: { assignments: { select: { siteId: true } } } },
-        },
+        select: { roleId: true, siteId: true },
       }),
-      // Roles granted by an active delegation (already scoped to one site each)
+      this.database.user.findUnique({
+        where: { id: userId },
+        select: { siteId: true },
+      }),
       this.database.delegation.findMany({
         where: { delegataireId: userId, ...this.activeDelegationsFilter() },
         select: { roleId: true, siteId: true },
@@ -118,68 +154,64 @@ export class RbacService {
     ]);
 
     const pairs = new Map<string, { roleId: string; siteId: string }>();
-    for (const ur of direct) {
-      for (const { siteId } of ur.user.assignments) {
-        const key = `${ur.roleId}:${siteId}`;
-        pairs.set(key, { roleId: ur.roleId, siteId });
+    const add = (roleId: string, siteId: string) =>
+      pairs.set(`${roleId}:${siteId}`, { roleId, siteId });
+    for (const grant of grants) {
+      if (grant.siteId) {
+        add(grant.roleId, grant.siteId);
+      } else if (user?.siteId) {
+        add(grant.roleId, user.siteId);
       }
     }
-    for (const d of delegated) {
-      const key = `${d.roleId}:${d.siteId}`;
-      pairs.set(key, { roleId: d.roleId, siteId: d.siteId });
-    }
+    for (const d of delegated) add(d.roleId, d.siteId);
     return [...pairs.values()];
   }
 
-
-  // Walks User -> UserRole -> Role -> RolePermission -> Permission and
-  // returns the deduped set of permission codes the user holds. Roles are
-  // held directly by the user (RG-ORG-003: a user may exercise several
-  // responsibilities at once) rather than scoped to a single site
-  // assignment, so this no longer goes through Assignment.
-  async getPermissionCodes(userUuid: string): Promise<string[]> {
-    const userRoles = await this.database.userRole.findMany({
-      where: { userId: userUuid },
-      include: {
-        role: {
-          include: {
-            rolePermissions: {
-              include: { permission: true },
-            },
+  /**
+   * Walks User -> UserRole -> Role -> RolePermission -> Permission (plus
+   * active delegations) and returns the deduped permission codes.
+   * - Without `siteId`: everything the user holds, at any site — what the
+   *   PermissionGuard checks ("allowed somewhere").
+   * - With `siteId`: only what applies there — global grants, grants at that
+   *   site, and delegations at that site.
+   */
+  async getPermissionCodes(
+    userUuid: string,
+    siteId?: string,
+  ): Promise<string[]> {
+    const permissionsSelect = {
+      role: {
+        select: {
+          rolePermissions: {
+            select: { permission: { select: { code: true } } },
           },
         },
       },
-    });
+    } as const;
+    const [grants, delegated] = await Promise.all([
+      this.database.userRole.findMany({
+        where: {
+          userId: userUuid,
+          ...(siteId ? { OR: [{ siteId }, { siteId: null }] } : {}),
+        },
+        select: permissionsSelect,
+      }),
+      this.database.delegation.findMany({
+        where: {
+          delegataireId: userUuid,
+          siteId,
+          ...this.activeDelegationsFilter(),
+        },
+        select: permissionsSelect,
+      }),
+    ]);
 
     const codes = new Set<string>();
-    for (const userRole of userRoles) {
-      for (const rolePermission of userRole.role.rolePermissions) {
+    for (const { role } of [...grants, ...delegated]) {
+      for (const rolePermission of role.rolePermissions) {
         codes.add(rolePermission.permission.code);
       }
     }
-
-    // Roles held through an active delegation count too. The *permission*
-    // check itself stays global (a permission carries no site today), so
-    // this widens what the user may do; the site restriction currently
-    // bites on circuit steps, via hasRoleAtSite.
-    const delegated = await this.database.delegation.findMany({
-      where: { delegataireId: userUuid, ...this.activeDelegationsFilter() },
-      select: {
-        role: {
-          select: {
-            rolePermissions: {
-              select: { permission: { select: { code: true } } },
-            },
-          },
-        },
-      },
-    });
-    for (const delegation of delegated) {
-      for (const rolePermission of delegation.role.rolePermissions) {
-        codes.add(rolePermission.permission.code);
-      }
-    }
-
     return [...codes];
   }
 
@@ -189,6 +221,218 @@ export class RbacService {
   ): Promise<boolean> {
     const codes = await this.getPermissionCodes(userUuid);
     return codes.includes(permission);
+  }
+
+  /**
+   * The user's permissions as the frontend needs them to show or hide
+   * actions per site: `global` applies everywhere, `bySite[siteId]` only
+   * there (site grants and active delegations). At a site the user holds
+   * `global` plus `bySite[siteId]`.
+   */
+  async permissionsBySite(
+    userUuid: string,
+  ): Promise<{ global: string[]; bySite: Record<string, string[]> }> {
+    const permissionsSelect = {
+      siteId: true,
+      role: {
+        select: {
+          rolePermissions: {
+            select: { permission: { select: { code: true } } },
+          },
+        },
+      },
+    } as const;
+    const [grants, delegated] = await Promise.all([
+      this.database.userRole.findMany({
+        where: { userId: userUuid },
+        select: permissionsSelect,
+      }),
+      this.database.delegation.findMany({
+        where: { delegataireId: userUuid, ...this.activeDelegationsFilter() },
+        select: permissionsSelect,
+      }),
+    ]);
+
+    const global = new Set<string>();
+    const bySite = new Map<string, Set<string>>();
+    for (const { siteId, role } of [...grants, ...delegated]) {
+      const codes = role.rolePermissions.map((rp) => rp.permission.code);
+      const target = siteId
+        ? (bySite.get(siteId) ?? bySite.set(siteId, new Set()).get(siteId)!)
+        : global;
+      codes.forEach((code) => target.add(code));
+    }
+    return {
+      global: [...global],
+      bySite: Object.fromEntries(
+        [...bySite].map(([siteId, codes]) => [
+          siteId,
+          [...codes].filter((code) => !global.has(code)),
+        ]),
+      ),
+    };
+  }
+
+  /**
+   * The sites this user administers: 'ALL' for a platform administrator
+   * (global grant of `permission`), otherwise the sites they are the
+   * responsible of — a site's responsible is its administrator. Empty for
+   * everyone else.
+   */
+  async administeredSites(
+    userUuid: string,
+    permission: PermissionCode,
+  ): Promise<SiteScopeList> {
+    if (await this.hasGlobalPermission(userUuid, permission)) return 'ALL';
+    const sites = await this.database.site.findMany({
+      where: { responsibleId: userUuid },
+      select: { id: true },
+    });
+    return sites.map((site) => site.id);
+  }
+
+  /** Held through a global grant — what platform-wide administration needs. */
+  async hasGlobalPermission(
+    userUuid: string,
+    permission: PermissionCode,
+  ): Promise<boolean> {
+    const grant = await this.database.userRole.findFirst({
+      where: {
+        userId: userUuid,
+        siteId: null,
+        role: {
+          rolePermissions: { some: { permission: { code: permission } } },
+        },
+      },
+      select: { id: true },
+    });
+    return grant !== null;
+  }
+
+  async hasPermissionAtSite(
+    userUuid: string,
+    permission: PermissionCode,
+    siteId: string,
+  ): Promise<boolean> {
+    const codes = await this.getPermissionCodes(userUuid, siteId);
+    return codes.includes(permission);
+  }
+
+  /**
+   * Where the user holds `permission`: 'ALL' through a global grant,
+   * otherwise the sites of their site grants and active delegations —
+   * meant for filtering lists by site.
+   */
+  async sitesWithPermission(
+    userUuid: string,
+    permission: PermissionCode,
+  ): Promise<'ALL' | string[]> {
+    const grantsPermission = {
+      role: {
+        rolePermissions: { some: { permission: { code: permission } } },
+      },
+    };
+    const [grants, delegated] = await Promise.all([
+      this.database.userRole.findMany({
+        where: { userId: userUuid, ...grantsPermission },
+        select: { siteId: true },
+      }),
+      this.database.delegation.findMany({
+        where: {
+          delegataireId: userUuid,
+          ...grantsPermission,
+          ...this.activeDelegationsFilter(),
+        },
+        select: { siteId: true },
+      }),
+    ]);
+    if (grants.some((grant) => grant.siteId === null)) return 'ALL';
+    return [
+      ...new Set([
+        ...grants.map((grant) => grant.siteId!),
+        ...delegated.map((d) => d.siteId),
+      ]),
+    ];
+  }
+
+  /**
+   * Narrows a list to the sites where the user holds `permission`: `{}`
+   * with a global grant, otherwise `siteId in (...)` — empty means no row.
+   * `toWhere` places that condition on the listed model.
+   */
+  async siteFilter<W>(
+    userUuid: string,
+    permission: PermissionCode,
+    toWhere: (siteId: { in: string[] }) => W,
+  ): Promise<W | object> {
+    const sites = await this.sitesWithPermission(userUuid, permission);
+    return sites === 'ALL' ? {} : toWhere({ in: sites });
+  }
+
+  /**
+   * The site owning a resource, for SiteScope checks. `undefined` when the
+   * resource doesn't exist (the service answers 404), `null` when it has no
+   * site yet (a sortant draft not attached to a dossier).
+   */
+  async resolveSiteId(
+    entity: SiteEntity,
+    id: string,
+  ): Promise<string | null | undefined> {
+    const db = this.database;
+    switch (entity) {
+      case 'site':
+        return (
+          await db.site.findUnique({ where: { id }, select: { id: true } })
+        )?.id;
+      case 'dossier':
+        return (
+          await db.dossier.findUnique({
+            where: { id },
+            select: { siteId: true },
+          })
+        )?.siteId;
+      case 'courrier': {
+        const courrier = await db.courrier.findUnique({
+          where: { id },
+          select: { dossier: { select: { siteId: true } } },
+        });
+        return courrier ? (courrier.dossier?.siteId ?? null) : undefined;
+      }
+      case 'instruction':
+        return (
+          await db.instruction.findUnique({
+            where: { id },
+            select: { dossier: { select: { siteId: true } } },
+          })
+        )?.dossier.siteId;
+      case 'livrable':
+        return (
+          await db.livrable.findUnique({
+            where: { id },
+            select: {
+              instruction: {
+                select: { dossier: { select: { siteId: true } } },
+              },
+            },
+          })
+        )?.instruction.dossier.siteId;
+      case 'analysisSheet':
+        return (
+          await db.analysisSheet.findUnique({
+            where: { id },
+            select: { dossier: { select: { siteId: true } } },
+          })
+        )?.dossier.siteId;
+      case 'analysisItem':
+        return (
+          await db.analysisItem.findUnique({
+            where: { id },
+            select: {
+              sheet: { select: { dossier: { select: { siteId: true } } } },
+            },
+          })
+        )?.sheet.dossier.siteId;
+    }
   }
 
   /**
@@ -227,8 +471,11 @@ export class RbacService {
       const holders = await tx.user.count({
         where: {
           status: UserStatus.ACTIVE,
+          // Global grants only: the user/role administration is
+          // organisation-wide, so a site grant doesn't keep it reachable.
           userRoles: {
             some: {
+              siteId: null,
               role: { rolePermissions: { some: { permission: { code } } } },
             },
           },

@@ -36,17 +36,24 @@ export class CreateUserDto {
   @IsString()
   phone?: string;
 
-  @ApiPropertyOptional({ type: [String], description: 'Role ids' })
+  @ApiPropertyOptional({
+    type: String,
+    nullable: true,
+    description:
+      "The user's site. A site administrator may omit it (their own site is used) and can't pick another. Null: platform user with global roles — super-admin only.",
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string | null;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "Roles held at the user's site (globally for a platform user).",
+  })
   @IsOptional()
   @IsArray()
   @ArrayUnique()
   @IsUUID('4', { each: true })
   roleIds?: string[];
-
-  @ApiPropertyOptional({ type: [String], description: 'Site ids' })
-  @IsOptional()
-  @IsArray()
-  @ArrayUnique()
-  @IsUUID('4', { each: true })
-  siteIds?: string[];
 }

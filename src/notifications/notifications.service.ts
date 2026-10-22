@@ -1,15 +1,19 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { NotificationStatus, Prisma } from '../../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 
 @Injectable()
 export class NotificationsService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly realtime: RealtimeGateway,
+  ) {}
 
-  create(dto: CreateNotificationDto) {
+  async create(dto: CreateNotificationDto) {
     const { recipientIds, ...data } = dto;
-    return this.database.notification.create({
+    const notification = await this.database.notification.create({
       data: {
         ...data,
         recipients: {
@@ -20,6 +24,12 @@ export class NotificationsService {
       },
       include: { recipients: true },
     });
+    // Every notification (circuits, tasks, manual) goes through here, so
+    // this is the single place the bell gets pushed.
+    this.realtime.emitToUsers(recipientIds, 'notification:new', {
+      id: notification.id,
+    });
+    return notification;
   }
 
   // A user's own inbox: every notification they were fanned out to, with

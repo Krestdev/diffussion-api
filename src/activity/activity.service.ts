@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
 import { Prisma } from '../../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
@@ -123,8 +128,14 @@ export class ActivityService {
    * entries recorded by ActivityInterceptor/activity.record() are traceable
    * detail, not separate rows in the top-level audit list.
    */
-  async findAll(query: FindActivityLogsQueryDto) {
+  /**
+   * `siteIds`: a site administrator only sees what their site's users did
+   * ('ALL' for a platform administrator). System entries with no user are
+   * platform-only.
+   */
+  async findAll(query: FindActivityLogsQueryDto, siteIds: 'ALL' | string[]) {
     const where: Prisma.ActivityLogWhereInput = {
+      AND: [await this.actorsOf(siteIds)],
       parentLogId: null,
       source: query.source,
       level: query.level,
@@ -152,12 +163,27 @@ export class ActivityService {
     return { data, total, skip: query.skip ?? 0, take: query.take ?? 20 };
   }
 
-  async findOne(id: string) {
-    const log = await this.db.activityLog.findUnique({
-      where: { id },
+  async findOne(id: string, siteIds: 'ALL' | string[]) {
+    const log = await this.db.activityLog.findFirst({
+      where: { id, AND: [await this.actorsOf(siteIds)] },
       include: { children: { orderBy: { createdAt: 'asc' } } },
     });
-    if (!log) throw new NotFoundException(`Activity log ${id} not found`);
+    if (!log) {
+      const exists = await this.db.activityLog.count({ where: { id } });
+      if (exists) throw new ForbiddenException('This belongs to another site');
+      throw new NotFoundException(`Activity log ${id} not found`);
+    }
     return log;
+  }
+
+  private async actorsOf(
+    siteIds: 'ALL' | string[],
+  ): Promise<Prisma.ActivityLogWhereInput> {
+    if (siteIds === 'ALL') return {};
+    const users = await this.db.user.findMany({
+      where: { siteId: { in: siteIds } },
+      select: { id: true },
+    });
+    return { userId: { in: users.map((user) => user.id) } };
   }
 }
