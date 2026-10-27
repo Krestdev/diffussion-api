@@ -18,6 +18,8 @@ import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
  * appear here — the pre-decision statuses belong to the Requêtes page.
  */
 export const TASK_TABS = {
+  // Assigned to me, waiting for me to accept (or refuse) it.
+  'a-accepter': [InstructionStatus.AFFECTEE],
   'en-cours': [
     InstructionStatus.EN_COURS,
     InstructionStatus.EN_ATTENTE_VALIDATION,

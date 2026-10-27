@@ -48,7 +48,10 @@ describe('UsersService', () => {
           .fn()
           .mockImplementation(
             ({ where }: { where: { id: { in: string[] } } }) =>
-              Promise.resolve(where.id.in.map((id) => ({ id }))),
+              Promise.resolve(
+                // Global roles unless a test says otherwise.
+                where.id.in.map((id) => ({ id, name: id, siteId: null })),
+              ),
           ),
       },
       site: {
@@ -100,6 +103,17 @@ describe('UsersService', () => {
       expect(created().data.userRoles?.create).toEqual([
         { roleId: 'r-1', siteId: 's-1' },
       ]);
+    });
+
+    it("can't give a user another site's role", async () => {
+      database.role.findMany.mockResolvedValue([
+        { id: 'r-2', name: 'Agent Akwa', siteId: 's-2' },
+      ]);
+
+      await expect(
+        service.create({ ...NEW_USER, roleIds: ['r-2'] }, 'admin-s1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(database.user.create).not.toHaveBeenCalled();
     });
 
     it('cannot create a user in another site', async () => {

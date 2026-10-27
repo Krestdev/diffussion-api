@@ -15,7 +15,7 @@ describe('MailController', () => {
       update: jest.fn(),
       remove: jest.fn(),
       transmit: jest.fn(),
-      submitForVerification: jest.fn(),
+      submitForValidation: jest.fn(),
       send: jest.fn(),
       cancel: jest.fn(),
       discharge: jest.fn(),
@@ -36,13 +36,13 @@ describe('MailController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('submitForVerification() forwards the current user', () => {
-    controller.submitForVerification('c-1', {
+  it('submitForValidation() forwards the current user', () => {
+    controller.submitForValidation('c-1', {
       sub: 'u-1',
       email: 'u@x.com',
       refreshToken: 'r',
     });
-    expect(service.submitForVerification).toHaveBeenCalledWith('c-1', 'u-1');
+    expect(service.submitForValidation).toHaveBeenCalledWith('c-1', 'u-1');
   });
 
   it('create() forwards dto, user and files to service.create', () => {

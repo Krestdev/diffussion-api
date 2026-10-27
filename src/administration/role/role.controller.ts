@@ -13,48 +13,56 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { JwtPayload } from '../../auth/types/jwt-payload.type';
 import { CreateRoleDto } from './dto/create-role.dto';
+import { FindRolesQueryDto } from './dto/find-roles.query.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { RoleService } from './role.service';
 
 @ApiTags('roles')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+// Global roles: platform administrators. A site's roles: its responsible.
+// Enforced in RoleService, since the responsible needs no role for it.
+@UseGuards(JwtAuthGuard)
 @Controller('roles')
 export class RoleController {
   constructor(private readonly roleService: RoleService) {}
 
   @Post()
-  @RequirePermission(PermissionCode.AdminManageRoles)
-  create(@Body() dto: CreateRoleDto) {
-    return this.roleService.create(dto);
+  create(@Body() dto: CreateRoleDto, @CurrentUser() user: JwtPayload) {
+    return this.roleService.create(dto, user.sub);
   }
 
   @Get()
-  findAll(@Query() query: PaginationQueryDto) {
-    return this.roleService.findAll(query);
+  findAll(@Query() query: FindRolesQueryDto, @CurrentUser() user: JwtPayload) {
+    return this.roleService.findAll(query, user.sub);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.roleService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.roleService.findOne(id, user.sub);
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AdminManageRoles)
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateRoleDto) {
-    return this.roleService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateRoleDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.roleService.update(id, dto, user.sub);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AdminManageRoles)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.roleService.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.roleService.remove(id, user.sub);
   }
 }

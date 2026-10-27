@@ -141,7 +141,8 @@ export class UsersService {
     await this.assertReferencesExist(roleIds, siteId, existing.siteId);
 
     // The roles follow the user: re-granted at the new site when it
-    // changes, or replaced by `roleIds` when sent.
+    // changes (the old site's own roles are dropped), or replaced by
+    // `roleIds` when sent.
     const siteChanged = siteId !== existing.siteId;
     if (siteChanged) {
       await this.assertNotResponsible(id);
@@ -151,7 +152,7 @@ export class UsersService {
       (siteChanged
         ? (
             await this.database.userRole.findMany({
-              where: { userId: id },
+              where: { userId: id, role: { siteId: null } },
               select: { roleId: true },
             })
           ).map((grant) => grant.roleId)
@@ -311,12 +312,21 @@ export class UsersService {
     if (roleIds?.length) {
       const found = await this.database.role.findMany({
         where: { id: { in: roleIds } },
-        select: { id: true },
+        select: { id: true, name: true, siteId: true },
       });
       const missing = roleIds.filter((id) => !found.some((r) => r.id === id));
       if (missing.length) {
         throw new BadRequestException(
           `Unknown role ids: ${missing.join(', ')}`,
+        );
+      }
+      // A user holds global roles, or roles of their own site.
+      const elsewhere = found.filter(
+        (role) => role.siteId !== null && role.siteId !== siteId,
+      );
+      if (elsewhere.length) {
+        throw new BadRequestException(
+          `Roles of another site: ${elsewhere.map((role) => role.name).join(', ')}`,
         );
       }
     }

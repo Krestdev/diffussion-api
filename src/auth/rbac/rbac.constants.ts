@@ -46,7 +46,6 @@ export enum PermissionCode {
   AdminManageCategories = 'ADMIN_MANAGE_CATEGORIES',
   AdminManageReferentials = 'ADMIN_MANAGE_REFERENTIALS',
   AdminManageRoles = 'ADMIN_MANAGE_ROLES',
-  AdminManageCircuits = 'ADMIN_MANAGE_CIRCUITS',
   AdminManageSettings = 'ADMIN_MANAGE_SETTINGS',
 
   // Fiches d'analyse / Avis (module spec 10/09/2026)
@@ -61,6 +60,56 @@ export enum PermissionCode {
   AuditRead = 'AUDIT_READ',
 }
 
+/**
+ * Default label of each permission (Permission.description), shown in the
+ * role screens; the code itself is the value. Seeded once — an administrator
+ * may reword it afterwards (PATCH /permissions/:id).
+ */
+export const PERMISSION_LABELS: Record<PermissionCode, string> = {
+  [PermissionCode.DossierCreate]: 'Créer un dossier',
+  [PermissionCode.DossierRead]: 'Consulter les dossiers',
+  [PermissionCode.DossierUpdate]: 'Modifier un dossier',
+  [PermissionCode.DossierClose]: 'Clôturer un dossier',
+  [PermissionCode.DossierReopen]: 'Rouvrir un dossier',
+  [PermissionCode.DossierArchive]: 'Archiver un dossier',
+  [PermissionCode.CourrierRegisterEntrant]: 'Enregistrer un courrier entrant',
+  [PermissionCode.CourrierWriteSortant]: 'Rédiger un courrier sortant',
+  [PermissionCode.CourrierUpdateDraft]: 'Modifier un brouillon de courrier',
+  [PermissionCode.CourrierSend]: 'Envoyer un courrier sortant',
+  [PermissionCode.CourrierRead]: 'Consulter les courriers',
+  [PermissionCode.InstructionCreate]: 'Créer une tâche',
+  [PermissionCode.InstructionAssign]: 'Affecter une tâche',
+  [PermissionCode.InstructionReassign]: 'Réaffecter une tâche',
+  [PermissionCode.InstructionUpdate]: 'Modifier une tâche',
+  [PermissionCode.InstructionAccept]: 'Accepter une tâche',
+  [PermissionCode.InstructionRefuse]: 'Refuser une tâche',
+  [PermissionCode.InstructionCancel]: 'Annuler une tâche',
+  [PermissionCode.InstructionClose]: 'Clôturer une tâche',
+  [PermissionCode.LivrableDeposit]: 'Déposer un livrable',
+  [PermissionCode.LivrableRead]: 'Consulter les livrables',
+  [PermissionCode.LivrableNewVersion]:
+    "Déposer une nouvelle version d'un livrable",
+  [PermissionCode.LivrableSubmit]: 'Soumettre un livrable à validation',
+  [PermissionCode.LivrableDownload]: 'Télécharger les livrables',
+  [PermissionCode.ValidationApprove]: 'Approuver les livrables',
+  [PermissionCode.ValidationVerify]: 'Vérifier les livrables',
+  [PermissionCode.ValidationReject]: 'Rejeter un livrable',
+  [PermissionCode.ValidationRequestCorrections]:
+    'Demander des corrections sur une tâche',
+  [PermissionCode.AdminManageUsers]: 'Gérer les utilisateurs',
+  [PermissionCode.AdminManageSites]: 'Gérer les sites',
+  [PermissionCode.AdminManageCategories]: 'Gérer les catégories',
+  [PermissionCode.AdminManageReferentials]: 'Gérer les référentiels',
+  [PermissionCode.AdminManageRoles]: 'Gérer les rôles',
+  [PermissionCode.AdminManageSettings]: 'Gérer les paramètres',
+  [PermissionCode.AnalysisRead]: "Consulter les fiches d'analyse",
+  [PermissionCode.AnalysisCreate]: "Créer une fiche d'analyse",
+  [PermissionCode.AnalysisUpdate]: "Modifier une fiche d'analyse",
+  [PermissionCode.AnalysisDecide]: "Prononcer l'avis d'une fiche d'analyse",
+  [PermissionCode.AdminManageAnalysisCriteria]: "Gérer les critères d'analyse",
+  [PermissionCode.AuditRead]: "Consulter le journal d'audit",
+};
+
 export const PERMISSION_METADATA_KEY = 'rbac:permission';
 
 /**
@@ -72,7 +121,5 @@ export const PLATFORM_PERMISSIONS: ReadonlySet<PermissionCode> = new Set([
   PermissionCode.AdminManageRoles,
   PermissionCode.AdminManageCategories,
   PermissionCode.AdminManageReferentials,
-  PermissionCode.AdminManageCircuits,
-  PermissionCode.AdminManageSettings,
   PermissionCode.AdminManageAnalysisCriteria,
 ]);

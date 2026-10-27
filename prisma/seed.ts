@@ -3,7 +3,10 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import * as bcrypt from 'bcrypt';
 import { Pool } from 'pg';
 import { PrismaClient } from '../generated/prisma/client';
-import { PermissionCode } from '../src/auth/rbac/rbac.constants';
+import {
+  PERMISSION_LABELS,
+  PermissionCode,
+} from '../src/auth/rbac/rbac.constants';
 
 const SALT_ROUNDS = 10;
 
@@ -22,7 +25,17 @@ async function seedPermissions() {
       prisma.permission.upsert({
         where: { code },
         update: {},
-        create: { code },
+        create: { code, description: PERMISSION_LABELS[code] },
+      }),
+    ),
+  );
+  // Label permissions created before labels existed; a reworded label is
+  // left alone.
+  await Promise.all(
+    codes.map((code) =>
+      prisma.permission.updateMany({
+        where: { code, description: null },
+        data: { description: PERMISSION_LABELS[code] },
       }),
     ),
   );
@@ -35,15 +48,19 @@ async function seedAdminRole(allPermissionCodes: string[]) {
     where: { code: { in: allPermissionCodes } },
   });
 
-  const role = await prisma.role.upsert({
-    where: { name: ADMIN_ROLE_NAME },
-    update: {},
-    create: {
-      code: 'RO-ADMIN',
-      name: ADMIN_ROLE_NAME,
-      description: 'Accès complet — tous les droits, pour les tests',
-    },
-  });
+  // A global role (no site). Looked up rather than upserted: a nullable
+  // column can't be part of a Prisma unique-key lookup.
+  const role =
+    (await prisma.role.findFirst({
+      where: { name: ADMIN_ROLE_NAME, siteId: null },
+    })) ??
+    (await prisma.role.create({
+      data: {
+        code: 'RO-ADMIN',
+        name: ADMIN_ROLE_NAME,
+        description: 'Accès complet — tous les droits, pour les tests',
+      },
+    }));
 
   // Replace-set: make sure the admin role always ends up with every
   // permission that currently exists, even if it was created earlier with
@@ -106,9 +123,7 @@ async function seedAdminUser(roleId: string) {
 /// Test-only: RESTRICTED dossiers need a DossierAccess row — holding every
 /// permission doesn't cover them. Give the admin every role (globally) and
 /// every restricted dossier. Re-run the seed after creating new
-/// roles/dossiers to catch up. Circuit steps are decided at a site
-/// (hasRoleAtSite), which a platform user has none of: walk circuits as the
-/// courrier's owner, or with a user of the dossier's site.
+/// roles/dossiers to catch up.
 async function grantAdminFullAccess(userId: string) {
   const [roles, restrictedDossiers] = await Promise.all([
     prisma.role.findMany({ select: { id: true } }),
@@ -136,7 +151,6 @@ async function grantAdminFullAccess(userId: string) {
 }
 
 async function seedReferentials() {
-  const dossierTypes = ['Étude technique', 'Contrôle des travaux', 'Expertise'];
   const correspondentTypes = [
     'Administration publique',
     'Entreprise',
@@ -155,15 +169,6 @@ async function seedReferentials() {
     'Réponse administrative',
   ];
 
-  await Promise.all(
-    dossierTypes.map((name) =>
-      prisma.dossierType.upsert({
-        where: { name },
-        update: {},
-        create: { name },
-      }),
-    ),
-  );
   await Promise.all(
     correspondentTypes.map((name) =>
       prisma.correspondentType.upsert({

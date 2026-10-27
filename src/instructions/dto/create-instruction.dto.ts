@@ -8,8 +8,22 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { InstructionPriority } from 'generated/prisma/enums';
+
+export class CreateInstructionLivrableDto {
+  @ApiProperty({ example: 'Rapport de conformité' })
+  @IsString()
+  @MaxLength(200)
+  title: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string;
+}
 
 export class CreateInstructionsDto {
   @ApiProperty({ description: 'Dossier this instruction belongs to (7.3)' })
@@ -70,4 +84,14 @@ export class CreateInstructionsDto {
   @IsOptional()
   @IsUUID()
   dependsOnId?: string;
+
+  @ApiPropertyOptional({
+    type: [CreateInstructionLivrableDto],
+    description: 'Initial deliverables defined for this task',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateInstructionLivrableDto)
+  livrables?: CreateInstructionLivrableDto[];
 }

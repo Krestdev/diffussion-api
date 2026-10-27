@@ -183,8 +183,8 @@ export class DelegationService {
   /**
    * A delegation only makes sense if the receiver can actually stand in for
    * the giver: real, active people, a real role, and the site both of them
-   * belong to (circuit eligibility is resolved through the users' sites, so
-   * a delegation to someone outside the site would grant nothing).
+   * belong to (a delegated role only counts at that site, so a delegation
+   * to someone outside the site would grant nothing).
    */
   private async assertValid(shape: DelegationShape, ignoreId?: string) {
     if (shape.endDate.getTime() < shape.startDate.getTime()) {

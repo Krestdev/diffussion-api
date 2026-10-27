@@ -87,9 +87,9 @@ export class DocumentsService {
    * caller could not open anyway.
    */
   async findAll(query: FindDocumentsQueryDto, actingUserId: string) {
-    const isAdmin = await this.rbac.hasPermission(
+    const isAdmin = await this.rbac.hasGlobalPermission(
       actingUserId,
-      PermissionCode.AdminManageCircuits,
+      PermissionCode.AdminManageUsers,
     );
     const where: Prisma.DocumentWhereInput = {
       dossierId: query.dossierId,
@@ -163,7 +163,7 @@ export class DocumentsService {
   }
 
   // RG-DOC-003: Document read access is independent from the dossier.
-  // Access is granted to the uploader, the circuit owner, explicitly
+  // Access is granted to the uploader, the person in charge, explicitly
   // listed users in DocumentAccess, the responsible of the site, or a
   // platform administrator.
   private async assertCanAccessDocument(
@@ -185,9 +185,9 @@ export class DocumentsService {
     const site = document.dossier?.site ?? document.courrier?.dossier?.site;
     if (site?.responsibleId === actingUserId) return;
 
-    const isAdmin = await this.rbac.hasPermission(
+    const isAdmin = await this.rbac.hasGlobalPermission(
       actingUserId,
-      PermissionCode.AdminManageCircuits,
+      PermissionCode.AdminManageUsers,
     );
     if (isAdmin) return;
 
@@ -222,10 +222,10 @@ export class DocumentsService {
     return livrable.instruction.dossierId;
   }
 
-  // Circuit owner (10.6) — same semantics/authorization as
+  // Person in charge — same semantics/authorization as
   // MailService.setOwner: the uploader, the responsible of the owning
   // site (resolved through the document's dossier, or failing that its
-  // courrier's dossier), or a platform admin (ADMIN_MANAGE_CIRCUITS).
+  // courrier's dossier), or a platform admin.
   async setOwner(id: string, dto: SetOwnerDto, actingUserId: string) {
     const document = await this.database.document.findUnique({
       where: { id },
@@ -240,13 +240,13 @@ export class DocumentsService {
     const site = document.dossier?.site ?? document.courrier?.dossier?.site;
     const isUploader = document.uploadedById === actingUserId;
     const isSiteAdmin = site?.responsibleId === actingUserId;
-    const isPlatformAdmin = await this.rbac.hasPermission(
+    const isPlatformAdmin = await this.rbac.hasGlobalPermission(
       actingUserId,
-      PermissionCode.AdminManageCircuits,
+      PermissionCode.AdminManageUsers,
     );
     if (!isUploader && !isSiteAdmin && !isPlatformAdmin) {
       throw new ForbiddenException(
-        "Only the uploader, the site responsible, or a platform admin can assign this document's circuit owner",
+        'Only the uploader, the site responsible, or a platform admin can assign who is in charge of this document',
       );
     }
     return this.database.document.update({

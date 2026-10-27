@@ -10,7 +10,7 @@ type Db = Prisma.TransactionClient;
 
 // Statuses in which a dossier is still being worked on — the only ones that
 // can turn LATE, and the ones new content (courrier, instruction, livrable,
-// document, circuit) may be attached in.
+// document) may be attached in.
 export const ACTIVE_DOSSIER_STATUSES: DossierStatus[] = [
   DossierStatus.OPEN,
   DossierStatus.IN_PROGRESS,

@@ -30,9 +30,14 @@ export class CourrierDocumentDto {
 }
 
 export class CreateMailDto {
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      "Optional: whoever registers a courrier may not know its dossier. It then belongs to the registrant's site, and the dossier is attached later (PATCH /courriers/:id) — before it can be transmitted.",
+  })
+  @IsOptional()
+  @EmptyToUndefined()
   @IsUUID()
-  dossierId: string;
+  dossierId?: string;
 
   @ApiProperty({ enum: CourrierDirection })
   @IsEnum(CourrierDirection)
@@ -92,7 +97,7 @@ export class CreateMailDto {
 
   @ApiPropertyOptional({
     description:
-      "Circuit owner (10.6) — chosen freely among the application's " +
+      "Person in charge of the courrier — chosen freely among the application's " +
       'users at creation time. Can be left unset and completed later ' +
       '(see MailService.setOwner).',
   })
@@ -154,4 +159,3 @@ export class CreateMailDto {
   @Type(() => CourrierDocumentDto)
   documents?: CourrierDocumentDto[];
 }
-

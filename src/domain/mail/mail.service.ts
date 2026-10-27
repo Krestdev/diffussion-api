@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -7,7 +8,9 @@ import {
 import {
   CourrierDirection,
   CourrierStatus,
+  NotificationCanal,
   Prisma,
+  ValidationDecision,
 } from '../../../generated/prisma/client';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { SetOwnerDto } from '../../common/dto/set-owner.dto';
@@ -19,6 +22,7 @@ import {
 import { assertCorrespondentActive } from '../../common/utils/referential-guards';
 import { DatabaseService } from '../../database/database.service';
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
+import { awaitingValidationBy } from '../../common/utils/courrier-validation';
 import { dateRange } from '../../common/utils/date-range';
 import { visibleDossierWhere } from '../../common/utils/dossier-visibility';
 import { FindIncomingMailsQueryDto } from './dto/find-incoming-mails.query.dto';
@@ -29,7 +33,7 @@ import {
 } from './dto/find-outgoing-mails.query.dto';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { CircuitInstanceService } from '../../circuits/circuit-instance/circuit-instance.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { CreateMailDto } from './dto/create-mail.dto';
 import { CreateOutgoingMailDto } from './dto/create-outgoing-mail.dto';
 import { StorageService } from '../../storage/storage.service';
@@ -48,6 +52,10 @@ const mailInclude = {
     select: { id: true, number: true, subject: true, direction: true },
   },
   documents: { orderBy: { createdAt: 'asc' } },
+  validations: {
+    include: { validator: { select: { id: true, name: true } } },
+    orderBy: { decidedAt: 'desc' },
+  },
 } satisfies Prisma.CourrierInclude;
 
 const courrierAccessInclude = {
@@ -73,7 +81,7 @@ const ENTRANT_OPEN_STATUSES: CourrierStatus[] = [
 ];
 
 // Entrant statuses it can be marked fully treated from: still open, or
-// approved by its circuit (which leaves it VALIDE).
+// validated.
 const ENTRANT_CLOSABLE_STATUSES: CourrierStatus[] = [
   ...ENTRANT_OPEN_STATUSES,
   CourrierStatus.VALIDE,
@@ -82,15 +90,14 @@ const ENTRANT_CLOSABLE_STATUSES: CourrierStatus[] = [
 // Sortant workflow: statuses before it's been sent — cancellable.
 const SORTANT_OPEN_STATUSES: CourrierStatus[] = [
   CourrierStatus.BROUILLON,
-  CourrierStatus.EN_CIRCUIT,
+  CourrierStatus.EN_ATTENTE_VALIDATION,
   CourrierStatus.A_CORRIGER,
 ];
 
-// Statuses submitForVerification() may start a circuit from, per direction
-// (BAD 10.6 applies to entrant treatment as much as sortant drafting — the
-// circuit itself and the CourrierStatus it moves through are already
-// shared between both, see the CourrierStatus enum comment).
-const CIRCUIT_ELIGIBLE_STATUSES: Record<CourrierDirection, CourrierStatus[]> = {
+// Statuses submitForValidation() accepts, per direction: a sortant once
+// drafted, an entrant once handed over for treatment — or either one sent
+// back for corrections.
+const SUBMITTABLE_STATUSES: Record<CourrierDirection, CourrierStatus[]> = {
   [CourrierDirection.SORTANT]: [
     CourrierStatus.BROUILLON,
     CourrierStatus.A_CORRIGER,
@@ -106,7 +113,7 @@ const CIRCUIT_ELIGIBLE_STATUSES: Record<CourrierDirection, CourrierStatus[]> = {
 export class MailService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly circuitInstanceService: CircuitInstanceService,
+    private readonly notifications: NotificationsService,
     private readonly rbac: RbacService,
     private readonly storage: StorageService,
   ) {}
@@ -118,7 +125,11 @@ export class MailService {
     createdById: string,
     files?: Express.Multer.File[],
   ) {
-    await assertDossierOpenForActivity(this.database, dto.dossierId);
+    if (dto.dossierId) {
+      await assertDossierOpenForActivity(this.database, dto.dossierId);
+    } else {
+      await this.assertRegistrantHasSite(createdById);
+    }
     if (dto.correspondentId) {
       await assertCorrespondentActive(this.database, dto.correspondentId);
     }
@@ -165,7 +176,9 @@ export class MailService {
       }
     }
 
-    await markDossierInProgress(this.database, dto.dossierId);
+    if (dto.dossierId) {
+      await markDossierInProgress(this.database, dto.dossierId);
+    }
 
     if (files && files.length > 0) {
       return this.findOne(courrier.id);
@@ -399,40 +412,175 @@ export class MailService {
   }
 
   // Entrant: ENREGISTRE -> TRANSMIS (10.2.4.7 — handed to the dossier's
-  // responsible for treatment).
+  // responsible for treatment), so its dossier must be known by then.
   async transmit(id: string) {
     const courrier = await this.requireStatus(id, [
       CourrierStatus.RECU,
       CourrierStatus.ENREGISTRE,
     ]);
+    if (!courrier.dossierId) {
+      throw new BadRequestException(
+        'Attach this courrier to its dossier before transmitting it',
+      );
+    }
     return this.setStatus(courrier.id, CourrierStatus.TRANSMIS);
   }
 
-  // Sortant: BROUILLON | A_CORRIGER -> EN_CIRCUIT. Entrant: TRANSMIS |
-  // EN_TRAITEMENT | A_CORRIGER -> EN_CIRCUIT — both directions share the
-  // same CircuitInstance mechanics and the same EN_CIRCUIT/VALIDE/
-  // A_CORRIGER statuses (10.6 / RG-VAL-*). Starts a CircuitInstance
-  // resolved from the courrier's dossier type — the number of approval
-  // steps is whatever that Circuit template defines. Throws if the
-  // dossier's type has no circuit configured; see
-  // CircuitInstanceService.start().
-  async submitForVerification(id: string, userId: string) {
+  // -> EN_ATTENTE_VALIDATION, from SUBMITTABLE_STATUSES. One decision by
+  // the designated validator (see validatorOf) settles it: VALIDE, or
+  // A_CORRIGER with a motif.
+  async submitForValidation(id: string, userId: string) {
     const courrier = await this.findOne(id);
-    const allowed = CIRCUIT_ELIGIBLE_STATUSES[courrier.direction];
+    const allowed = SUBMITTABLE_STATUSES[courrier.direction];
     if (!allowed.includes(courrier.status)) {
       throw new BadRequestException(
         `Courrier is ${courrier.status}, expected one of: ${allowed.join(', ')}`,
       );
     }
-    await this.circuitInstanceService.start({ courrierId: id }, userId);
-    return this.findOne(id);
+    const validatorId = await this.validatorOf(courrier);
+    if (!validatorId) {
+      throw new BadRequestException(
+        'Nobody can validate this courrier: neither its dossier nor its site has a responsible — name one first',
+      );
+    }
+    const updated = await this.setStatus(
+      id,
+      CourrierStatus.EN_ATTENTE_VALIDATION,
+    );
+    this.notify(courrier, [validatorId], userId, {
+      type: 'COURRIER_VALIDATION_PENDING',
+      message: `« ${courrier.subject} » attend votre validation.`,
+    });
+    return updated;
   }
 
-  // Circuit owner (10.6): can decide any step of this courrier's circuit
-  // regardless of role/site gating. Settable at creation (CreateMailDto) or
-  // — since it can be left unset — completed/reassigned later, but only by
-  // the courrier's creator, the responsible of the dossier's owning site,
-  // or a platform admin (ADMIN_MANAGE_CIRCUITS).
+  // EN_ATTENTE_VALIDATION -> VALIDE.
+  validate(id: string, userId: string) {
+    return this.decide(id, userId, ValidationDecision.VALIDE);
+  }
+
+  // EN_ATTENTE_VALIDATION -> A_CORRIGER; resubmitted once corrected.
+  requestCorrections(id: string, motif: string, userId: string) {
+    return this.decide(
+      id,
+      userId,
+      ValidationDecision.CORRECTIONS_DEMANDEES,
+      motif,
+    );
+  }
+
+  // Courriers waiting on the caller's decision.
+  findAwaitingMyValidation(userId: string) {
+    return this.database.courrier.findMany({
+      where: awaitingValidationBy(userId),
+      orderBy: { updatedAt: 'desc' },
+      include: mailInclude,
+    });
+  }
+
+  private async decide(
+    id: string,
+    userId: string,
+    decision: ValidationDecision,
+    motif?: string,
+  ) {
+    const courrier = await this.requireStatus(id, [
+      CourrierStatus.EN_ATTENTE_VALIDATION,
+    ]);
+    if ((await this.validatorOf(courrier)) !== userId) {
+      throw new ForbiddenException(
+        "Only this courrier's validator (its dossier's responsible, or the site's) can decide on it",
+      );
+    }
+    const approved = decision === ValidationDecision.VALIDE;
+    const updated = await this.database.$transaction(async (tx) => {
+      // Guarded on the status read above, so two concurrent decisions
+      // can't both land.
+      const { count } = await tx.courrier.updateMany({
+        where: { id, status: CourrierStatus.EN_ATTENTE_VALIDATION },
+        data: {
+          status: approved ? CourrierStatus.VALIDE : CourrierStatus.A_CORRIGER,
+        },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          'This courrier was decided on meanwhile — refresh and try again',
+        );
+      }
+      await tx.validation.create({
+        data: { courrierId: id, validatorId: userId, decision, motif },
+      });
+      return tx.courrier.findUniqueOrThrow({
+        where: { id },
+        include: mailInclude,
+      });
+    });
+    this.notify(courrier, [courrier.createdById, courrier.ownerId], userId, {
+      type: approved ? 'COURRIER_VALIDATED' : 'COURRIER_CORRECTIONS_REQUESTED',
+      message: approved
+        ? `« ${courrier.subject} » a été validé.`
+        : `« ${courrier.subject} » doit être corrigé : ${motif}`,
+    });
+    return updated;
+  }
+
+  // The rule of awaitingValidationBy, for one courrier.
+  private async validatorOf(courrier: {
+    dossierId: string | null;
+    createdById: string | null;
+  }): Promise<string | null> {
+    if (courrier.dossierId) {
+      const dossier = await this.database.dossier.findUnique({
+        where: { id: courrier.dossierId },
+        select: {
+          responsibleId: true,
+          site: { select: { responsibleId: true } },
+        },
+      });
+      return dossier?.responsibleId ?? dossier?.site.responsibleId ?? null;
+    }
+    if (courrier.createdById) {
+      const creator = await this.database.user.findUnique({
+        where: { id: courrier.createdById },
+        select: { site: { select: { responsibleId: true } } },
+      });
+      return creator?.site?.responsibleId ?? null;
+    }
+    return null;
+  }
+
+  // Fire-and-forget: a notification failing to write must never fail the
+  // transition that triggered it. Nobody is told about their own action.
+  private notify(
+    courrier: { id: string; dossierId: string | null },
+    recipients: (string | null)[],
+    actingUserId: string,
+    content: { type: string; message: string },
+  ) {
+    const recipientIds = [
+      ...new Set(
+        recipients.filter(
+          (id): id is string => Boolean(id) && id !== actingUserId,
+        ),
+      ),
+    ];
+    if (recipientIds.length === 0) return;
+    this.notifications
+      .create({
+        recipientIds,
+        ...content,
+        canal: NotificationCanal.IN_APP,
+        courrierId: courrier.id,
+        dossierId: courrier.dossierId ?? undefined,
+      })
+      .catch((error: unknown) => {
+        console.error('Failed to create courrier notification', error);
+      });
+  }
+
+  // Person in charge of the courrier ("Affectations"). Settable at creation
+  // (CreateMailDto) or later, but only by the courrier's creator, the
+  // responsible of the dossier's owning site, or a platform admin.
   async setOwner(id: string, dto: SetOwnerDto, actingUserId: string) {
     const courrier = await this.database.courrier.findUnique({
       where: { id },
@@ -443,13 +591,13 @@ export class MailService {
     }
     const isCreator = courrier.createdById === actingUserId;
     const isSiteAdmin = courrier.dossier?.site.responsibleId === actingUserId;
-    const isPlatformAdmin = await this.rbac.hasPermission(
+    const isPlatformAdmin = await this.rbac.hasGlobalPermission(
       actingUserId,
-      PermissionCode.AdminManageCircuits,
+      PermissionCode.AdminManageUsers,
     );
     if (!isCreator && !isSiteAdmin && !isPlatformAdmin) {
       throw new ForbiddenException(
-        "Only the creator, the site responsible, or a platform admin can assign this courrier's circuit owner",
+        'Only the creator, the site responsible, or a platform admin can assign who is in charge of this courrier',
       );
     }
     return this.database.courrier.update({
@@ -561,13 +709,36 @@ export class MailService {
     return this.getAccess(id);
   }
 
-  // Dossiers on the sites where the caller may read courriers.
-  private readableSites(userId: string) {
-    return this.rbac.siteFilter(
-      userId,
-      PermissionCode.CourrierRead,
-      (siteId): Prisma.DossierWhereInput => ({ siteId }),
-    );
+  // The sites where the caller may read courriers: as dossiers, and as
+  // registrants (for entrants not yet attached to a dossier).
+  private async readableSites(userId: string): Promise<ReadableSites> {
+    const [dossier, registrant] = await Promise.all([
+      this.rbac.siteFilter(
+        userId,
+        PermissionCode.CourrierRead,
+        (siteId): Prisma.DossierWhereInput => ({ siteId }),
+      ),
+      this.rbac.siteFilter(
+        userId,
+        PermissionCode.CourrierRead,
+        (siteId): Prisma.UserWhereInput => ({ siteId }),
+      ),
+    ]);
+    return { dossier, registrant };
+  }
+
+  // An entrant registered without its dossier belongs to the registrant's
+  // site — so the registrant needs one.
+  private async assertRegistrantHasSite(userId: string) {
+    const registrant = await this.database.user.findUnique({
+      where: { id: userId },
+      select: { siteId: true },
+    });
+    if (!registrant?.siteId) {
+      throw new BadRequestException(
+        'dossierId is required: you belong to no site the courrier could be registered on',
+      );
+    }
   }
 
   private async requireStatus(id: string, allowed: CourrierStatus[]) {
@@ -599,19 +770,29 @@ export class MailService {
   }
 }
 
+type ReadableSites = {
+  dossier: Prisma.DossierWhereInput;
+  registrant: Prisma.UserWhereInput;
+};
+
 // Incoming/outgoing courriers the caller may see: those in dossiers visible
-// to them (see visibleDossierWhere) on the sites they may read courriers at
-// (`sites`), plus their own drafts not yet attached to a dossier.
+// to them (see visibleDossierWhere) on the sites they may read courriers at,
+// their own drafts not yet attached to a dossier, and the entrants
+// registered on those sites still waiting for their dossier — someone has
+// to see them to attach it.
 function visibleMailsWhere(
   direction: CourrierDirection,
   userId: string,
-  sites: Prisma.DossierWhereInput,
+  sites: ReadableSites,
 ): Prisma.CourrierWhereInput {
   return {
     direction,
     OR: [
-      { dossier: { AND: [visibleDossierWhere(userId), sites] } },
+      { dossier: { AND: [visibleDossierWhere(userId), sites.dossier] } },
       { dossierId: null, createdById: userId },
+      ...(direction === CourrierDirection.ENTRANT
+        ? [{ dossierId: null, createdBy: sites.registrant }]
+        : []),
     ],
   };
 }

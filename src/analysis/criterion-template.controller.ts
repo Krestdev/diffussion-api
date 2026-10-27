@@ -9,7 +9,6 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
-  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -40,8 +39,8 @@ export class CriterionTemplateController {
 
   @Get()
   @RequirePermission(PermissionCode.AnalysisRead)
-  findAll(@Query('dossierTypeId') dossierTypeId?: string) {
-    return this.templates.findAll(dossierTypeId);
+  findAll() {
+    return this.templates.findAll();
   }
 
   @Get(':id')

@@ -3,7 +3,10 @@ import { BadRequestException } from '@nestjs/common';
 import { DeliverableService } from './deliverable.service';
 import { DatabaseService } from '../../database/database.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
-import { LivrableStatus } from '../../../generated/prisma/client';
+import {
+  InstructionStatus,
+  LivrableStatus,
+} from '../../../generated/prisma/client';
 
 // Dossier-state rules (RG-DOS-007, site activity, progress) are covered by
 // the DossierService spec; here they're stubbed so fixtures don't need a
@@ -52,6 +55,31 @@ describe('DeliverableService', () => {
 
   it('is defined', () => {
     expect(service).toBeDefined();
+  });
+
+  describe('create', () => {
+    it('allows a livrable on a task not accepted yet (AFFECTEE)', async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        dossierId: 'd-1',
+        status: InstructionStatus.AFFECTEE,
+      });
+      database.livrable.create.mockResolvedValue({ id: 'l-1' });
+
+      await service.create({ instructionId: 'i-1', title: 'Rapport' }, 'u-1');
+      expect(database.livrable.create).toHaveBeenCalled();
+    });
+
+    it('refuses a livrable on a terminal task (TERMINEE)', async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        dossierId: 'd-1',
+        status: InstructionStatus.TERMINEE,
+      });
+
+      await expect(
+        service.create({ instructionId: 'i-1', title: 'Rapport' }, 'u-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(database.livrable.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('update', () => {

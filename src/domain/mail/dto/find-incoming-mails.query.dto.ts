@@ -30,9 +30,9 @@ export class FindIncomingMailsQueryDto extends PaginationQueryDto {
   @IsUUID()
   natureId?: string;
 
-  // Circuit owner (10.6) — e.g. "courriers assigned to me" (the Affectations
+  // Person in charge — e.g. "courriers assigned to me" (the Affectations
   // queue), distinct from who registered the courrier.
-  @ApiPropertyOptional({ description: 'Circuit owner (user id)' })
+  @ApiPropertyOptional({ description: 'Person in charge (user id)' })
   @IsOptional()
   @IsUUID()
   ownerId?: string;

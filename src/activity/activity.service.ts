@@ -28,6 +28,9 @@ const MAX_ACTION = 255;
 const MAX_ACTOR_LABEL = 100;
 const MAX_ENTITY_TYPE = 50;
 
+// What the audit journal shows: actions performed by a user.
+const USER_ACTIONS: Prisma.ActivityLogWhereInput = { userId: { not: null } };
+
 function truncate(value: string, max: number): string;
 function truncate(value: string | null, max: number): string | null;
 function truncate(value: string | null, max: number): string | null {
@@ -48,7 +51,7 @@ export class ActivityService {
    * Create an activity log entry. If this is the first log for the current
    * request (no parentLogId in CLS yet) it is automatically promoted to
    * **root** and its ID is stored in CLS so all subsequent calls become its
-   * children. This way the first real business event (e.g. "Circuit Started")
+   * children. This way the first real business event (e.g. "Courrier validated")
    * becomes the root visible in the audit-log UI rather than a generic
    * "POST /api/..." interceptor entry.
    */
@@ -57,15 +60,18 @@ export class ActivityService {
     if (payload.changes) meta.changes = payload.changes;
     if (payload.metadata) Object.assign(meta, payload.metadata);
 
+    const userId = this.cls.get('userId') ?? null;
     const log = await this.db.activityLog.create({
       data: {
         parentLogId: this.cls.get('parentLogId') ?? null,
-        userId: this.cls.get('userId') ?? null,
+        userId,
         actorLabel: truncate(
           this.cls.get('actorLabel') ?? null,
           MAX_ACTOR_LABEL,
         ),
-        source: payload.source ?? 'SYSTEM',
+        // Whatever happens inside an authenticated request is that user's
+        // action; SYSTEM is left to work no user triggered.
+        source: payload.source ?? (userId ? 'USER' : 'SYSTEM'),
         level: payload.level ?? 'info',
         action: truncate(payload.action, MAX_ACTION),
         entityType: truncate(payload.entityType ?? null, MAX_ENTITY_TYPE),
@@ -129,15 +135,14 @@ export class ActivityService {
    * detail, not separate rows in the top-level audit list.
    */
   /**
-   * `siteIds`: a site administrator only sees what their site's users did
-   * ('ALL' for a platform administrator). System entries with no user are
-   * platform-only.
+   * User actions only — system entries (errors, warnings, work no user
+   * triggered) are never returned. `siteIds`: a site administrator only
+   * sees what their site's users did ('ALL' for a platform administrator).
    */
   async findAll(query: FindActivityLogsQueryDto, siteIds: 'ALL' | string[]) {
     const where: Prisma.ActivityLogWhereInput = {
-      AND: [await this.actorsOf(siteIds)],
+      AND: [USER_ACTIONS, await this.actorsOf(siteIds)],
       parentLogId: null,
-      source: query.source,
       level: query.level,
       entityType: query.entityType,
       entityId: query.entityId,
@@ -165,11 +170,15 @@ export class ActivityService {
 
   async findOne(id: string, siteIds: 'ALL' | string[]) {
     const log = await this.db.activityLog.findFirst({
-      where: { id, AND: [await this.actorsOf(siteIds)] },
-      include: { children: { orderBy: { createdAt: 'asc' } } },
+      where: { id, AND: [USER_ACTIONS, await this.actorsOf(siteIds)] },
+      include: {
+        children: { where: USER_ACTIONS, orderBy: { createdAt: 'asc' } },
+      },
     });
     if (!log) {
-      const exists = await this.db.activityLog.count({ where: { id } });
+      const exists = await this.db.activityLog.count({
+        where: { id, ...USER_ACTIONS },
+      });
       if (exists) throw new ForbiddenException('This belongs to another site');
       throw new NotFoundException(`Activity log ${id} not found`);
     }

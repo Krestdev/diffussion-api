@@ -36,6 +36,7 @@ import { CreateOutgoingMailDto } from './dto/create-outgoing-mail.dto';
 import { FindIncomingMailsQueryDto } from './dto/find-incoming-mails.query.dto';
 import { FindMailsQueryDto } from './dto/find-mails.query.dto';
 import { FindOutgoingMailsQueryDto } from './dto/find-outgoing-mails.query.dto';
+import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 import { UpdateMailDto } from './dto/update-mail.dto';
 import { MailService } from './mail.service';
 
@@ -133,6 +134,12 @@ export class MailController {
     return this.mailService.findOutgoing(query, user.sub);
   }
 
+  // The caller's validation inbox.
+  @Get('awaiting-my-validation')
+  findAwaitingMyValidation(@CurrentUser() user: JwtPayloadWithRefreshToken) {
+    return this.mailService.findAwaitingMyValidation(user.sub);
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.mailService.findOne(id);
@@ -155,17 +162,34 @@ export class MailController {
     return this.mailService.transmit(id);
   }
 
-  // Starts the courrier's validation Circuit — see
-  // CircuitInstanceService.start() / MailService.submitForVerification().
-  // Actual step-by-step decisions happen on the CircuitInstance resource
-  // (POST /circuit-instances/:id/decide), not here.
-  @Post(':id/submit-for-verification')
+  // Sends the courrier to its validator (the dossier's responsible, or the
+  // site's), who then validates it or asks for corrections below.
+  @Post(':id/submit-for-validation')
   @RequirePermission(PermissionCode.CourrierWriteSortant)
-  submitForVerification(
+  submitForValidation(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
-    return this.mailService.submitForVerification(id, user.sub);
+    return this.mailService.submitForValidation(id, user.sub);
+  }
+
+  // By designation, not by role: only the courrier's validator may decide
+  // — checked in MailService.
+  @Post(':id/validate')
+  validate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.validate(id, user.sub);
+  }
+
+  @Post(':id/request-corrections')
+  requestCorrections(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RequestCorrectionsDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.requestCorrections(id, dto.motif, user.sub);
   }
 
   @Post(':id/send')

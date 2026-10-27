@@ -38,7 +38,7 @@ describe('SiteService', () => {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ siteId: 's-9' }),
         update: jest.fn(),
       },
-      userRole: { updateMany: jest.fn() },
+      userRole: { updateMany: jest.fn(), deleteMany: jest.fn() },
       delegation: { deleteMany: jest.fn() },
       $transaction: jest.fn(),
     };

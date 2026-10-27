@@ -149,7 +149,7 @@ export class AnalysisSheetService {
       );
     }
 
-    const templates = await this.activeTemplates(dossierId);
+    const templates = await this.activeTemplates();
     const seedItems = dto.seedItemsFromCourrier ?? true;
 
     const { courrierId, instructionId, projectId, remise, ...rest } = dto;
@@ -333,7 +333,7 @@ export class AnalysisSheetService {
       );
     }
 
-    const templates = await this.activeTemplates(sheet.dossierId);
+    const templates = await this.activeTemplates();
     const order =
       dto.order ??
       sheet.items.reduce((max, item) => Math.max(max, item.order), 0) + 1;
@@ -511,7 +511,7 @@ export class AnalysisSheetService {
           decidedAt: new Date(),
         },
       });
-      // Same trail the circuit engine writes: who decided, what, why.
+      // Same trail as courrier validation: who decided, what, why.
       await tx.validation.create({
         data: {
           analysisSheetId: id,
@@ -666,21 +666,10 @@ export class AnalysisSheetService {
     return sheet;
   }
 
-  /** Default grid for a dossier: the type's own criteria, else the global ones. */
-  private async activeTemplates(dossierId: string) {
-    const dossier = await this.database.dossier.findUnique({
-      where: { id: dossierId },
-      select: { typeId: true },
-    });
-    const scoped = dossier?.typeId
-      ? await this.database.analysisCriterionTemplate.findMany({
-          where: { isActive: true, dossierTypeId: dossier.typeId },
-          orderBy: { order: 'asc' },
-        })
-      : [];
-    if (scoped.length > 0) return scoped;
+  /** The default grid: every active criterion, the same for all dossiers. */
+  private activeTemplates() {
     return this.database.analysisCriterionTemplate.findMany({
-      where: { isActive: true, dossierTypeId: null },
+      where: { isActive: true },
       orderBy: { order: 'asc' },
     });
   }

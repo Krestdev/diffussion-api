@@ -34,6 +34,11 @@ const historyInclude = {
   validations: lastLivrableValidation,
 } satisfies Prisma.LivrableInclude;
 
+const TERMINAL_INSTRUCTION_STATUSES: InstructionStatus[] = [
+  InstructionStatus.TERMINEE,
+  InstructionStatus.ANNULEE,
+];
+
 const SUBMITTABLE_INSTRUCTION_STATUSES: InstructionStatus[] = [
   InstructionStatus.EN_COURS,
   InstructionStatus.A_CORRIGER,
@@ -256,13 +261,19 @@ export class DeliverableService {
   }
 
   // RG-DOS-007: no new livrable (or version) on a closed/archived dossier.
+  // Also: no new livrable on a completed or cancelled task.
   private async assertInstructionDossierOpen(instructionId: string) {
     const instruction = await this.database.instruction.findUnique({
       where: { id: instructionId },
-      select: { dossierId: true },
+      select: { dossierId: true, status: true },
     });
     if (!instruction) {
       throw new NotFoundException(`Instruction ${instructionId} not found`);
+    }
+    if (TERMINAL_INSTRUCTION_STATUSES.includes(instruction.status)) {
+      throw new BadRequestException(
+        `Cannot create or modify a livrable on a ${instruction.status.toLowerCase()} task`,
+      );
     }
     await assertDossierOpenForActivity(this.database, instruction.dossierId);
   }

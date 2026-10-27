@@ -94,6 +94,16 @@ export class InstructionsController {
     return this.instructionsService.assign(id, dto);
   }
 
+  // By designation, not by role: only one of the task's executants may
+  // accept it — checked in InstructionsService.
+  @Patch(':id/accept')
+  accept(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.instructionsService.accept(id, user.sub);
+  }
+
   @Patch(':id/refuse')
   @RequirePermission(PermissionCode.InstructionRefuse)
   refuse(

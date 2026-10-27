@@ -7,7 +7,7 @@ import {
 } from '../../generated/prisma/client';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RbacService } from '../auth/rbac/rbac.service';
-import { CircuitInstanceService } from '../circuits/circuit-instance/circuit-instance.service';
+import { awaitingValidationBy } from '../common/utils/courrier-validation';
 import { visibleDossierWhere } from '../common/utils/dossier-visibility';
 import { DatabaseService } from '../database/database.service';
 import {
@@ -31,7 +31,6 @@ export class DashboardService {
   constructor(
     private readonly database: DatabaseService,
     private readonly rbac: RbacService,
-    private readonly circuitInstances: CircuitInstanceService,
   ) {}
 
   /**
@@ -39,8 +38,8 @@ export class DashboardService {
    * caller isn't entitled to is `null` (not zero) so the UI can hide it
    * rather than show a misleading 0:
    * - tasks: always — they're the caller's own instructions;
-   * - approvals: always — driven by the caller's roles/sites, like the
-   *   "awaiting my decision" inbox;
+   * - approvals: always — the courriers waiting on the caller's
+   *   validation (GET /courriers/awaiting-my-validation);
    * - courriers / trend: only with COURRIER_READ, and only courriers in
    *   dossiers the caller can see.
    */
@@ -76,11 +75,10 @@ export class DashboardService {
   }
 
   private async getApprovals(userId: string) {
-    const { total } = await this.circuitInstances.findAll(
-      { awaitingMyDecision: true, take: 1 },
-      userId,
-    );
-    return { awaitingMyDecision: total };
+    const awaitingMyDecision = await this.database.courrier.count({
+      where: awaitingValidationBy(userId),
+    });
+    return { awaitingMyDecision };
   }
 
   // Dossiers the caller sees, on the sites where they may read courriers.

@@ -15,7 +15,6 @@
     { "key": "adminUserId", "value": "" },
     { "key": "expertUserId", "value": "" },
     { "key": "siteId", "value": "" },
-    { "key": "dossierTypeId", "value": "" },
     { "key": "dossierId", "value": "" },
     { "key": "courrierId", "value": "" },
     { "key": "instructionId", "value": "" },
@@ -123,30 +122,6 @@
           }
         },
         {
-          "name": "Create the dossier type",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                  "pm.collectionVariables.set('dossierTypeId', pm.response.json().id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
-              { "key": "Content-Type", "value": "application/json" }
-            ],
-            "url": { "raw": "{{baseUrl}}/dossier-types", "host": ["{{baseUrl}}"], "path": ["dossier-types"] },
-            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Dossier d'execution {{stamp}}\"\n}" }
-          }
-        },
-        {
           "name": "Create the dossier",
           "event": [
             {
@@ -169,7 +144,7 @@
             "url": { "raw": "{{baseUrl}}/dossiers", "host": ["{{baseUrl}}"], "path": ["dossiers"] },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"title\": \"Dossier d'execution {{stamp}} - Port Autonome\",\n  \"siteId\": \"{{siteId}}\",\n  \"typeId\": \"{{dossierTypeId}}\",\n  \"responsibleId\": \"{{expertUserId}}\"\n}"
+              "raw": "{\n  \"title\": \"Dossier d'execution {{stamp}} - Port Autonome\",\n  \"siteId\": \"{{siteId}}\",\n  \"responsibleId\": \"{{expertUserId}}\"\n}"
             }
           }
         },

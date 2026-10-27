@@ -27,7 +27,7 @@
 // - Instruction dependency (RG-LIV-006) is "one or more", modeled as a
 //   self many-to-many instead of a single `parentId`.
 // - Added `Delegation` (7.6.6) and a small set of admin referentials
-//   (DossierType, CorrespondentType, CourrierNature, Canal) that the BAD lists
+//   (CorrespondentType, CourrierNature, Canal) that the BAD lists
 //   under "Référentiels métier" (6.4) and that the frontend already routes to
 //   under Administration > Paramètres.
 
@@ -141,6 +141,7 @@ model Site {
 
   responsible User?        @relation("SiteManager", fields: [responsibleId], references: [id])
   users       User[]       @relation("SiteUsers")
+  roles       Role[]
   userRoles   UserRole[]
   dossiers    Dossier[]
   delegations Delegation[]
@@ -150,18 +151,26 @@ model Site {
 
 /// Reusable named permission set ("Exécutant", "Administrateur", ...).
 /// Reusable template (RG-ORG-003: cumulative). Held per site or globally — see UserRole.
+/// Global (`siteId` null): made by a platform administrator, usable on
+/// every site. Otherwise a role of that site only, made and managed by the
+/// site's responsible, and held by that site's users only.
 model Role {
   id          String   @id @default(uuid())
   code        String   @unique @db.VarChar(30)
-  name        String   @unique @db.VarChar(50)
+  name        String   @db.VarChar(50)
   description String?
+  siteId      String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
+  site            Site?            @relation(fields: [siteId], references: [id], onDelete: Restrict)
   userRoles       UserRole[]
   rolePermissions RolePermission[]
   delegations     Delegation[]
 
+  /// A name is unique among the global roles and within each site (NULLS
+  /// NOT DISTINCT, see the migration).
+  @@unique([siteId, name])
   @@map("role")
 }
 
@@ -192,6 +201,9 @@ model Permission {
   id          String   @id @default(uuid())
   code        String   @unique @db.VarChar(50)
   description String?
+  /// Listed in the role screens (GET /permissions) or hidden from them. A
+  /// hidden permission is still checked wherever a route requires it.
+  display     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -217,8 +229,7 @@ model Delegation {
   delegantId     String
   delegataireId  String
   /// What is handed over: one role, at one site. The delegataire is treated
-  /// as holding `role` at `site` while the window is open — same rule the
-  /// circuit engine applies to a real role holder assigned to that site.
+  /// as holding `role` at `site` while the window is open.
   roleId         String
   siteId         String
   /// Free-text label kept for the register ("Responsable de dossier"), no
@@ -316,9 +327,9 @@ model Correspondent {
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
-  type             CorrespondentType? @relation(fields: [typeId], references: [id])
-  courriers        Courrier[]
-  maitreOuvrageOf  Project[]          @relation("ProjectMaitreOuvrage")
+  type            CorrespondentType? @relation(fields: [typeId], references: [id])
+  courriers       Courrier[]
+  maitreOuvrageOf Project[]          @relation("ProjectMaitreOuvrage")
 
   @@map("correspondent")
 }
@@ -381,20 +392,20 @@ model Dossier {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  category    Category?    @relation(fields: [categoryId], references: [id])
-  project     Project?     @relation(fields: [projectId], references: [id])
-  site        Site         @relation(fields: [siteId], references: [id])
-  responsible User?        @relation("DossierResponsible", fields: [responsibleId], references: [id])
-  createdBy   User?        @relation("DossierCreatedBy", fields: [createdById], references: [id])
+  category    Category? @relation(fields: [categoryId], references: [id])
+  project     Project?  @relation(fields: [projectId], references: [id])
+  site        Site      @relation(fields: [siteId], references: [id])
+  responsible User?     @relation("DossierResponsible", fields: [responsibleId], references: [id])
+  createdBy   User?     @relation("DossierCreatedBy", fields: [createdById], references: [id])
 
-  courriers        Courrier[]
-  instructions     Instruction[]
-  documents        Document[]
-  notifications    Notification[]
+  courriers      Courrier[]
+  instructions   Instruction[]
+  documents      Document[]
+  notifications  Notification[]
   /// Per-user view/edit access on top of `confidentiality` (RESTRICTED
   /// dossiers are otherwise only visible to their responsible/creator).
-  accesses         DossierAccess[]
-  analysisSheets   AnalysisSheet[]
+  accesses       DossierAccess[]
+  analysisSheets AnalysisSheet[]
 
   @@map("dossier")
 }
@@ -468,8 +479,7 @@ enum CourrierStatus {
 
 /// A correspondence event belonging to exactly one dossier (7.2, RG-COU-001).
 /// A sortant draft may be created with only its subject and attached to its
-/// dossier later: `dossierId` is null only while BROUILLON, and required
-/// before the courrier can enter its circuit.
+/// dossier later: `dossierId` is null only while BROUILLON.
 model Courrier {
   id              String            @id @default(uuid())
   /// System-generated internal registration number (10.2.4.2).
@@ -520,18 +530,18 @@ model Courrier {
   dischargedBy  User?           @relation("CourrierDischargedBy", fields: [dischargedById], references: [id])
   owner         User?           @relation("CourrierOwner", fields: [ownerId], references: [id])
 
-  documents        Document[]
-  instructions     Instruction[]
-  notifications    Notification[]
+  documents      Document[]
+  instructions   Instruction[]
+  notifications  Notification[]
   /// Decisions on its validation (MailService.validate/requestCorrections).
-  validations      Validation[]
+  validations    Validation[]
   /// Independent from the dossier's own access list — a user with access to
   /// the dossier is not automatically granted access to every courrier
   /// inside it, and vice versa.
-  accesses         CourrierAccess[]
+  accesses       CourrierAccess[]
   /// Every analysis of this delivery: the live one plus the rejected
   /// versions it superseded.
-  analysisSheets   AnalysisSheet[]
+  analysisSheets AnalysisSheet[]
 
   @@map("courrier")
 }
@@ -696,23 +706,23 @@ enum ValidationDecision {
 /// its livrables — RG-LIV-005: validation is pronounced on the instruction as
 /// a whole), to a courrier submitted for validation, or to an analysis sheet.
 model Validation {
-  id                String             @id @default(uuid())
-  instructionId     String?
+  id              String             @id @default(uuid())
+  instructionId   String?
   /// Decision on one livrable of the instruction (approved, or rejected
   /// with its own motif) — one row per livrable and per decision.
-  livrableId        String?
-  courrierId        String?
-  analysisSheetId   String?
-  validatorId       String
-  decision          ValidationDecision
-  motif             String?
-  decidedAt         DateTime           @default(now())
+  livrableId      String?
+  courrierId      String?
+  analysisSheetId String?
+  validatorId     String
+  decision        ValidationDecision
+  motif           String?
+  decidedAt       DateTime           @default(now())
 
-  instruction     Instruction?     @relation(fields: [instructionId], references: [id])
-  livrable        Livrable?        @relation(fields: [livrableId], references: [id], onDelete: Cascade)
-  courrier        Courrier?        @relation(fields: [courrierId], references: [id], onDelete: Cascade)
-  analysisSheet   AnalysisSheet?   @relation(fields: [analysisSheetId], references: [id])
-  validator       User             @relation(fields: [validatorId], references: [id])
+  instruction   Instruction?   @relation(fields: [instructionId], references: [id])
+  livrable      Livrable?      @relation(fields: [livrableId], references: [id], onDelete: Cascade)
+  courrier      Courrier?      @relation(fields: [courrierId], references: [id], onDelete: Cascade)
+  analysisSheet AnalysisSheet? @relation(fields: [analysisSheetId], references: [id])
+  validator     User           @relation(fields: [validatorId], references: [id])
 
   @@index([livrableId])
   @@index([courrierId])
@@ -754,8 +764,8 @@ model Document {
 
   /// Independent from its dossier's/courrier's own access list, same
   /// reasoning as CourrierAccess.
-  accesses         DocumentAccess[]
-  analysisItems    AnalysisItem[]
+  accesses      DocumentAccess[]
+  analysisItems AnalysisItem[]
 
   @@map("document")
 }
@@ -1003,16 +1013,16 @@ model AnalysisItemCriterion {
 /// Fonctionnalité, Constitution, Conformité aux cahiers des charges,
 /// Exploitabilité, Autres conformités.
 model AnalysisCriterionTemplate {
-  id            String  @id @default(uuid())
-  label         String  @unique @db.VarChar(150)
-  description   String?
-  order         Int     @default(0)
-  isActive      Boolean @default(true)
+  id          String  @id @default(uuid())
+  label       String  @unique @db.VarChar(150)
+  description String?
+  order       Int     @default(0)
+  isActive    Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  criteria    AnalysisItemCriterion[]
+  criteria AnalysisItemCriterion[]
 
   @@map("analysis_criterion_template")
 }

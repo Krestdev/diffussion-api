@@ -24,7 +24,7 @@ export class FindMailsQueryDto {
   @IsUUID()
   correspondentId?: string;
 
-  // Circuit owner (10.6) — used by the "Affectations" queue (courriers
+  // Person in charge — used by the "Affectations" queue (courriers
   // assigned to me), distinct from filtering by who created the courrier.
   @ApiPropertyOptional()
   @IsOptional()

@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { CourrierStatus } from '../../generated/prisma/client';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RbacService } from '../auth/rbac/rbac.service';
-import { CircuitInstanceService } from '../circuits/circuit-instance/circuit-instance.service';
 import { DatabaseService } from '../database/database.service';
 import { DashboardService } from './dashboard.service';
 
@@ -17,7 +17,6 @@ describe('DashboardService', () => {
     // Global grant: no site restriction.
     siteFilter: jest.fn().mockResolvedValue({}),
   };
-  const circuitInstances = { findAll: jest.fn() };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -25,15 +24,23 @@ describe('DashboardService', () => {
     database.instruction.count
       .mockResolvedValueOnce(4)
       .mockResolvedValueOnce(9);
-    database.courrier.count.mockResolvedValueOnce(12).mockResolvedValueOnce(3);
-    circuitInstances.findAll.mockResolvedValue({ total: 2 });
+    // 2 courriers await my validation; the courrier section counts 12
+    // received, then 3 archived.
+    const sectionCounts = [12, 3];
+    database.courrier.count.mockImplementation(
+      ({ where }: { where: { status?: unknown } }) =>
+        Promise.resolve(
+          where.status === CourrierStatus.EN_ATTENTE_VALIDATION
+            ? 2
+            : sectionCounts.shift(),
+        ),
+    );
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DashboardService,
         { provide: DatabaseService, useValue: database },
         { provide: RbacService, useValue: rbac },
-        { provide: CircuitInstanceService, useValue: circuitInstances },
       ],
     }).compile();
     service = module.get(DashboardService);

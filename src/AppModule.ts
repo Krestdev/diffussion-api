@@ -11,7 +11,6 @@ import { RequestWithId, ResponseLike, NextFn } from './app.module';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { RbacModule } from './auth/rbac/rbac.module';
-import { CircuitsModule } from './circuits/circuits.module';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DatabaseModule } from './database/database.module';
@@ -54,7 +53,6 @@ import { StorageModule } from './storage/storage.module';
     AdministrationModule,
     NotificationsModule,
     DocumentsModule,
-    CircuitsModule,
     StorageModule,
     AnalysisModule,
     DashboardModule,

@@ -170,7 +170,14 @@ export class SiteService {
         `Site still owns ${blockers.join(' and ')} — deactivate it instead, or move/remove those first`,
       );
     }
-    await this.database.site.delete({ where: { id: uuid } });
+    // Nobody can hold the site's own roles any more: they go with it.
+    await this.database.$transaction([
+      this.database.rolePermission.deleteMany({
+        where: { role: { siteId: uuid } },
+      }),
+      this.database.role.deleteMany({ where: { siteId: uuid } }),
+      this.database.site.delete({ where: { id: uuid } }),
+    ]);
   }
 
   // The responsible is the site's administrator (users, delegations, audit
@@ -212,8 +219,9 @@ export class SiteService {
   }
 
   // A site's responsible belongs to it: someone from another site moves in,
-  // with their roles. Delegations they gave or received at their former
-  // site no longer apply there.
+  // with their global roles — the former site's own roles stay behind.
+  // Delegations they gave or received at their former site no longer apply
+  // there.
   private async moveIntoSite(
     tx: Prisma.TransactionClient,
     userId: string,
@@ -229,6 +237,9 @@ export class SiteService {
         siteId: user.siteId ?? undefined,
         OR: [{ delegantId: userId }, { delegataireId: userId }],
       },
+    });
+    await tx.userRole.deleteMany({
+      where: { userId, role: { siteId: { not: null } } },
     });
     await tx.userRole.updateMany({ where: { userId }, data: { siteId } });
     await tx.user.update({ where: { id: userId }, data: { siteId } });

@@ -37,7 +37,7 @@ describe('DocumentsService', () => {
       delete: jest.fn(),
       getSignedDownloadUrl: jest.fn(),
     };
-    rbac = { hasPermission: jest.fn().mockResolvedValue(false) };
+    rbac = { hasGlobalPermission: jest.fn().mockResolvedValue(false) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -150,7 +150,7 @@ describe('DocumentsService', () => {
         dossier: { site: { responsibleId: 'someone-else-too' } },
         courrier: null,
       });
-      rbac.hasPermission.mockResolvedValue(true);
+      rbac.hasGlobalPermission.mockResolvedValue(true);
       database.document.update.mockResolvedValue({ id: 'doc-1' });
 
       await expect(

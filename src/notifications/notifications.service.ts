@@ -24,7 +24,7 @@ export class NotificationsService {
       },
       include: { recipients: true },
     });
-    // Every notification (circuits, tasks, manual) goes through here, so
+    // Every notification (courriers, tasks, manual) goes through here, so
     // this is the single place the bell gets pushed.
     this.realtime.emitToUsers(recipientIds, 'notification:new', {
       id: notification.id,

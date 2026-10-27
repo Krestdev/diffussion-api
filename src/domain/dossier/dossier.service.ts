@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
-  CircuitInstanceStatus,
+  CourrierStatus,
   DossierConfidentiality,
   DossierStatus,
   InstructionStatus,
@@ -36,7 +36,6 @@ import { UpdateDossierDto } from './dto/update-dossier.dto';
 
 const dossierInclude = {
   site: true,
-  type: true,
   category: true,
   project: true,
   responsible: { select: { id: true, name: true, email: true } },
@@ -131,7 +130,6 @@ export class DossierService {
       priority: query.priority,
       siteId: query.siteId,
       responsibleId: query.responsibleId,
-      typeId: query.typeId,
       OR: query.search
         ? [
             { title: { contains: query.search, mode: 'insensitive' } },
@@ -214,7 +212,7 @@ export class DossierService {
       );
     }
 
-    // RG-DOS-003: the owning site drives circuits, eligibility and access,
+    // RG-DOS-003: the owning site drives eligibility and access,
     // so moving a dossier is an administrative act, not a plain edit.
     const siteChanged =
       dto.siteId !== undefined && dto.siteId !== dossier.siteId;
@@ -264,8 +262,8 @@ export class DossierService {
   }
 
   // RG-DOS-005: a dossier can only close once every instruction attached to
-  // it is terminated (validated) or cancelled, and no validation circuit is
-  // still running on it or on one of its courriers/documents.
+  // it is terminated (validated) or cancelled, and none of its courriers is
+  // still awaiting validation.
   @AuditLog({
     action: 'dossier.closed',
     entityType: 'dossier',
@@ -274,21 +272,17 @@ export class DossierService {
   async close(id: string) {
     await this.ensureMutable(id);
 
-    const [pending, runningCircuits] = await Promise.all([
+    const [pending, awaitingValidation] = await Promise.all([
       this.database.instruction.count({
         where: {
           dossierId: id,
           status: { notIn: TERMINAL_INSTRUCTION_STATUSES },
         },
       }),
-      this.database.circuitInstance.count({
+      this.database.courrier.count({
         where: {
-          status: CircuitInstanceStatus.IN_PROGRESS,
-          OR: [
-            { dossierId: id },
-            { courrier: { dossierId: id } },
-            { document: { dossierId: id } },
-          ],
+          dossierId: id,
+          status: CourrierStatus.EN_ATTENTE_VALIDATION,
         },
       }),
     ]);
@@ -297,9 +291,9 @@ export class DossierService {
         `${pending} instruction(s) are still open — a dossier can only be closed once every instruction is terminated or cancelled`,
       );
     }
-    if (runningCircuits > 0) {
+    if (awaitingValidation > 0) {
       throw new BadRequestException(
-        `${runningCircuits} validation circuit(s) are still in progress on this dossier — complete or cancel them before closing`,
+        `${awaitingValidation} courrier(s) are still awaiting validation on this dossier — have them validated or sent back for corrections before closing`,
       );
     }
 
@@ -541,7 +535,7 @@ export class DossierService {
   }
 
   // RG-DOS-004: the responsible must be able to act on the dossier —
-  // an active user of its owning site (circuit eligibility and
+  // an active user of its owning site (they validate its courriers, and
   // notifications are resolved through the users' sites).
   private async assertEligibleResponsible(userId: string, siteId: string) {
     const user = await this.database.user.findUnique({

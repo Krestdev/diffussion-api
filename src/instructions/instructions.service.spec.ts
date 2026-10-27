@@ -1,5 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { InstructionsService } from './instructions.service';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -33,6 +38,7 @@ describe('InstructionsService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       livrable: { count: jest.fn() },
       dossierAccess: { upsert: jest.fn() },
@@ -57,7 +63,7 @@ describe('InstructionsService', () => {
   });
 
   describe('create', () => {
-    it('starts EN_COURS when assignees are provided up front — no separate acceptance gate', async () => {
+    it('waits for its executants to accept it (AFFECTEE)', async () => {
       database.instruction.create.mockResolvedValue({
         id: 'i-1',
         dossierId: 'd-1',
@@ -70,7 +76,27 @@ describe('InstructionsService', () => {
 
       expect(database.instruction.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ status: InstructionStatus.EN_COURS }),
+          data: expect.objectContaining({ status: InstructionStatus.AFFECTEE }),
+        }),
+      );
+    });
+
+    it('stays A_AFFECTER with only a superviseur, until executants are designated', async () => {
+      database.instruction.create.mockResolvedValue({
+        id: 'i-1',
+        dossierId: 'd-1',
+      });
+
+      await service.create(
+        { dossierId: 'd-1', title: 'X', superviseurId: 'u-sup' },
+        'creator-1',
+      );
+
+      expect(database.instruction.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: InstructionStatus.A_AFFECTER,
+          }),
         }),
       );
     });
@@ -91,6 +117,34 @@ describe('InstructionsService', () => {
         }),
       );
       expect(database.dossierAccess.upsert).not.toHaveBeenCalled();
+    });
+
+    it('creates initial livrables along with the instruction', async () => {
+      database.instruction.create.mockResolvedValue({
+        id: 'i-1',
+        dossierId: 'd-1',
+      });
+
+      await service.create(
+        {
+          dossierId: 'd-1',
+          title: 'X',
+          livrables: [{ title: 'Rapport' }],
+        },
+        'creator-1',
+      );
+
+      expect(database.instruction.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            livrables: {
+              createMany: {
+                data: [{ title: 'Rapport', description: undefined, createdById: 'creator-1' }],
+              },
+            },
+          }),
+        }),
+      );
     });
 
     it('grants the assignees view access on the dossier', async () => {
@@ -222,7 +276,7 @@ describe('InstructionsService', () => {
   });
 
   describe('refuse', () => {
-    it('records the motif and reassigns to the new executant (RG-INS-003/004)', async () => {
+    it('records the motif and reassigns to the new executant, who accepts in turn (RG-INS-003/004)', async () => {
       database.instruction.findUnique.mockResolvedValue({
         id: 'i-1',
         dossierId: 'd-1',
@@ -242,7 +296,7 @@ describe('InstructionsService', () => {
       expect(database.instruction.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            status: InstructionStatus.EN_COURS,
+            status: InstructionStatus.AFFECTEE,
             refusalReason: 'Trop de charge',
             assignees: {
               deleteMany: { role: 'EXECUTANT' },
@@ -255,6 +309,69 @@ describe('InstructionsService', () => {
         expect.objectContaining({
           where: { dossierId_userId: { dossierId: 'd-1', userId: 'u-9' } },
         }),
+      );
+    });
+  });
+
+  describe('accept', () => {
+    const assigned = {
+      id: 'i-1',
+      title: 'Rédiger le rapport',
+      dossierId: 'd-1',
+      courrierId: null,
+      createdById: 'creator-1',
+      status: InstructionStatus.AFFECTEE,
+      assignees: [
+        { role: 'EXECUTANT', user: { id: 'u-exec', name: 'Awa' } },
+        { role: 'SUPERVISEUR', user: { id: 'u-sup', name: 'Paul' } },
+      ],
+    };
+
+    beforeEach(() =>
+      database.instruction.findUnique.mockResolvedValue(assigned),
+    );
+
+    it('lets an executant accept it, and tells the creator and the superviseur', async () => {
+      await service.accept('i-1', 'u-exec');
+
+      expect(database.instruction.updateMany).toHaveBeenCalledWith({
+        where: { id: 'i-1', status: InstructionStatus.AFFECTEE },
+        data: { status: InstructionStatus.EN_COURS },
+      });
+      expect(notifications.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'TASK_ACCEPTED',
+          recipientIds: ['creator-1', 'u-sup'],
+        }),
+      );
+    });
+
+    it.each([
+      ['the superviseur', 'u-sup'],
+      ['someone not on the task', 'u-other'],
+    ])('refuses %s', async (_label, userId) => {
+      await expect(service.accept('i-1', userId)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(database.instruction.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses a task that is not waiting to be accepted', async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        ...assigned,
+        status: InstructionStatus.EN_COURS,
+      });
+
+      await expect(service.accept('i-1', 'u-exec')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    it('accepts it only once when two executants accept together', async () => {
+      database.instruction.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.accept('i-1', 'u-exec')).rejects.toBeInstanceOf(
+        ConflictException,
       );
     });
   });

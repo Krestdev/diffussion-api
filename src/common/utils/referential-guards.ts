@@ -8,9 +8,8 @@ import {
 type Db = Prisma.TransactionClient;
 
 // RG-SEC: an INACTIVE site is frozen for new activity — no new dossier on
-// it (or moved onto it), no new courrier or circuit on its dossiers, no new
-// user assignment to it. Existing data stays readable, and circuits already
-// in progress can still be completed.
+// it (or moved onto it), no new courrier on its dossiers, no new user
+// assignment to it. Existing data stays readable.
 export async function assertSiteActive(db: Db, siteId: string) {
   const site = await db.site.findUnique({
     where: { id: siteId },

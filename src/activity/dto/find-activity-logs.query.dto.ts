@@ -1,18 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsString, IsUUID } from 'class-validator';
-import { ActivityLevel, ActivitySource } from 'generated/prisma/enums';
+import { ActivityLevel } from 'generated/prisma/enums';
 
 export class FindActivityLogsQueryDto {
   @ApiPropertyOptional({ description: 'Search in action/message' })
   @IsOptional()
   @IsString()
   search?: string;
-
-  @ApiPropertyOptional({ enum: ActivitySource })
-  @IsOptional()
-  @IsEnum(ActivitySource)
-  source?: ActivitySource;
 
   @ApiPropertyOptional({ enum: ActivityLevel })
   @IsOptional()

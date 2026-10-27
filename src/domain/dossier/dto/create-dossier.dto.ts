@@ -25,11 +25,6 @@ export class CreateDossierDto {
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional({ description: 'DossierType id' })
-  @IsOptional()
-  @IsUUID()
-  typeId?: string;
-
   @ApiPropertyOptional({ description: 'Category id' })
   @IsOptional()
   @IsUUID()

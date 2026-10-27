@@ -18,7 +18,6 @@ describe('DossierService', () => {
     courrier: Record<string, jest.Mock>;
     livrable: Record<string, jest.Mock>;
     activityLog: Record<string, jest.Mock>;
-    circuitInstance: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
   let rbac: { hasPermission: jest.Mock };
@@ -34,10 +33,9 @@ describe('DossierService', () => {
         update: jest.fn(),
       },
       instruction: { count: jest.fn(), findMany: jest.fn() },
-      courrier: { findMany: jest.fn() },
+      courrier: { findMany: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       livrable: { findMany: jest.fn() },
       activityLog: { findMany: jest.fn() },
-      circuitInstance: { count: jest.fn().mockResolvedValue(0) },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
     };
 
@@ -108,13 +106,13 @@ describe('DossierService', () => {
       expect(result.status).toBe(DossierStatus.CLOSED);
     });
 
-    it('refuses to close while a validation circuit is still running', async () => {
+    it('refuses to close while a courrier awaits validation', async () => {
       database.dossier.findUnique.mockResolvedValue({
         id: 'd-1',
         status: DossierStatus.IN_PROGRESS,
       });
       database.instruction.count.mockResolvedValue(0);
-      database.circuitInstance.count.mockResolvedValue(1);
+      database.courrier.count.mockResolvedValue(1);
 
       await expect(service.close('d-1')).rejects.toBeInstanceOf(
         BadRequestException,

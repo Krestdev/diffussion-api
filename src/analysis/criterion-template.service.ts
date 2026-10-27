@@ -29,11 +29,9 @@ export class CriterionTemplateService {
     return this.database.analysisCriterionTemplate.create({ data: dto });
   }
 
-  findAll(dossierTypeId?: string) {
+  findAll() {
     return this.database.analysisCriterionTemplate.findMany({
-      where: dossierTypeId ? { dossierTypeId } : undefined,
-      orderBy: [{ dossierTypeId: 'asc' }, { order: 'asc' }],
-      include: { dossierType: { select: { id: true, name: true } } },
+      orderBy: { order: 'asc' },
     });
   }
 

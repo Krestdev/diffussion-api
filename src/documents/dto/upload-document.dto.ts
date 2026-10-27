@@ -26,8 +26,7 @@ export class UploadDocumentDto {
 
   @ApiPropertyOptional({
     description:
-      'Circuit owner (10.6) — can decide any step of a circuit started ' +
-      'directly on this document, regardless of role/site gating. Can be ' +
+      'Person in charge of the document — also gets access to it. Can be ' +
       'left unset and completed later (see DocumentsService.setOwner).',
   })
   @IsOptional()

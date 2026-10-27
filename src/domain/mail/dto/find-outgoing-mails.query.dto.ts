@@ -14,7 +14,7 @@ import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
  * statuses, so the frontend can't express it as a single `status` filter.
  */
 export const OUTGOING_STATUS_GROUPS = {
-  pending: [CourrierStatus.BROUILLON, CourrierStatus.EN_CIRCUIT],
+  pending: [CourrierStatus.BROUILLON, CourrierStatus.EN_ATTENTE_VALIDATION],
   approved: [
     CourrierStatus.VALIDE,
     CourrierStatus.PRET_A_ENVOYER,
@@ -35,7 +35,7 @@ export class FindOutgoingMailsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     enum: GROUPS,
     description:
-      'Tab: pending = BROUILLON, EN_CIRCUIT · approved = VALIDE, PRET_A_ENVOYER, ENVOYE · rejected = A_CORRIGER, ANNULE',
+      'Tab: pending = BROUILLON, EN_ATTENTE_VALIDATION · approved = VALIDE, PRET_A_ENVOYER, ENVOYE · rejected = A_CORRIGER, ANNULE',
   })
   @IsOptional()
   @IsIn(GROUPS)
@@ -64,9 +64,9 @@ export class FindOutgoingMailsQueryDto extends PaginationQueryDto {
   @IsUUID()
   natureId?: string;
 
-  // Circuit owner (10.6) — e.g. "courriers assigned to me" (the Affectations
+  // Person in charge — e.g. "courriers assigned to me" (the Affectations
   // queue), distinct from who registered the courrier.
-  @ApiPropertyOptional({ description: 'Circuit owner (user id)' })
+  @ApiPropertyOptional({ description: 'Person in charge (user id)' })
   @IsOptional()
   @IsUUID()
   ownerId?: string;

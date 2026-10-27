@@ -54,10 +54,6 @@
       "value": ""
     },
     {
-      "key": "dossierTypeId",
-      "value": ""
-    },
-    {
       "key": "canalId",
       "value": ""
     },
@@ -1208,47 +1204,6 @@
           }
         },
         {
-          "name": "Create a dossier type",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
-                  "pm.collectionVariables.set('dossierTypeId', pm.response.json().id);"
-                ]
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{accessToken}}"
-              },
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/dossier-types",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "dossier-types"
-              ]
-            },
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"name\": \"Type QA {{stamp}}\"\n}"
-            }
-          }
-        },
-        {
           "name": "Create a canal",
           "event": [
             {
@@ -1533,7 +1488,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"title\": \"Dossier QA {{stamp}}\",\n  \"siteId\": \"{{siteId}}\",\n  \"typeId\": \"{{dossierTypeId}}\",\n  \"categoryId\": \"{{categoryId}}\"\n}"
+              "raw": "{\n  \"title\": \"Dossier QA {{stamp}}\",\n  \"siteId\": \"{{siteId}}\",\n  \"categoryId\": \"{{categoryId}}\"\n}"
             }
           }
         },

@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -60,6 +61,14 @@ const instructionInclude = {
   dependsOn: { include: { dependsOn: { select: dependencyRefSelect } } },
   dependents: { include: { instruction: { select: dependencyRefSelect } } },
 } satisfies Prisma.InstructionInclude;
+
+// Executants accept a task before working on it; with none designated yet
+// (a superviseur alone, or nobody), it waits for them.
+function statusOnAssignment(executantIds?: string[]): InstructionStatus {
+  return executantIds?.length
+    ? InstructionStatus.AFFECTEE
+    : InstructionStatus.A_AFFECTER;
+}
 
 function assignmentRows(dto: {
   executantIds?: string[];
@@ -137,7 +146,14 @@ export class InstructionsService {
   }
 
   async create(dto: CreateInstructionsDto, createdById: string) {
-    const { executantIds, superviseurId, dueDate, dependsOnId, ...data } = dto;
+    const {
+      executantIds,
+      superviseurId,
+      dueDate,
+      dependsOnId,
+      livrables,
+      ...data
+    } = dto;
     const hasAssignees = Boolean(executantIds?.length || superviseurId);
     await assertDossierOpenForActivity(this.database, data.dossierId);
 
@@ -157,13 +173,9 @@ export class InstructionsService {
           number,
           dueDate: dueDate ? new Date(dueDate) : undefined,
           createdById,
-          // No separate "awaiting the executant's acceptance" gate — being
-          // assigned means the task is immediately actionable. The only
-          // decision an executant makes is to reject it (see refuse()),
-          // which reassigns rather than parking it in a REFUSEE queue.
-          status: hasAssignees
-            ? InstructionStatus.EN_COURS
-            : InstructionStatus.A_AFFECTER,
+          // Assigned executants accept it before working on it (accept());
+          // without one yet, a superviseur still has to designate them.
+          status: statusOnAssignment(executantIds),
           assignees: hasAssignees
             ? {
                 createMany: {
@@ -175,6 +187,17 @@ export class InstructionsService {
           // AddTaskDialog exposes one "Tâche parent" field) — the schema
           // itself allows several, this just doesn't expose that yet.
           dependsOn: dependsOnId ? { create: { dependsOnId } } : undefined,
+          livrables: livrables?.length
+            ? {
+                createMany: {
+                  data: livrables.map((l) => ({
+                    title: l.title,
+                    description: l.description,
+                    createdById,
+                  })),
+                },
+              }
+            : undefined,
         },
         include: instructionInclude,
       }),
@@ -326,7 +349,7 @@ export class InstructionsService {
     const updated = await this.database.instruction.update({
       where: { id: instruction.id },
       data: {
-        status: InstructionStatus.EN_COURS,
+        status: statusOnAssignment(dto.executantIds),
         assignees: {
           deleteMany: {},
           createMany: { data: assignmentRows(dto) },
@@ -350,17 +373,18 @@ export class InstructionsService {
   // RG-INS-003/004: the executant refuses and must motivate it — rejecting
   // reassigns the task to a different executant in the same step (there's
   // no separate "unassigned, waiting to be picked up" queue to fall back
-  // to), so the task stays immediately actionable for its new assignee.
-  // Only the executant role is replaced — an existing superviseur, if any,
-  // isn't touched by one executant declining.
+  // to); the new executant then accepts it in turn. Only the executant role
+  // is replaced — an existing superviseur, if any, isn't touched by one
+  // executant declining.
   async refuse(id: string, dto: RefuseInstructionDto) {
     const instruction = await this.requireStatus(id, [
+      InstructionStatus.AFFECTEE,
       InstructionStatus.EN_COURS,
     ]);
     const updated = await this.database.instruction.update({
       where: { id: instruction.id },
       data: {
-        status: InstructionStatus.EN_COURS,
+        status: InstructionStatus.AFFECTEE,
         refusalReason: dto.motif,
         assignees: {
           deleteMany: { role: UserInstructionRole.EXECUTANT },
@@ -378,6 +402,56 @@ export class InstructionsService {
     });
     this.notifyAssignment(updated, [dto.newAssigneeId]);
     return updated;
+  }
+
+  // AFFECTEE -> EN_COURS: an executant of the task takes it on. By
+  // designation — being one of its executants is what allows it.
+  async accept(id: string, userId: string) {
+    const instruction = await this.requireStatus(id, [
+      InstructionStatus.AFFECTEE,
+    ]);
+    const isExecutant = instruction.assignees.some(
+      (assignee) =>
+        assignee.user.id === userId &&
+        assignee.role === UserInstructionRole.EXECUTANT,
+    );
+    if (!isExecutant) {
+      throw new ForbiddenException(
+        'Only an executant of this task can accept it',
+      );
+    }
+    // Guarded on the status read above: two executants accepting at once
+    // move it only once.
+    const { count } = await this.database.instruction.updateMany({
+      where: { id, status: InstructionStatus.AFFECTEE },
+      data: { status: InstructionStatus.EN_COURS },
+    });
+    if (count === 0) {
+      throw new ConflictException(
+        'This task was accepted meanwhile — refresh and try again',
+      );
+    }
+    const accepted = await this.findOne(id);
+    const acceptedBy = instruction.assignees.find(
+      (assignee) => assignee.user.id === userId,
+    )?.user.name;
+    this.notifyInstruction(
+      accepted,
+      [
+        accepted.createdById,
+        ...accepted.assignees
+          .filter(
+            (assignee) => assignee.role === UserInstructionRole.SUPERVISEUR,
+          )
+          .map((assignee) => assignee.user.id),
+      ],
+      {
+        type: 'TASK_ACCEPTED',
+        message: `${acceptedBy ?? 'Un exécutant'} a accepté la tâche « ${accepted.title} ».`,
+      },
+      userId,
+    );
+    return accepted;
   }
 
   // 10.4.4.7: closing requires every livrable attached to the instruction to
@@ -539,7 +613,7 @@ export class InstructionsService {
         type:
           settled === InstructionStatus.A_CORRIGER
             ? 'TASK_CORRECTIONS_REQUESTED'
-          : 'TASK_LIVRABLE_REJECTED',
+            : 'TASK_LIVRABLE_REJECTED',
         message: `Le livrable « ${rejected.title} » de la tâche « ${instruction.title} » est rejeté : ${motif}`,
       },
       validatorId,

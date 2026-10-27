@@ -223,13 +223,6 @@ export class CreateCriterionTemplateDto {
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional({
-    description: 'Narrow this criterion to one dossier type',
-  })
-  @IsOptional()
-  @IsUUID()
-  dossierTypeId?: string;
-
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()
   @IsInt()
