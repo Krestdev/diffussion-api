@@ -30,6 +30,11 @@ export class FindIncomingMailsQueryDto extends PaginationQueryDto {
   @IsUUID()
   natureId?: string;
 
+  @ApiPropertyOptional({ description: 'Effet type' })
+  @IsOptional()
+  @IsUUID()
+  typeId?: string;
+
   // Person in charge — e.g. "courriers assigned to me" (the Affectations
   // queue), distinct from who registered the courrier.
   @ApiPropertyOptional({ description: 'Person in charge (user id)' })

@@ -51,8 +51,14 @@ describe('MailController', () => {
       direction: 'ENTRANT' as any,
       subject: 'Subject',
     };
-    const files = [{ originalname: 'file.pdf', buffer: Buffer.from('') }] as any;
-    controller.create(dto, { sub: 'u-1', email: 'u@x.com', refreshToken: 'r' }, files);
+    const files = [
+      { originalname: 'file.pdf', buffer: Buffer.from('') },
+    ] as any;
+    controller.create(
+      dto,
+      { sub: 'u-1', email: 'u@x.com', refreshToken: 'r' },
+      files,
+    );
     expect(service.create).toHaveBeenCalledWith(dto, 'u-1', files);
   });
 

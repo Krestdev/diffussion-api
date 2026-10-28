@@ -170,12 +170,14 @@ export class SiteService {
         `Site still owns ${blockers.join(' and ')} — deactivate it instead, or move/remove those first`,
       );
     }
-    // Nobody can hold the site's own roles any more: they go with it.
+    // Nobody can use the site's own roles and effet types any more: they go
+    // with it.
     await this.database.$transaction([
       this.database.rolePermission.deleteMany({
         where: { role: { siteId: uuid } },
       }),
       this.database.role.deleteMany({ where: { siteId: uuid } }),
+      this.database.effetType.deleteMany({ where: { siteId: uuid } }),
       this.database.site.delete({ where: { id: uuid } }),
     ]);
   }

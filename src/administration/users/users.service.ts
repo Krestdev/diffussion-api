@@ -196,6 +196,11 @@ export class UsersService {
     if (suspending && id === actingUserId) {
       throw new BadRequestException('You cannot suspend your own account');
     }
+    // A suspended responsible can't log in: their site would be left with
+    // nobody to administer it and nobody to validate its effets.
+    if (suspending) {
+      await this.assertNotResponsible(id);
+    }
 
     const updated = await this.rbac.withAdminCoverage((tx) =>
       tx.user.update({
@@ -256,8 +261,9 @@ export class UsersService {
     return scope;
   }
 
-  // A site's responsible belongs to it (SiteService): moving them away
-  // would leave the site administered by an outsider.
+  // A site's responsible belongs to it and administers it (SiteService):
+  // moving them away or suspending them would leave the site without its
+  // administrator. Name another responsible first.
   private async assertNotResponsible(userId: string) {
     const managed = await this.database.site.findFirst({
       where: { responsibleId: userId },

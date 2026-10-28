@@ -98,6 +98,7 @@ model User {
   userInstructions  UserInstructions[]
   userNotifications UserNotification[]
   validations       Validation[]
+  subscriptions     InstructionSubscription[]
 
   managedSites        Site[]               @relation("SiteManager")
   responsibleDossiers Dossier[]            @relation("DossierResponsible")
@@ -142,6 +143,7 @@ model Site {
   responsible User?        @relation("SiteManager", fields: [responsibleId], references: [id])
   users       User[]       @relation("SiteUsers")
   roles       Role[]
+  effetTypes  EffetType[]
   userRoles   UserRole[]
   dossiers    Dossier[]
   delegations Delegation[]
@@ -268,6 +270,32 @@ model Category {
   dossiers Dossier[]
 
   @@map("category")
+}
+
+/// Kind of effet: courrier, bordereau de transmission, matière ou spécimen,
+/// document, support numérique, dossier complet... Global (`siteId` null,
+/// made by a platform administrator) or a site's own (made by its
+/// responsible), like roles.
+model EffetType {
+  id            String   @id @default(uuid())
+  name          String   @db.VarChar(100)
+  /// Physical object: quantity, condition, packaging, location, return.
+  isPhysical    Boolean  @default(false)
+  /// Can list the effets it accompanies (a bordereau de transmission).
+  canListEffets Boolean  @default(false)
+  /// An inactive type is no longer offered for new effets.
+  active        Boolean  @default(true)
+  siteId        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  site      Site?      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  courriers Courrier[]
+
+  /// A name is unique among the global types and within each site (NULLS
+  /// NOT DISTINCT, see the migration).
+  @@unique([siteId, name])
+  @@map("effet_type")
 }
 
 /// "Nature du courrier" (10.2, a courrier registration field distinct from
@@ -499,6 +527,21 @@ model Courrier {
   sentAt          DateTime?
   scanUrl         String?
 
+  /// What kind of effet this is (courrier, bordereau, spécimen...). Set to
+  /// the global "Courrier" type when none is given.
+  typeId   String?
+  /// The bordereau de transmission this effet came with, if any.
+  parentId String?
+
+  // Physical effets only (EffetType.isPhysical).
+  quantity            Int?
+  physicalDescription String?
+  conditionOnReceipt  String?   @db.VarChar(255)
+  packaging           String?   @db.VarChar(255)
+  storageLocation     String?   @db.VarChar(255)
+  returnExpected      Boolean   @default(false)
+  returnedAt          DateTime?
+
   // Décharge (10.2.5): recorded independently of the status state machine —
   // it's proof of physical handover, not a lifecycle transition.
   dischargeRequested Boolean   @default(false)
@@ -522,6 +565,10 @@ model Courrier {
 
   respondsTo    Courrier?       @relation("CourrierResponses", fields: [respondsToId], references: [id], onDelete: SetNull)
   responses     Courrier[]      @relation("CourrierResponses")
+  type          EffetType?      @relation(fields: [typeId], references: [id], onDelete: Restrict)
+  // SetNull: deleting a bordereau leaves the effets it listed in place.
+  parent        Courrier?       @relation("BordereauEffets", fields: [parentId], references: [id], onDelete: SetNull)
+  children      Courrier[]      @relation("BordereauEffets")
   dossier       Dossier?        @relation(fields: [dossierId], references: [id], onDelete: Restrict)
   correspondent Correspondent?  @relation(fields: [correspondentId], references: [id])
   nature        CourrierNature? @relation(fields: [natureId], references: [id])
@@ -543,6 +590,8 @@ model Courrier {
   /// versions it superseded.
   analysisSheets AnalysisSheet[]
 
+  @@index([typeId])
+  @@index([parentId])
   @@map("courrier")
 }
 
@@ -577,9 +626,12 @@ enum InstructionPriority {
 
 enum InstructionStatus {
   A_AFFECTER
+  /// Assigned, waiting for its executants to subscribe to it.
   AFFECTEE
   ACCEPTEE
-  REFUSEE
+  /// Every executant declined: back to its creator, who reassigns or
+  /// adjusts it.
+  NON_SOUSCRITE
   EN_COURS
   EN_ATTENTE_VALIDATION
   A_CORRIGER
@@ -596,29 +648,46 @@ enum UserInstructionRole {
 /// dossier (7.3). Always attached to a dossier; may additionally reference
 /// the courrier that triggered it.
 model Instruction {
-  id            String              @id @default(uuid())
+  id                     String              @id @default(uuid())
   /// System-generated, human-readable reference (matches Dossier/Courrier).
-  number        String              @unique @db.VarChar(30)
-  dossierId     String
-  courrierId    String?
-  title         String              @db.VarChar(200)
-  description   String?
-  priority      InstructionPriority @default(NORMAL)
-  dueDate       DateTime?
-  status        InstructionStatus   @default(A_AFFECTER)
-  refusalReason String?
-  createdById   String?
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  closedAt      DateTime?
+  number                 String              @unique @db.VarChar(30)
+  dossierId              String
+  courrierId             String?
+  title                  String              @db.VarChar(200)
+  description            String?
+  priority               InstructionPriority @default(NORMAL)
+  /// The task's deadline: validated by then. Set by its creator (from the
+  /// dossier's responsible to the superviseur).
+  dueDate                DateTime?
+  /// The executants' deadline: livrables submitted by then. Set by the
+  /// superviseur, or the creator when there is none; never after dueDate.
+  agentDueDate           DateTime?
+  /// 1, then +1 each time the creator changes what is asked once work has
+  /// started. Corrections within the request keep the cycle and the
+  /// deadlines.
+  cycle                  Int                 @default(1)
+  /// Overdue alerts already sent, so each is sent once; cleared when the
+  /// deadline moves.
+  agentOverdueNotifiedAt DateTime?
+  overdueNotifiedAt      DateTime?
+  status                 InstructionStatus   @default(A_AFFECTER)
+  /// Summary of the corrections last requested on its livrables. The
+  /// motifs of non-subscriptions live in InstructionSubscription.
+  refusalReason          String?
+  createdById            String?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  closedAt               DateTime?
 
   dossier   Dossier   @relation(fields: [dossierId], references: [id])
   courrier  Courrier? @relation(fields: [courrierId], references: [id])
   createdBy User?     @relation("InstructionCreatedBy", fields: [createdById], references: [id])
 
-  assignees   UserInstructions[]
-  livrables   Livrable[]
-  validations Validation[]
+  assignees     UserInstructions[]
+  livrables     Livrable[]
+  validations   Validation[]
+  /// Every executant's decision to subscribe or not, with its motif.
+  subscriptions InstructionSubscription[]
 
   // RG-LIV-006: an instruction may depend on several others, and several
   // others may depend on it — modeled as a self many-to-many.
@@ -642,6 +711,29 @@ model InstructionDependency {
 /// Who is assigned to an instruction, and in what capacity (7.3.6 /
 /// RG-INS-002): directly to an executant, or to a superviseur who then
 /// assigns/reassigns executants.
+enum SubscriptionDecision {
+  SOUSCRITE
+  NON_SOUSCRITE
+}
+
+/// An executant's decision on a task assigned to them: they subscribe to it
+/// (and start working), or they don't, with a motif — then they leave the
+/// task. Kept as history: a task can be declined several times.
+model InstructionSubscription {
+  id            String               @id @default(uuid())
+  instructionId String
+  userId        String
+  decision      SubscriptionDecision
+  motif         String?
+  decidedAt     DateTime             @default(now())
+
+  instruction Instruction @relation(fields: [instructionId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id])
+
+  @@index([instructionId])
+  @@map("instruction_subscription")
+}
+
 model UserInstructions {
   userId        String
   instructionId String
@@ -715,6 +807,8 @@ model Validation {
   analysisSheetId String?
   validatorId     String
   decision        ValidationDecision
+  /// The task's cycle the decision was made in (Instruction.cycle).
+  cycle           Int?
   motif           String?
   decidedAt       DateTime           @default(now())
 

@@ -10,6 +10,7 @@ import {
   LivrableStatus,
   NotificationCanal,
   Prisma,
+  SubscriptionDecision,
   UserInstructionRole,
   ValidationDecision,
 } from '../../generated/prisma/client';
@@ -32,7 +33,8 @@ import {
   TASK_TABS,
   TaskTab,
 } from './dto/find-my-tasks.query.dto';
-import { RefuseInstructionDto } from './dto/refuse-instruction.dto';
+import { DeclineSubscriptionDto } from './dto/decline-subscription.dto';
+import { overdueWhere, withOverdue } from './instruction-overdue';
 import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 import { UpdateInstructionDto } from './dto/update-instruction.dto';
 
@@ -49,6 +51,11 @@ const DECIDING_STATUSES: InstructionStatus[] = [
 
 const instructionInclude = {
   assignees: { include: { user: { select: { id: true, name: true } } } },
+  // Who subscribed or declined, with their motif, most recent first.
+  subscriptions: {
+    include: { user: { select: { id: true, name: true } } },
+    orderBy: { decidedAt: 'desc' },
+  },
   livrables: {
     include: { validations: lastLivrableValidation },
     orderBy: { createdAt: 'asc' },
@@ -62,7 +69,7 @@ const instructionInclude = {
   dependents: { include: { instruction: { select: dependencyRefSelect } } },
 } satisfies Prisma.InstructionInclude;
 
-// Executants accept a task before working on it; with none designated yet
+// Executants subscribe to a task before working on it; with none designated yet
 // (a superviseur alone, or nobody), it waits for them.
 function statusOnAssignment(executantIds?: string[]): InstructionStatus {
   return executantIds?.length
@@ -85,6 +92,31 @@ function assignmentRows(dto: {
     });
   }
   return rows;
+}
+
+// Work has started: changing the request now opens a new cycle (H12).
+const WORK_STARTED: InstructionStatus[] = [
+  InstructionStatus.EN_COURS,
+  InstructionStatus.EN_ATTENTE_VALIDATION,
+  InstructionStatus.A_CORRIGER,
+];
+
+function toDate(value: string | undefined): Date | null {
+  return value ? new Date(value) : null;
+}
+
+function sameDate(a: Date | null, b: Date | null) {
+  return (a?.getTime() ?? null) === (b?.getTime() ?? null);
+}
+
+// The executants hand their livrables in before the task has to be
+// validated.
+function assertDeadlines(dueDate: Date | null, agentDueDate: Date | null) {
+  if (dueDate && agentDueDate && agentDueDate > dueDate) {
+    throw new BadRequestException(
+      "The executants' deadline (agentDueDate) can't be after the task's deadline (dueDate)",
+    );
+  }
 }
 
 @Injectable()
@@ -150,10 +182,12 @@ export class InstructionsService {
       executantIds,
       superviseurId,
       dueDate,
+      agentDueDate,
       dependsOnId,
       livrables,
       ...data
     } = dto;
+    assertDeadlines(toDate(dueDate), toDate(agentDueDate));
     const hasAssignees = Boolean(executantIds?.length || superviseurId);
     await assertDossierOpenForActivity(this.database, data.dossierId);
 
@@ -172,8 +206,10 @@ export class InstructionsService {
           ...data,
           number,
           dueDate: dueDate ? new Date(dueDate) : undefined,
+          agentDueDate: agentDueDate ? new Date(agentDueDate) : undefined,
           createdById,
-          // Assigned executants accept it before working on it (accept());
+          // Assigned executants subscribe to it before working on it
+          // (subscribe());
           // without one yet, a superviseur still has to designate them.
           status: statusOnAssignment(executantIds),
           assignees: hasAssignees
@@ -227,6 +263,7 @@ export class InstructionsService {
       assignees: query.assigneeId
         ? { some: { userId: query.assigneeId } }
         : undefined,
+      ...(query.overdue ? overdueWhere(new Date()) : {}),
     };
 
     const [data, total] = await this.database.$transaction([
@@ -240,7 +277,13 @@ export class InstructionsService {
       this.database.instruction.count({ where }),
     ]);
 
-    return { data, total, skip: query.skip ?? 0, take: query.take ?? 20 };
+    const now = new Date();
+    return {
+      data: data.map((instruction) => withOverdue(instruction, now)),
+      total,
+      skip: query.skip ?? 0,
+      take: query.take ?? 20,
+    };
   }
 
   /**
@@ -257,8 +300,10 @@ export class InstructionsService {
     const mine: Prisma.InstructionWhereInput = {
       assignees: { some: { userId, role: query.role } },
     };
+    // "Renvoyées" is the creator's queue: tasks no executant subscribed to
+    // come back to whoever created them.
     const inTab = (name: TaskTab): Prisma.InstructionWhereInput => ({
-      ...mine,
+      ...(name === 'renvoyees' ? { createdById: userId } : mine),
       status: { in: [...TASK_TABS[name]] },
     });
 
@@ -272,6 +317,7 @@ export class InstructionsService {
           status: query.status,
           priority: query.priority,
           dossierId: query.dossierId,
+          ...(query.overdue ? overdueWhere(new Date()) : {}),
           createdAt: dateRange(query.createdFrom, query.createdTo),
         },
         ...(contains
@@ -289,7 +335,7 @@ export class InstructionsService {
       ],
     };
 
-    const [data, total, inProgress, completed] =
+    const [data, total, inProgress, completed, returned] =
       await this.database.$transaction([
         this.database.instruction.findMany({
           where,
@@ -301,14 +347,16 @@ export class InstructionsService {
         this.database.instruction.count({ where }),
         this.database.instruction.count({ where: inTab('en-cours') }),
         this.database.instruction.count({ where: inTab('terminees') }),
+        this.database.instruction.count({ where: inTab('renvoyees') }),
       ]);
 
+    const now = new Date();
     return {
-      data,
+      data: data.map((instruction) => withOverdue(instruction, now)),
       total,
       skip,
       take,
-      metrics: { inProgress, completed },
+      metrics: { inProgress, completed, returned },
     };
   }
 
@@ -320,20 +368,93 @@ export class InstructionsService {
     if (!instruction) {
       throw new NotFoundException(`Instruction ${id} not found`);
     }
-    return instruction;
+    return withOverdue(instruction);
   }
 
   // RG-INS-005: mutable as long as the dossier is not closed. The dossier
   // being closed already implies every one of its instructions is terminal,
   // so it's enough to just refuse edits on a terminal instruction here.
+  // H12: changing what is asked once work has started opens a new cycle;
+  // corrections within the request never do (they keep the cycle and the
+  // deadlines). A moved deadline gets its overdue alert again.
   async update(id: string, dto: UpdateInstructionDto) {
     const instruction = await this.ensureNotTerminal(id);
-    const { dueDate, ...data } = dto;
-    return this.database.instruction.update({
+    const { dueDate, agentDueDate, ...data } = dto;
+    const nextDue =
+      dueDate !== undefined ? new Date(dueDate) : instruction.dueDate;
+    const nextAgentDue =
+      agentDueDate !== undefined
+        ? new Date(agentDueDate)
+        : instruction.agentDueDate;
+    assertDeadlines(nextDue, nextAgentDue);
+
+    const requestChanged =
+      (dto.title !== undefined && dto.title !== instruction.title) ||
+      (dto.description !== undefined &&
+        dto.description !== instruction.description);
+    const newCycle =
+      requestChanged && WORK_STARTED.includes(instruction.status);
+
+    const updated = await this.database.instruction.update({
       where: { id: instruction.id },
-      data: { ...data, dueDate: dueDate ? new Date(dueDate) : undefined },
+      data: {
+        ...data,
+        dueDate: dueDate ? new Date(dueDate) : undefined,
+        agentDueDate: agentDueDate ? new Date(agentDueDate) : undefined,
+        overdueNotifiedAt: sameDate(nextDue, instruction.dueDate)
+          ? undefined
+          : null,
+        agentOverdueNotifiedAt: sameDate(nextAgentDue, instruction.agentDueDate)
+          ? undefined
+          : null,
+        cycle: newCycle ? { increment: 1 } : undefined,
+      },
       include: instructionInclude,
     });
+    return withOverdue(updated);
+  }
+
+  // The executants' deadline, set by the task's superviseur — or its
+  // creator when it has none. By designation.
+  async setAgentDueDate(id: string, agentDueDate: string, userId: string) {
+    const instruction = await this.ensureNotTerminal(id);
+    const superviseurs = instruction.assignees.filter(
+      (assignee) => assignee.role === UserInstructionRole.SUPERVISEUR,
+    );
+    const allowed = superviseurs.length
+      ? superviseurs.some((assignee) => assignee.user.id === userId)
+      : instruction.createdById === userId;
+    if (!allowed) {
+      throw new ForbiddenException(
+        superviseurs.length
+          ? "Only this task's superviseur sets its executants' deadline"
+          : "Only this task's creator sets its executants' deadline",
+      );
+    }
+    const date = new Date(agentDueDate);
+    assertDeadlines(instruction.dueDate, date);
+    const updated = await this.database.instruction.update({
+      where: { id },
+      data: {
+        agentDueDate: date,
+        agentOverdueNotifiedAt: sameDate(date, instruction.agentDueDate)
+          ? undefined
+          : null,
+      },
+      include: instructionInclude,
+    });
+    this.notifyInstruction(
+      updated,
+      updated.assignees
+        .filter((assignee) => assignee.role === UserInstructionRole.EXECUTANT)
+        .map((assignee) => assignee.user.id),
+      {
+        type: 'TASK_AGENT_DUE_DATE_SET',
+        message: `Date limite d'exécution de la tâche « ${updated.title} » : ${date.toLocaleDateString('fr-FR')}.`,
+      },
+      userId,
+    );
+    return withOverdue(updated);
   }
 
   // RG-INS-002: (re)assign directly to executant(s), or to a superviseur
@@ -370,43 +491,84 @@ export class InstructionsService {
     return updated;
   }
 
-  // RG-INS-003/004: the executant refuses and must motivate it — rejecting
-  // reassigns the task to a different executant in the same step (there's
-  // no separate "unassigned, waiting to be picked up" queue to fall back
-  // to); the new executant then accepts it in turn. Only the executant role
-  // is replaced — an existing superviseur, if any, isn't touched by one
-  // executant declining.
-  async refuse(id: string, dto: RefuseInstructionDto) {
+  // RG-INS-003/004: an executant doesn't subscribe, with a motif, and
+  // leaves the task — which they never modify. The other executants keep
+  // it; with none left it goes back to its creator (NON_SOUSCRITE), who
+  // reassigns or adjusts it. Only before subscribing: once subscribed, the
+  // task is an engagement, raised with its creator instead. By designation:
+  // only one of its executants may decline it.
+  async declineSubscription(
+    id: string,
+    dto: DeclineSubscriptionDto,
+    userId: string,
+  ) {
     const instruction = await this.requireStatus(id, [
       InstructionStatus.AFFECTEE,
-      InstructionStatus.EN_COURS,
     ]);
-    const updated = await this.database.instruction.update({
-      where: { id: instruction.id },
-      data: {
-        status: InstructionStatus.AFFECTEE,
-        refusalReason: dto.motif,
-        assignees: {
-          deleteMany: { role: UserInstructionRole.EXECUTANT },
-          create: {
-            userId: dto.newAssigneeId,
+    const executants = instruction.assignees.filter(
+      (assignee) => assignee.role === UserInstructionRole.EXECUTANT,
+    );
+    const decliner = executants.find((assignee) => assignee.user.id === userId);
+    if (!decliner) {
+      throw new ForbiddenException(
+        'Only an executant of this task can decline it',
+      );
+    }
+    const othersLeft = executants.length - 1;
+
+    await this.database.$transaction(async (tx) => {
+      await tx.userInstructions.delete({
+        where: {
+          userId_instructionId_role: {
+            userId,
+            instructionId: id,
             role: UserInstructionRole.EXECUTANT,
           },
         },
+      });
+      await tx.instructionSubscription.create({
+        data: {
+          instructionId: id,
+          userId,
+          decision: SubscriptionDecision.NON_SOUSCRITE,
+          motif: dto.motif,
+        },
+      });
+      if (othersLeft === 0) {
+        // Guarded on the status read above: someone subscribing meanwhile
+        // keeps the task where it is.
+        const { count } = await tx.instruction.updateMany({
+          where: { id, status: InstructionStatus.AFFECTEE },
+          data: { status: InstructionStatus.NON_SOUSCRITE },
+        });
+        if (count === 0) {
+          throw new ConflictException(
+            'This task changed meanwhile — refresh and try again',
+          );
+        }
+      }
+    });
+
+    const updated = await this.findOne(id);
+    this.notifyInstruction(
+      updated,
+      [updated.createdById],
+      {
+        type: 'TASK_NOT_SUBSCRIBED',
+        message:
+          `${decliner.user.name} ne souscrit pas à la tâche « ${updated.title} » : ${dto.motif}` +
+          (othersLeft === 0
+            ? ' Plus aucun exécutant : elle vous revient pour réaffectation.'
+            : ''),
       },
-      include: instructionInclude,
-    });
-    await this.ensureViewAccess([dto.newAssigneeId], {
-      dossierId: updated.dossierId,
-      courrierId: updated.courrierId,
-    });
-    this.notifyAssignment(updated, [dto.newAssigneeId]);
+      userId,
+    );
     return updated;
   }
 
-  // AFFECTEE -> EN_COURS: an executant of the task takes it on. By
+  // AFFECTEE -> EN_COURS: an executant of the task subscribes to it. By
   // designation — being one of its executants is what allows it.
-  async accept(id: string, userId: string) {
+  async subscribe(id: string, userId: string) {
     const instruction = await this.requireStatus(id, [
       InstructionStatus.AFFECTEE,
     ]);
@@ -417,41 +579,50 @@ export class InstructionsService {
     );
     if (!isExecutant) {
       throw new ForbiddenException(
-        'Only an executant of this task can accept it',
+        'Only an executant of this task can subscribe to it',
       );
     }
-    // Guarded on the status read above: two executants accepting at once
+    // Guarded on the status read above: two executants subscribing at once
     // move it only once.
-    const { count } = await this.database.instruction.updateMany({
-      where: { id, status: InstructionStatus.AFFECTEE },
-      data: { status: InstructionStatus.EN_COURS },
+    await this.database.$transaction(async (tx) => {
+      const { count } = await tx.instruction.updateMany({
+        where: { id, status: InstructionStatus.AFFECTEE },
+        data: { status: InstructionStatus.EN_COURS },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          'Someone subscribed to this task meanwhile — refresh and try again',
+        );
+      }
+      await tx.instructionSubscription.create({
+        data: {
+          instructionId: id,
+          userId,
+          decision: SubscriptionDecision.SOUSCRITE,
+        },
+      });
     });
-    if (count === 0) {
-      throw new ConflictException(
-        'This task was accepted meanwhile — refresh and try again',
-      );
-    }
-    const accepted = await this.findOne(id);
-    const acceptedBy = instruction.assignees.find(
+    const subscribed = await this.findOne(id);
+    const subscriber = instruction.assignees.find(
       (assignee) => assignee.user.id === userId,
     )?.user.name;
     this.notifyInstruction(
-      accepted,
+      subscribed,
       [
-        accepted.createdById,
-        ...accepted.assignees
+        subscribed.createdById,
+        ...subscribed.assignees
           .filter(
             (assignee) => assignee.role === UserInstructionRole.SUPERVISEUR,
           )
           .map((assignee) => assignee.user.id),
       ],
       {
-        type: 'TASK_ACCEPTED',
-        message: `${acceptedBy ?? 'Un exécutant'} a accepté la tâche « ${accepted.title} ».`,
+        type: 'TASK_SUBSCRIBED',
+        message: `${subscriber ?? 'Un exécutant'} a souscrit à la tâche « ${subscribed.title} ».`,
       },
       userId,
     );
-    return accepted;
+    return subscribed;
   }
 
   // 10.4.4.7: closing requires every livrable attached to the instruction to
@@ -542,13 +713,19 @@ export class InstructionsService {
     );
 
     const updated = await this.database.$transaction(async (tx) => {
-      await this.recordDecisions(tx, instruction.id, validatorId, {
-        decision: ValidationDecision.REJETE,
-        livrables: livrables.map((livrable) => ({
-          id: livrable.id,
-          motif: motifs.get(livrable.id)!,
-        })),
-      });
+      await this.recordDecisions(
+        tx,
+        instruction.id,
+        instruction.cycle,
+        validatorId,
+        {
+          decision: ValidationDecision.REJETE,
+          livrables: livrables.map((livrable) => ({
+            id: livrable.id,
+            motif: motifs.get(livrable.id)!,
+          })),
+        },
+      );
       return tx.instruction.update({
         where: { id: instruction.id },
         data: {
@@ -599,10 +776,16 @@ export class InstructionsService {
     ]);
 
     const settled = await this.database.$transaction(async (tx) => {
-      await this.recordDecisions(tx, instruction.id, validatorId, {
-        decision: ValidationDecision.REJETE,
-        livrables: [{ id: rejected.id, motif }],
-      });
+      await this.recordDecisions(
+        tx,
+        instruction.id,
+        instruction.cycle,
+        validatorId,
+        {
+          decision: ValidationDecision.REJETE,
+          livrables: [{ id: rejected.id, motif }],
+        },
+      );
       return this.settleValidationRound(tx, instruction.id);
     });
 
@@ -640,10 +823,16 @@ export class InstructionsService {
     }
 
     const settled = await this.database.$transaction(async (tx) => {
-      await this.recordDecisions(tx, instruction.id, validatorId, {
-        decision: ValidationDecision.VALIDE,
-        livrables: livrables.map((livrable) => ({ id: livrable.id })),
-      });
+      await this.recordDecisions(
+        tx,
+        instruction.id,
+        instruction.cycle,
+        validatorId,
+        {
+          decision: ValidationDecision.VALIDE,
+          livrables: livrables.map((livrable) => ({ id: livrable.id })),
+        },
+      );
       return this.settleValidationRound(tx, instruction.id);
     });
     if (settled === InstructionStatus.TERMINEE) {
@@ -690,6 +879,7 @@ export class InstructionsService {
   private async recordDecisions(
     tx: Prisma.TransactionClient,
     instructionId: string,
+    cycle: number,
     validatorId: string,
     round: {
       decision:
@@ -719,6 +909,7 @@ export class InstructionsService {
         validatorId,
         decision: round.decision,
         motif: livrable.motif,
+        cycle,
       })),
     });
   }

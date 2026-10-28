@@ -50,6 +50,9 @@ export class RealtimeGateway implements OnGatewayConnection {
       const payload = await this.jwt.verifyAsync<JwtPayload>(token, {
         secret: process.env.JWT_SECRET,
       });
+      if (payload.typ !== 'access') {
+        throw new Error('not an access token');
+      }
       const user = await this.database.user.findUnique({
         where: { id: payload.sub },
         select: { status: true },

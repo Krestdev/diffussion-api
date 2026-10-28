@@ -33,13 +33,22 @@ describe('DeliverableService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         delete: jest.fn(),
       },
       instruction: {
         updateMany: jest.fn(),
         findUnique: jest.fn().mockResolvedValue({ dossierId: 'd-1' }),
+        findUniqueOrThrow: jest
+          .fn()
+          .mockResolvedValue({ status: InstructionStatus.EN_COURS }),
       },
-      $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
+      // Array form (batched writes) or callback form (interactive).
+      $transaction: jest.fn((arg: unknown) =>
+        typeof arg === 'function'
+          ? (arg as (tx: unknown) => unknown)(database)
+          : Promise.all(arg as unknown[]),
+      ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -96,18 +105,27 @@ describe('DeliverableService', () => {
   });
 
   describe('newVersion', () => {
+    // A rejected v1, still the current version.
+    const rejected = {
+      id: 'l-1',
+      instructionId: 'i-1',
+      title: 'Rapport',
+      description: null,
+      version: 1,
+      isLatest: true,
+      status: LivrableStatus.REJETE,
+    };
+
     it('creates a new livrable pointing at the previous one', async () => {
-      database.livrable.findUnique.mockResolvedValue({
-        id: 'l-1',
-        instructionId: 'i-1',
-        title: 'Rapport',
-        description: null,
-        version: 1,
-      });
+      database.livrable.findUnique.mockResolvedValue(rejected);
       database.livrable.create.mockResolvedValue({ id: 'l-2', version: 2 });
 
       await service.newVersion('l-1', {}, 'u-1');
 
+      expect(database.livrable.updateMany).toHaveBeenCalledWith({
+        where: { id: 'l-1', isLatest: true },
+        data: { isLatest: false },
+      });
       expect(database.livrable.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -116,6 +134,18 @@ describe('DeliverableService', () => {
           }),
         }),
       );
+    });
+
+    it('only answers a rejection', async () => {
+      database.livrable.findUnique.mockResolvedValue({
+        ...rejected,
+        status: LivrableStatus.SOUMIS,
+      });
+
+      await expect(service.newVersion('l-1', {}, 'u-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(database.livrable.create).not.toHaveBeenCalled();
     });
   });
 
@@ -140,6 +170,22 @@ describe('DeliverableService', () => {
           data: { status: 'EN_ATTENTE_VALIDATION' },
         }),
       );
+    });
+
+    it('refuses while nobody has subscribed to the task', async () => {
+      database.livrable.findUnique.mockResolvedValue({
+        id: 'l-1',
+        instructionId: 'i-1',
+        status: LivrableStatus.DEPOSE,
+      });
+      database.instruction.findUniqueOrThrow.mockResolvedValue({
+        status: InstructionStatus.AFFECTEE,
+      });
+
+      await expect(service.submit('l-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(database.livrable.update).not.toHaveBeenCalled();
     });
   });
 });

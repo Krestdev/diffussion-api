@@ -1,16 +1,16 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsUUID, MinLength } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsUUID } from 'class-validator';
+import { DeclineSubscriptionDto } from './decline-subscription.dto';
 
-export class RefuseInstructionDto {
-  // RG-INS-004: any refusal must be motivated.
-  @ApiProperty({ example: 'Charge de travail déjà pleine cette semaine' })
-  @IsString()
-  @MinLength(3)
-  motif: string;
-
-  // Rejecting a task reassigns it in the same step — there's no separate
-  // "unassigned, waiting for someone to pick it up" queue to fall back to.
-  @ApiProperty({ description: 'Executant the task is reassigned to' })
+// Body of the former PATCH :id/refuse, kept until the frontend moves to
+// PATCH :id/ne-pas-souscrire. The executant no longer picks who takes over:
+// `newAssigneeId` is still accepted, and ignored.
+export class RefuseInstructionDto extends DeclineSubscriptionDto {
+  @ApiPropertyOptional({
+    deprecated: true,
+    description: 'Ignored: the task goes back to its creator, who reassigns it',
+  })
+  @IsOptional()
   @IsUUID()
-  newAssigneeId: string;
+  newAssigneeId?: string;
 }

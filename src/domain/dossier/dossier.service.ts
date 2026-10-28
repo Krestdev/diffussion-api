@@ -407,7 +407,15 @@ export class DossierService {
     const [data, total] = await this.database.$transaction([
       this.database.instruction.findMany({
         where,
-        include: { assignees: { include: { user: true } } },
+        // Never the whole user: it carries the password hash and the
+        // refresh token.
+        include: {
+          assignees: {
+            include: {
+              user: { select: { id: true, name: true, email: true } },
+            },
+          },
+        },
         orderBy: { createdAt: 'desc' },
         skip,
         take,

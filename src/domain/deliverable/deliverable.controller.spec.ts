@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { InstructionsService } from '../../instructions/instructions.service';
 import { DeliverableController } from './deliverable.controller';
 import { DeliverableService } from './deliverable.service';
 
@@ -21,7 +22,14 @@ describe('DeliverableController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [DeliverableController],
-      providers: [{ provide: DeliverableService, useValue: service }],
+      providers: [
+        { provide: DeliverableService, useValue: service },
+        // Rejecting a livrable is part of its instruction's validation round.
+        {
+          provide: InstructionsService,
+          useValue: { rejectLivrable: jest.fn() },
+        },
+      ],
     })
       .overrideGuard(PermissionGuard)
       .useValue({ canActivate: () => true })

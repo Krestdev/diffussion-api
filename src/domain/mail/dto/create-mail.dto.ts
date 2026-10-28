@@ -2,14 +2,15 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type, plainToInstance } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
   IsOptional,
   IsString,
   IsUUID,
-  Min,
   MaxLength,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { CourrierDirection } from 'generated/prisma/enums';
@@ -89,11 +90,102 @@ export class CreateMailDto {
   @IsDateString()
   receivedAt?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'Entrant only: transmit it to its dossier\'s responsible in the same request ("Voulez-vous transmettre ?"). Needs the dossier.',
+    example: true,
+  })
+  @IsOptional()
+  // Multipart forms send booleans as "true" / "false".
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' ? true : value === 'false' || value === '' ? false : value,
+  )
+  @IsBoolean()
+  transmit?: boolean;
+
   @ApiPropertyOptional()
   @IsOptional()
   @EmptyToUndefined()
   @IsString()
   scanUrl?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Effet type (GET /effet-types): a global type or one of its site. Defaults to "Courrier".',
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsUUID()
+  typeId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The bordereau de transmission this effet came with (an effet whose type can list effets).',
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsUUID()
+  parentId?: string;
+
+  // Physical effets only (a type with isPhysical).
+  @ApiPropertyOptional({ example: 3, description: 'Physical effets only' })
+  @IsOptional()
+  @EmptyToUndefined()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  quantity?: number;
+
+  @ApiPropertyOptional({
+    example: '3 carottes de béton, Ø 10 cm',
+    description: 'Physical effets only',
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsString()
+  physicalDescription?: string;
+
+  @ApiPropertyOptional({
+    example: 'Emballage endommagé',
+    description: 'Physical effets only: condition on receipt',
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsString()
+  @MaxLength(255)
+  conditionOnReceipt?: string;
+
+  @ApiPropertyOptional({
+    example: 'Caisse scellée',
+    description: 'Physical effets only',
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsString()
+  @MaxLength(255)
+  packaging?: string;
+
+  @ApiPropertyOptional({
+    example: 'Armoire B2, salle des archives',
+    description: 'Physical effets only: where it is kept',
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsString()
+  @MaxLength(255)
+  storageLocation?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Physical effets only: it has to be returned (POST /courriers/:id/return)',
+  })
+  @IsOptional()
+  // Multipart forms send booleans as "true" / "false".
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' ? true : value === 'false' || value === '' ? false : value,
+  )
+  @IsBoolean()
+  returnExpected?: boolean;
 
   @ApiPropertyOptional({
     description:

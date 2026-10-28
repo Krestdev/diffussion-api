@@ -150,6 +150,29 @@ async function grantAdminFullAccess(userId: string) {
   );
 }
 
+// The starting list of global effet types (see the effet_types migration).
+// Looked up rather than upserted: a nullable column can't be part of a
+// Prisma unique-key lookup.
+const EFFET_TYPES = [
+  { name: 'Courrier', isPhysical: false, canListEffets: false },
+  { name: 'Bordereau de transmission', isPhysical: false, canListEffets: true },
+  { name: 'Matière / spécimen', isPhysical: true, canListEffets: false },
+  { name: 'Document', isPhysical: false, canListEffets: false },
+  { name: 'Support numérique', isPhysical: true, canListEffets: false },
+  { name: 'Dossier complet', isPhysical: true, canListEffets: false },
+];
+
+async function seedEffetTypes() {
+  for (const type of EFFET_TYPES) {
+    const existing = await prisma.effetType.findFirst({
+      where: { name: type.name, siteId: null },
+      select: { id: true },
+    });
+    if (!existing) await prisma.effetType.create({ data: type });
+  }
+  console.log(`✓ ${EFFET_TYPES.length} effet types ensured`);
+}
+
 async function seedReferentials() {
   const correspondentTypes = [
     'Administration publique',
@@ -239,6 +262,7 @@ async function main() {
   await seedSite();
   const admin = await seedAdminUser(role.id);
   await seedReferentials();
+  await seedEffetTypes();
   await seedAnalysisCriteria();
   await grantAdminFullAccess(admin.id);
 

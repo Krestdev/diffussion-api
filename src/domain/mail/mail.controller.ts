@@ -146,8 +146,12 @@ export class MailController {
   }
 
   @Patch(':id')
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateMailDto) {
-    return this.mailService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateMailDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.update(id, dto, user.sub);
   }
 
   @Delete(':id')
@@ -158,8 +162,11 @@ export class MailController {
 
   @Post(':id/transmit')
   @RequirePermission(PermissionCode.CourrierRead)
-  transmit(@Param('id', ParseUUIDPipe) id: string) {
-    return this.mailService.transmit(id);
+  transmit(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.transmit(id, user.sub);
   }
 
   // Sends the courrier to its validator (the dossier's responsible, or the
@@ -219,6 +226,14 @@ export class MailController {
   @RequirePermission(PermissionCode.CourrierRead)
   unarchive(@Param('id', ParseUUIDPipe) id: string) {
     return this.mailService.unarchive(id);
+  }
+
+  // A physical effet expected back is handed back — physical custody is the
+  // reception's job, hence the registration permission.
+  @Post(':id/return')
+  @RequirePermission(PermissionCode.CourrierRegisterEntrant)
+  markReturned(@Param('id', ParseUUIDPipe) id: string) {
+    return this.mailService.markReturned(id);
   }
 
   @Post(':id/discharge')

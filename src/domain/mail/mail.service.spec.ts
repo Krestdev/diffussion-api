@@ -15,6 +15,50 @@ import {
 } from '../../../generated/prisma/client';
 import { StorageService } from '../../storage/storage.service';
 
+// Global types, plus a type of site s-2.
+const EFFET_TYPES: Record<string, Record<string, unknown>> = {
+  't-courrier': {
+    id: 't-courrier',
+    name: 'Courrier',
+    isPhysical: false,
+    canListEffets: false,
+    active: true,
+    siteId: null,
+  },
+  't-bordereau': {
+    id: 't-bordereau',
+    name: 'Bordereau de transmission',
+    isPhysical: false,
+    canListEffets: true,
+    active: true,
+    siteId: null,
+  },
+  't-specimen': {
+    id: 't-specimen',
+    name: 'Matière / spécimen',
+    isPhysical: true,
+    canListEffets: false,
+    active: true,
+    siteId: null,
+  },
+  't-old': {
+    id: 't-old',
+    name: 'Ancien type',
+    isPhysical: false,
+    canListEffets: false,
+    active: false,
+    siteId: null,
+  },
+  't-site2': {
+    id: 't-site2',
+    name: 'Échantillon Akwa',
+    isPhysical: true,
+    canListEffets: false,
+    active: true,
+    siteId: 's-2',
+  },
+};
+
 describe('MailService', () => {
   let service: MailService;
   let database: {
@@ -24,6 +68,7 @@ describe('MailService', () => {
     site: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
     validation: Record<string, jest.Mock>;
+    effetType: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
   let notifications: { create: jest.Mock };
@@ -47,6 +92,15 @@ describe('MailService', () => {
       site: { findUnique: jest.fn() },
       user: { findUnique: jest.fn() },
       validation: { create: jest.fn() },
+      // The global "Courrier" type unless a test says otherwise.
+      effetType: {
+        findFirst: jest.fn().mockResolvedValue({ id: 't-courrier' }),
+        findUnique: jest
+          .fn()
+          .mockImplementation(({ where }: { where: { id: string } }) =>
+            Promise.resolve(EFFET_TYPES[where.id] ?? null),
+          ),
+      },
       $transaction: jest.fn((arg: unknown) =>
         typeof arg === 'function'
           ? (arg as (tx: unknown) => unknown)(database)
@@ -286,33 +340,322 @@ describe('MailService', () => {
   });
 
   describe('transmit', () => {
-    it('refuses an entrant not yet attached to its dossier', async () => {
-      database.courrier.findUnique.mockResolvedValue({
-        id: 'c-1',
-        status: CourrierStatus.RECU,
-        dossierId: null,
-      });
+    // An entrant registered without its dossier yet; d-1's responsible is
+    // u-chef.
+    const entrant = (overrides: Record<string, unknown> = {}) => ({
+      id: 'c-1',
+      subject: 'Demande du maître d’ouvrage',
+      direction: CourrierDirection.ENTRANT,
+      status: CourrierStatus.RECU,
+      dossierId: 'd-1',
+      createdById: 'u-agent',
+      ...overrides,
+    });
 
-      await expect(service.transmit('c-1')).rejects.toBeInstanceOf(
+    beforeEach(() => {
+      // One fixture for both lookups: the open-dossier check and the
+      // responsible to notify.
+      database.dossier.findUnique.mockResolvedValue({
+        number: 'D-1',
+        status: 'OPEN',
+        siteId: 's-1',
+        responsibleId: 'u-chef',
+        site: { responsibleId: 'u-site' },
+      });
+      database.site.findUnique.mockResolvedValue({
+        name: 'Cristal',
+        status: 'ACTIVE',
+      });
+    });
+
+    it('refuses an entrant not yet attached to its dossier', async () => {
+      database.courrier.findUnique.mockResolvedValue(
+        entrant({ dossierId: null }),
+      );
+
+      await expect(service.transmit('c-1', 'u-1')).rejects.toBeInstanceOf(
         BadRequestException,
       );
       expect(database.courrier.update).not.toHaveBeenCalled();
     });
 
-    it('transmits it once its dossier is known', async () => {
-      database.courrier.findUnique.mockResolvedValue({
-        id: 'c-1',
-        status: CourrierStatus.RECU,
-        dossierId: 'd-1',
-      });
+    it("transmits it and tells the dossier's responsible", async () => {
+      database.courrier.findUnique.mockResolvedValue(entrant());
 
-      await service.transmit('c-1');
+      await service.transmit('c-1', 'u-agent');
 
       expect(database.courrier.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: { status: CourrierStatus.TRANSMIS },
         }),
       );
+      expect(notifications.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recipientIds: ['u-chef'],
+          type: 'COURRIER_TRANSMITTED',
+          courrierId: 'c-1',
+        }),
+      );
+    });
+
+    it("tells the site's responsible when the dossier has none", async () => {
+      database.courrier.findUnique.mockResolvedValue(entrant());
+      database.dossier.findUnique.mockResolvedValue({
+        responsibleId: null,
+        site: { responsibleId: 'u-site' },
+      });
+
+      await service.transmit('c-1', 'u-agent');
+
+      expect(notifications.create).toHaveBeenCalledWith(
+        expect.objectContaining({ recipientIds: ['u-site'] }),
+      );
+    });
+
+    it('refuses a sortant', async () => {
+      database.courrier.findUnique.mockResolvedValue(
+        entrant({ direction: CourrierDirection.SORTANT }),
+      );
+
+      await expect(service.transmit('c-1', 'u-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
+    describe('in the same request ("Voulez-vous transmettre ?")', () => {
+      beforeEach(() => {
+        database.courrier.create.mockImplementation(({ data }) =>
+          Promise.resolve({ id: 'c-1', ...data }),
+        );
+      });
+
+      it('registers and transmits an entrant with its dossier', async () => {
+        database.courrier.findUnique.mockResolvedValue(entrant());
+
+        await service.create(
+          {
+            direction: CourrierDirection.ENTRANT,
+            subject: 'Demande du maître d’ouvrage',
+            dossierId: 'd-1',
+            transmit: true,
+          },
+          'u-agent',
+        );
+
+        // `transmit` is a request flag, not a column.
+        expect(
+          database.courrier.create.mock.calls[0][0].data,
+        ).not.toHaveProperty('transmit');
+        expect(database.courrier.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: { status: CourrierStatus.TRANSMIS },
+          }),
+        );
+        expect(notifications.create).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'COURRIER_TRANSMITTED' }),
+        );
+      });
+
+      it('refuses before registering anything when there is no dossier', async () => {
+        await expect(
+          service.create(
+            {
+              direction: CourrierDirection.ENTRANT,
+              subject: 'Demande',
+              transmit: true,
+            },
+            'u-agent',
+          ),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(database.courrier.create).not.toHaveBeenCalled();
+      });
+
+      it('just registers when transmit is false', async () => {
+        database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+
+        await service.create(
+          {
+            direction: CourrierDirection.ENTRANT,
+            subject: 'Demande',
+            transmit: false,
+          },
+          'u-agent',
+        );
+
+        expect(database.courrier.update).not.toHaveBeenCalled();
+        expect(notifications.create).not.toHaveBeenCalled();
+      });
+
+      it('attaches the dossier and transmits in one update', async () => {
+        // Read before the update, then once attached.
+        database.courrier.findUnique
+          .mockResolvedValueOnce(entrant({ dossierId: null }))
+          .mockResolvedValue(entrant());
+        database.courrier.update.mockResolvedValue(entrant());
+
+        await service.update(
+          'c-1',
+          { dossierId: 'd-1', transmit: true },
+          'u-dispatch',
+        );
+
+        const calls = database.courrier.update.mock.calls.map(
+          ([arg]) => (arg as { data: Record<string, unknown> }).data,
+        );
+        expect(calls[0]).toMatchObject({ dossierId: 'd-1' });
+        expect(calls[0]).not.toHaveProperty('transmit');
+        expect(calls).toContainEqual({ status: CourrierStatus.TRANSMIS });
+      });
+
+      it('refuses before writing when it was already transmitted', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          entrant({ status: CourrierStatus.TRANSMIS }),
+        );
+
+        await expect(
+          service.update('c-1', { transmit: true }, 'u-dispatch'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(database.courrier.update).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe('effet types', () => {
+    // An entrant registered on site s-1, without its dossier.
+    const ENTRANT = {
+      direction: CourrierDirection.ENTRANT,
+      subject: 'Échantillons du chantier',
+    };
+    const created = () =>
+      database.courrier.create.mock.calls[0][0].data as Record<string, unknown>;
+
+    beforeEach(() => {
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      database.courrier.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'c-new', ...data }),
+      );
+    });
+
+    it('gives the "Courrier" type when none is chosen', async () => {
+      await service.create(ENTRANT, 'u-agent');
+
+      expect(created().typeId).toBe('t-courrier');
+    });
+
+    it('records the physical fields of a physical effet', async () => {
+      await service.create(
+        {
+          ...ENTRANT,
+          typeId: 't-specimen',
+          quantity: 3,
+          physicalDescription: '3 carottes de béton',
+          storageLocation: 'Armoire B2',
+          returnExpected: true,
+        },
+        'u-agent',
+      );
+
+      expect(created()).toMatchObject({
+        typeId: 't-specimen',
+        quantity: 3,
+        storageLocation: 'Armoire B2',
+        returnExpected: true,
+      });
+    });
+
+    it('refuses physical fields on an effet that is not physical', async () => {
+      await expect(
+        service.create({ ...ENTRANT, quantity: 3 }, 'u-agent'),
+      ).rejects.toThrow(/quantity can only be recorded on a physical effet/);
+      expect(database.courrier.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses an inactive type for a new effet', async () => {
+      await expect(
+        service.create({ ...ENTRANT, typeId: 't-old' }, 'u-agent'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it("refuses another site's type", async () => {
+      await expect(
+        service.create({ ...ENTRANT, typeId: 't-site2' }, 'u-agent'),
+      ).rejects.toThrow(/belongs to another site/);
+    });
+
+    describe('bordereau', () => {
+      const bordereau = (overrides: Record<string, unknown> = {}) => ({
+        direction: CourrierDirection.ENTRANT,
+        parentId: null,
+        type: { canListEffets: true },
+        ...overrides,
+      });
+
+      it('lists an effet that came with it', async () => {
+        database.courrier.findUnique.mockResolvedValue(bordereau());
+
+        await service.create({ ...ENTRANT, parentId: 'c-bord' }, 'u-agent');
+
+        expect(created().parentId).toBe('c-bord');
+      });
+
+      it.each([
+        [
+          'an effet that is not a bordereau',
+          { type: { canListEffets: false } },
+        ],
+        [
+          'an effet going the other way',
+          { direction: CourrierDirection.SORTANT },
+        ],
+      ])('refuses %s as parent', async (_label, overrides) => {
+        database.courrier.findUnique.mockResolvedValue(bordereau(overrides));
+
+        await expect(
+          service.create({ ...ENTRANT, parentId: 'c-bord' }, 'u-agent'),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(database.courrier.create).not.toHaveBeenCalled();
+      });
+
+      it('refuses a bordereau inside a bordereau', async () => {
+        database.courrier.findUnique.mockResolvedValue(bordereau());
+
+        await expect(
+          service.create(
+            { ...ENTRANT, typeId: 't-bordereau', parentId: 'c-bord' },
+            'u-agent',
+          ),
+        ).rejects.toThrow(/cannot be listed in another bordereau/);
+      });
+    });
+
+    describe('return', () => {
+      it('records the return of an effet expected back', async () => {
+        database.courrier.findUnique.mockResolvedValue({
+          id: 'c-1',
+          returnExpected: true,
+          returnedAt: null,
+        });
+
+        await service.markReturned('c-1');
+
+        expect(database.courrier.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: { returnedAt: expect.any(Date) as unknown },
+          }),
+        );
+      });
+
+      it.each([
+        ['not expected back', { returnExpected: false, returnedAt: null }],
+        ['already returned', { returnExpected: true, returnedAt: new Date() }],
+      ])('refuses an effet %s', async (_label, state) => {
+        database.courrier.findUnique.mockResolvedValue({ id: 'c-1', ...state });
+
+        await expect(service.markReturned('c-1')).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+        expect(database.courrier.update).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -363,7 +706,7 @@ describe('MailService', () => {
         dossierId: 'd-1',
       });
 
-      await service.update('c-1', { dossierId: 'd-1' });
+      await service.update('c-1', { dossierId: 'd-1' }, 'u-1');
 
       expect(database.courrier.update.mock.calls[0][0].data.dossierId).toBe(
         'd-1',
@@ -383,7 +726,7 @@ describe('MailService', () => {
       });
 
       await expect(
-        service.update('c-1', { dossierId: 'd-1' }),
+        service.update('c-1', { dossierId: 'd-1' }, 'u-1'),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(database.courrier.update).not.toHaveBeenCalled();
     });
@@ -392,7 +735,7 @@ describe('MailService', () => {
       database.courrier.findUnique.mockResolvedValue(draft);
       database.courrier.update.mockResolvedValue(draft);
 
-      await service.update('c-1', { subject: 'Nouveau sujet' });
+      await service.update('c-1', { subject: 'Nouveau sujet' }, 'u-1');
 
       expect(database.dossier.findUnique).not.toHaveBeenCalled();
       expect(database.dossier.updateMany).not.toHaveBeenCalled();

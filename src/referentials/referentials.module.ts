@@ -6,6 +6,7 @@ import { SiteService } from './site/site.service';
 import { CategoryModule } from './category/category.module';
 import { CourrierNatureModule } from './courrier-nature/courrier-nature.module';
 import { CanalModule } from './canal/canal.module';
+import { EffetTypeModule } from './effet-type/effet-type.module';
 import { CorrespondentTypeModule } from './correspondent-type/correspondent-type.module';
 import { ProjectModule } from './project/project.module';
 
@@ -17,6 +18,7 @@ import { ProjectModule } from './project/project.module';
     CategoryModule,
     CourrierNatureModule,
     CanalModule,
+    EffetTypeModule,
     CorrespondentTypeModule,
     ProjectModule,
   ],

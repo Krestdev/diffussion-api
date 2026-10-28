@@ -24,6 +24,11 @@ export class FindMailsQueryDto {
   @IsUUID()
   correspondentId?: string;
 
+  @ApiPropertyOptional({ description: 'Effet type' })
+  @IsOptional()
+  @IsUUID()
+  typeId?: string;
+
   // Person in charge — used by the "Affectations" queue (courriers
   // assigned to me), distinct from filtering by who created the courrier.
   @ApiPropertyOptional()

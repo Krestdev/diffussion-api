@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { InstructionsService } from './instructions.service';
 import { LivrableHistoryInterceptor } from './livrable-history.interceptor';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../auth/rbac/permission.guard';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
@@ -28,7 +28,9 @@ import { AssignInstructionDto } from './dto/assign-instruction.dto';
 import { CreateInstructionsDto } from './dto/create-instruction.dto';
 import { FindInstructionsQueryDto } from './dto/find-instructions.query.dto';
 import { FindMyTasksQueryDto } from './dto/find-my-tasks.query.dto';
+import { DeclineSubscriptionDto } from './dto/decline-subscription.dto';
 import { RefuseInstructionDto } from './dto/refuse-instruction.dto';
+import { SetAgentDueDateDto } from './dto/set-agent-due-date.dto';
 import { UpdateInstructionDto } from './dto/update-instruction.dto';
 import { ApproveSelectedLivrablesDto } from './dto/approve-selected-livrables.dto';
 import { RequestCorrectionsDto } from './dto/request-corrections.dto';
@@ -85,6 +87,20 @@ export class InstructionsController {
     return this.instructionsService.update(id, dto);
   }
 
+  // By designation: the task's superviseur, or its creator when it has none.
+  @Patch(':id/delai-execution')
+  setAgentDueDate(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetAgentDueDateDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.instructionsService.setAgentDueDate(
+      id,
+      dto.agentDueDate,
+      user.sub,
+    );
+  }
+
   @Post(':id/assign')
   @RequirePermission(PermissionCode.InstructionAssign)
   assign(
@@ -95,22 +111,50 @@ export class InstructionsController {
   }
 
   // By designation, not by role: only one of the task's executants may
-  // accept it — checked in InstructionsService.
+  // subscribe to it — checked in InstructionsService.
+  @Patch(':id/souscrire')
+  subscribe(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.instructionsService.subscribe(id, user.sub);
+  }
+
+  // By designation too: only one of the task's executants may decline it.
+  @Patch(':id/ne-pas-souscrire')
+  declineSubscription(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DeclineSubscriptionDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.instructionsService.declineSubscription(id, dto, user.sub);
+  }
+
+  // Former names of the two routes above, kept until the frontend has moved
+  // to "souscrire / ne pas souscrire". Remove them then.
   @Patch(':id/accept')
+  @ApiOperation({
+    deprecated: true,
+    summary: 'Ancien nom de PATCH /instructions/:id/souscrire',
+  })
   accept(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
-    return this.instructionsService.accept(id, user.sub);
+    return this.subscribe(id, user);
   }
 
   @Patch(':id/refuse')
-  @RequirePermission(PermissionCode.InstructionRefuse)
+  @ApiOperation({
+    deprecated: true,
+    summary: 'Ancien nom de PATCH /instructions/:id/ne-pas-souscrire',
+  })
   refuse(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RefuseInstructionDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
-    return this.instructionsService.refuse(id, dto);
+    return this.declineSubscription(id, { motif: dto.motif }, user);
   }
 
   @Patch(':id/approve-livrables')

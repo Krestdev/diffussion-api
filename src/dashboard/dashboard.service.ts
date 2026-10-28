@@ -8,6 +8,7 @@ import {
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RbacService } from '../auth/rbac/rbac.service';
 import { awaitingValidationBy } from '../common/utils/courrier-validation';
+import { overdueWhere } from '../instructions/instruction-overdue';
 import { visibleDossierWhere } from '../common/utils/dossier-visibility';
 import { DatabaseService } from '../database/database.service';
 import {
@@ -63,15 +64,18 @@ export class DashboardService {
     const mine: Prisma.InstructionWhereInput = {
       assignees: { some: { userId } },
     };
-    const [todo, completed] = await this.database.$transaction([
+    const [todo, completed, overdue] = await this.database.$transaction([
       this.database.instruction.count({
         where: { ...mine, status: { in: TODO_STATUSES } },
       }),
       this.database.instruction.count({
         where: { ...mine, status: InstructionStatus.TERMINEE },
       }),
+      this.database.instruction.count({
+        where: { ...mine, ...overdueWhere(new Date()) },
+      }),
     ]);
-    return { todo, completed };
+    return { todo, completed, overdue };
   }
 
   private async getApprovals(userId: string) {

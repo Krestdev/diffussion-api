@@ -251,16 +251,22 @@ export class AuthService {
     const payload: JwtPayload = { sub: userUuid, email };
 
     const [accessToken, refreshToken] = await Promise.all([
-      this.jwtService.signAsync(payload, {
-        secret: this.requireEnv('JWT_SECRET'),
-        expiresIn: (process.env.JWT_EXPIRES_IN ??
-          '15m') as JwtSignOptions['expiresIn'],
-      }),
-      this.jwtService.signAsync(payload, {
-        secret: this.requireEnv('JWT_REFRESH_SECRET'),
-        expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN ??
-          '7d') as JwtSignOptions['expiresIn'],
-      }),
+      this.jwtService.signAsync(
+        { ...payload, typ: 'access' },
+        {
+          secret: this.requireEnv('JWT_SECRET'),
+          expiresIn: (process.env.JWT_EXPIRES_IN ??
+            '15m') as JwtSignOptions['expiresIn'],
+        },
+      ),
+      this.jwtService.signAsync(
+        { ...payload, typ: 'refresh' },
+        {
+          secret: this.requireEnv('JWT_REFRESH_SECRET'),
+          expiresIn: (process.env.JWT_REFRESH_EXPIRES_IN ??
+            '7d') as JwtSignOptions['expiresIn'],
+        },
+      ),
     ]);
 
     await this.database.user.update({

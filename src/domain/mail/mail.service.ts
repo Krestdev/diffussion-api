@@ -52,6 +52,21 @@ const mailInclude = {
     select: { id: true, number: true, subject: true, direction: true },
   },
   documents: { orderBy: { createdAt: 'asc' } },
+  type: {
+    select: { id: true, name: true, isPhysical: true, canListEffets: true },
+  },
+  // A bordereau and the effets it lists.
+  parent: { select: { id: true, number: true, subject: true } },
+  children: {
+    select: {
+      id: true,
+      number: true,
+      subject: true,
+      status: true,
+      type: { select: { id: true, name: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+  },
   validations: {
     include: { validator: { select: { id: true, name: true } } },
     orderBy: { decidedAt: 'desc' },
@@ -125,6 +140,9 @@ export class MailService {
     createdById: string,
     files?: Express.Multer.File[],
   ) {
+    if (dto.transmit) {
+      assertTransmittable(dto.direction, dto.dossierId ?? null);
+    }
     if (dto.dossierId) {
       await assertDossierOpenForActivity(this.database, dto.dossierId);
     } else {
@@ -136,11 +154,16 @@ export class MailService {
     if (dto.respondsToId) {
       await this.assertRespondsToValid(dto.respondsToId);
     }
-    const { receivedAt, documents: documentMetas, ...data } = dto;
+    const typeId = await this.checkEffetFields(dto, {
+      direction: dto.direction,
+      siteId: await this.siteOfEffet(dto.dossierId ?? null, createdById),
+    });
+    const { receivedAt, documents: documentMetas, transmit, ...data } = dto;
     const courrier = await createWithUniqueReference('M', (number) =>
       this.database.courrier.create({
         data: {
           ...data,
+          typeId,
           number,
           receivedAt: receivedAt ? new Date(receivedAt) : undefined,
           status:
@@ -180,6 +203,10 @@ export class MailService {
       await markDossierInProgress(this.database, dto.dossierId);
     }
 
+    if (transmit) {
+      return this.transmit(courrier.id, createdById);
+    }
+
     if (files && files.length > 0) {
       return this.findOne(courrier.id);
     }
@@ -191,10 +218,12 @@ export class MailService {
   // number, not yet attached to a dossier. Everything else, dossier
   // included, is completed through update() before submitForVerification().
   async createOutgoingDraft(dto: CreateOutgoingMailDto, createdById: string) {
+    const typeId = await this.defaultEffetTypeId();
     return createWithUniqueReference('M', (number) =>
       this.database.courrier.create({
         data: {
           subject: dto.subject,
+          typeId,
           number,
           direction: CourrierDirection.SORTANT,
           status: CourrierStatus.BROUILLON,
@@ -212,6 +241,7 @@ export class MailService {
       status: query.status,
       correspondentId: query.correspondentId,
       ownerId: query.ownerId,
+      typeId: query.typeId,
     };
 
     const [data, total] = await this.database.$transaction([
@@ -250,6 +280,7 @@ export class MailService {
       dossierId: query.dossierId,
       correspondentId: query.correspondentId,
       natureId: query.natureId,
+      typeId: query.typeId,
       ownerId: query.ownerId,
       AND: [
         searchWhere(query.search),
@@ -310,6 +341,7 @@ export class MailService {
       dossierId: query.dossierId,
       correspondentId: query.correspondentId,
       natureId: query.natureId,
+      typeId: query.typeId,
       ownerId: query.ownerId,
       createdAt: created,
       AND: [
@@ -375,8 +407,17 @@ export class MailService {
     }
   }
 
-  async update(id: string, dto: UpdateMailDto) {
+  async update(id: string, dto: UpdateMailDto, actingUserId: string) {
     const courrier = await this.ensureEditable(id);
+    // Checked before anything is written: a refused transmission must not
+    // leave the courrier half-updated.
+    if (dto.transmit) {
+      assertTransmittable(
+        courrier.direction,
+        dto.dossierId ?? courrier.dossierId,
+        courrier.status,
+      );
+    }
     const dossierChanged =
       dto.dossierId !== undefined && dto.dossierId !== courrier.dossierId;
     if (dossierChanged) {
@@ -391,17 +432,32 @@ export class MailService {
     if (dto.respondsToId && dto.respondsToId !== courrier.respondsToId) {
       await this.assertRespondsToValid(dto.respondsToId, id);
     }
-    const { receivedAt, ...data } = dto;
+    const typeId = await this.checkEffetFields(
+      dto,
+      {
+        direction: courrier.direction,
+        siteId: await this.siteOfEffet(
+          dto.dossierId ?? courrier.dossierId,
+          courrier.createdById,
+        ),
+      },
+      courrier,
+    );
+    const { receivedAt, transmit, ...data } = dto;
     const updated = await this.database.courrier.update({
       where: { id: courrier.id },
       data: {
         ...data,
+        typeId,
         receivedAt: receivedAt ? new Date(receivedAt) : undefined,
       },
       include: mailInclude,
     });
     if (dossierChanged) {
       await markDossierInProgress(this.database, dto.dossierId!);
+    }
+    if (transmit) {
+      return this.transmit(id, actingUserId);
     }
     return updated;
   }
@@ -412,18 +468,17 @@ export class MailService {
   }
 
   // Entrant: ENREGISTRE -> TRANSMIS (10.2.4.7 — handed to the dossier's
-  // responsible for treatment), so its dossier must be known by then.
-  async transmit(id: string) {
-    const courrier = await this.requireStatus(id, [
-      CourrierStatus.RECU,
-      CourrierStatus.ENREGISTRE,
-    ]);
-    if (!courrier.dossierId) {
-      throw new BadRequestException(
-        'Attach this courrier to its dossier before transmitting it',
-      );
-    }
-    return this.setStatus(courrier.id, CourrierStatus.TRANSMIS);
+  // responsible for treatment), so its dossier must be known by then. The
+  // responsible is told, so nothing waits unnoticed.
+  async transmit(id: string, actingUserId: string) {
+    const courrier = await this.requireStatus(id, TRANSMITTABLE_STATUSES);
+    assertTransmittable(courrier.direction, courrier.dossierId);
+    const updated = await this.setStatus(courrier.id, CourrierStatus.TRANSMIS);
+    this.notify(courrier, [await this.validatorOf(courrier)], actingUserId, {
+      type: 'COURRIER_TRANSMITTED',
+      message: `« ${courrier.subject} » vous a été transmis.`,
+    });
+    return updated;
   }
 
   // -> EN_ATTENTE_VALIDATION, from SUBMITTABLE_STATUSES. One decision by
@@ -647,6 +702,155 @@ export class MailService {
     return this.setStatus(courrier.id, CourrierStatus.CLOTURE);
   }
 
+  // A physical effet expected back (returnExpected) is handed back: the
+  // return is recorded once.
+  async markReturned(id: string) {
+    const courrier = await this.findOne(id);
+    if (!courrier.returnExpected) {
+      throw new BadRequestException('This effet is not expected back');
+    }
+    if (courrier.returnedAt) {
+      throw new BadRequestException(
+        `This effet was already returned on ${courrier.returnedAt.toISOString()}`,
+      );
+    }
+    return this.database.courrier.update({
+      where: { id },
+      data: { returnedAt: new Date() },
+      include: mailInclude,
+    });
+  }
+
+  // The global "Courrier" type, given to effets registered without a type.
+  private async defaultEffetTypeId(): Promise<string | null> {
+    const type = await this.database.effetType.findFirst({
+      where: { name: DEFAULT_EFFET_TYPE, siteId: null },
+      select: { id: true },
+    });
+    return type?.id ?? null;
+  }
+
+  // The site an effet belongs to: its dossier's, or — registered without
+  // one — its registrant's.
+  private async siteOfEffet(
+    dossierId: string | null,
+    createdById: string | null,
+  ): Promise<string | null> {
+    if (dossierId) {
+      const dossier = await this.database.dossier.findUnique({
+        where: { id: dossierId },
+        select: { siteId: true },
+      });
+      return dossier?.siteId ?? null;
+    }
+    if (!createdById) return null;
+    const registrant = await this.database.user.findUnique({
+      where: { id: createdById },
+      select: { siteId: true },
+    });
+    return registrant?.siteId ?? null;
+  }
+
+  // Type, physical fields and bordereau, checked before anything is
+  // written. `current` is the effet being updated (absent at creation):
+  // what the request leaves out keeps its current value. Returns the type
+  // to store.
+  private async checkEffetFields(
+    input: EffetFields,
+    effet: { direction: CourrierDirection; siteId: string | null },
+    current?: EffetFields & { id: string; typeId: string | null },
+  ): Promise<string | null> {
+    const typeId =
+      input.typeId ?? current?.typeId ?? (await this.defaultEffetTypeId());
+    const type = typeId
+      ? await this.database.effetType.findUnique({ where: { id: typeId } })
+      : null;
+    if (typeId && !type) {
+      throw new BadRequestException(`Unknown effet type ${typeId}`);
+    }
+    if (type) {
+      const chosen =
+        input.typeId !== undefined && input.typeId !== current?.typeId;
+      if (chosen && !type.active) {
+        throw new BadRequestException(
+          `The effet type "${type.name}" is inactive and can no longer be chosen`,
+        );
+      }
+      if (type.siteId && type.siteId !== effet.siteId) {
+        throw new BadRequestException(
+          `The effet type "${type.name}" belongs to another site`,
+        );
+      }
+    }
+
+    // Physical fields only on a physical effet.
+    if (!type?.isPhysical) {
+      const filled = PHYSICAL_FIELDS.filter((field) => {
+        const value =
+          input[field] !== undefined ? input[field] : current?.[field];
+        return (
+          value !== undefined &&
+          value !== null &&
+          value !== false &&
+          value !== ''
+        );
+      });
+      if (filled.length) {
+        throw new BadRequestException(
+          `${filled.join(', ')} can only be recorded on a physical effet — pick a physical type, or leave them empty`,
+        );
+      }
+    }
+
+    // A bordereau lists effets; it is never listed itself.
+    const parentId =
+      input.parentId !== undefined
+        ? input.parentId
+        : (current?.parentId ?? null);
+    if (parentId) {
+      if (parentId === current?.id) {
+        throw new BadRequestException('An effet cannot list itself');
+      }
+      if (type?.canListEffets) {
+        throw new BadRequestException(
+          'A bordereau cannot be listed in another bordereau',
+        );
+      }
+      const parent = await this.database.courrier.findUnique({
+        where: { id: parentId },
+        select: {
+          direction: true,
+          parentId: true,
+          type: { select: { canListEffets: true } },
+        },
+      });
+      if (!parent) {
+        throw new BadRequestException(`Effet ${parentId} not found`);
+      }
+      if (!parent.type?.canListEffets || parent.parentId) {
+        throw new BadRequestException(
+          'parentId must be a bordereau (an effet whose type can list effets)',
+        );
+      }
+      if (parent.direction !== effet.direction) {
+        throw new BadRequestException(
+          'An effet and its bordereau must go the same way (both entrant or both sortant)',
+        );
+      }
+    }
+    if (current && !type?.canListEffets) {
+      const listed = await this.database.courrier.count({
+        where: { parentId: current.id },
+      });
+      if (listed > 0) {
+        throw new BadRequestException(
+          `This bordereau lists ${listed} effet(s): its type must stay one that can list effets`,
+        );
+      }
+    }
+    return typeId ?? null;
+  }
+
   // RG-COU-007: decharge can only be handed once the courrier is actually
   // registered.
   async discharge(id: string, dischargedById: string) {
@@ -767,6 +971,61 @@ export class MailService {
       );
     }
     return courrier;
+  }
+}
+
+// Given to effets registered without a type (a global type, see the
+// effet_types migration).
+const DEFAULT_EFFET_TYPE = 'Courrier';
+
+// Only recorded on a physical effet (EffetType.isPhysical).
+const PHYSICAL_FIELDS = [
+  'quantity',
+  'physicalDescription',
+  'conditionOnReceipt',
+  'packaging',
+  'storageLocation',
+  'returnExpected',
+] as const;
+
+type EffetFields = {
+  typeId?: string | null;
+  parentId?: string | null;
+  quantity?: number | null;
+  physicalDescription?: string | null;
+  conditionOnReceipt?: string | null;
+  packaging?: string | null;
+  storageLocation?: string | null;
+  returnExpected?: boolean | null;
+};
+
+// Statuses an entrant can be transmitted from.
+const TRANSMITTABLE_STATUSES: CourrierStatus[] = [
+  CourrierStatus.RECU,
+  CourrierStatus.ENREGISTRE,
+];
+
+// Transmitting hands an entrant to its dossier's responsible: only an
+// entrant, already attached to its dossier, not yet transmitted. `status`
+// is omitted when the caller checks it itself (requireStatus) or the
+// courrier is being created.
+function assertTransmittable(
+  direction: CourrierDirection,
+  dossierId: string | null,
+  status?: CourrierStatus,
+) {
+  if (direction !== CourrierDirection.ENTRANT) {
+    throw new BadRequestException('Only an entrant can be transmitted');
+  }
+  if (!dossierId) {
+    throw new BadRequestException(
+      'Attach this courrier to its dossier before transmitting it',
+    );
+  }
+  if (status && !TRANSMITTABLE_STATUSES.includes(status)) {
+    throw new BadRequestException(
+      `Courrier is ${status} and has already been transmitted`,
+    );
   }
 }
 

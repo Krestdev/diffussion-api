@@ -1,5 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsIn,
@@ -14,18 +16,20 @@ import {
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 
 /**
- * Tabs of the "Tâches" page. Only instructions accepted at least once
+ * Tabs of the "Tâches" page. Only instructions subscribed to at least once
  * appear here — the pre-decision statuses belong to the Requêtes page.
  */
 export const TASK_TABS = {
-  // Assigned to me, waiting for me to accept (or refuse) it.
-  'a-accepter': [InstructionStatus.AFFECTEE],
+  // Assigned to me, waiting for me to subscribe to it (or not).
+  'a-souscrire': [InstructionStatus.AFFECTEE],
   'en-cours': [
     InstructionStatus.EN_COURS,
     InstructionStatus.EN_ATTENTE_VALIDATION,
     InstructionStatus.A_CORRIGER,
   ],
   terminees: [InstructionStatus.TERMINEE],
+  // Tasks I created that no executant subscribed to: mine to reassign.
+  renvoyees: [InstructionStatus.NON_SOUSCRITE],
 } as const satisfies Record<string, readonly InstructionStatus[]>;
 
 export type TaskTab = keyof typeof TASK_TABS;
@@ -42,7 +46,7 @@ export class FindMyTasksQueryDto extends PaginationQueryDto {
     enum: TABS,
     default: 'en-cours',
     description:
-      'en-cours = EN_COURS, EN_ATTENTE_VALIDATION, A_CORRIGER · terminees = TERMINEE',
+      'a-souscrire = AFFECTEE · en-cours = EN_COURS, EN_ATTENTE_VALIDATION, A_CORRIGER · terminees = TERMINEE · renvoyees = NON_SOUSCRITE, among the tasks I created',
   })
   @IsOptional()
   @IsIn(TABS)
@@ -68,6 +72,17 @@ export class FindMyTasksQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(UserInstructionRole)
   role?: UserInstructionRole;
+
+  @ApiPropertyOptional({
+    description:
+      "true: only overdue tasks (executants' or task's deadline passed)",
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' ? true : value === 'false' ? false : value,
+  )
+  @IsBoolean()
+  overdue?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()

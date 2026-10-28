@@ -23,7 +23,8 @@ describe('DashboardService', () => {
     jest.useFakeTimers().setSystemTime(new Date('2026-09-28T10:00:00Z'));
     database.instruction.count
       .mockResolvedValueOnce(4)
-      .mockResolvedValueOnce(9);
+      .mockResolvedValueOnce(9)
+      .mockResolvedValueOnce(1);
     // 2 courriers await my validation; the courrier section counts 12
     // received, then 3 archived.
     const sectionCounts = [12, 3];
@@ -54,7 +55,7 @@ describe('DashboardService', () => {
     const stats = await service.getStats('u1', {});
 
     expect(stats).toEqual({
-      tasks: { todo: 4, completed: 9 },
+      tasks: { todo: 4, completed: 9, overdue: 1 },
       approvals: { awaitingMyDecision: 2 },
       courriers: null,
       trend: null,

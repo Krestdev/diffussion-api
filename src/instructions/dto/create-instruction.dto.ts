@@ -55,10 +55,22 @@ export class CreateInstructionsDto {
   @IsEnum(InstructionPriority)
   priority?: InstructionPriority;
 
-  @ApiPropertyOptional({ example: '2026-09-01' })
+  @ApiPropertyOptional({
+    example: '2026-09-15',
+    description: "The task's deadline: validated by then",
+  })
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-09-10',
+    description:
+      "The executants' deadline: livrables submitted by then. Not after dueDate. Usually set by the superviseur (PATCH /instructions/:id/delai-execution).",
+  })
+  @IsOptional()
+  @IsDateString()
+  agentDueDate?: string;
 
   @ApiPropertyOptional({
     type: [String],

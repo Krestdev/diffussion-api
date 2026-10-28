@@ -211,6 +211,33 @@ describe('UsersService', () => {
       expect(data.userRoles.create).toEqual([{ roleId: 'r-1', siteId: 's-2' }]);
     });
 
+    it("won't suspend a site's responsible", async () => {
+      database.user.findUnique.mockResolvedValue({
+        id: 'u-2',
+        siteId: 's-1',
+        status: 'ACTIVE',
+      });
+      database.site.findFirst.mockResolvedValue({ name: 'Cristal' });
+
+      await expect(service.toggleStatus('u-2', 'super-admin')).rejects.toThrow(
+        /responsible of site "Cristal"/,
+      );
+      expect(database.user.update).not.toHaveBeenCalled();
+    });
+
+    it('reactivates a suspended user without that check', async () => {
+      database.user.findUnique.mockResolvedValue({
+        id: 'u-2',
+        siteId: 's-1',
+        status: 'SUSPENDED',
+      });
+
+      await service.toggleStatus('u-2', 'super-admin');
+
+      expect(database.site.findFirst).not.toHaveBeenCalled();
+      expect(database.user.update).toHaveBeenCalled();
+    });
+
     it("won't move a site's responsible out of their site", async () => {
       database.user.findUnique.mockResolvedValue({ id: 'u-2', siteId: 's-1' });
       database.site.findFirst.mockResolvedValue({ name: 'Cristal' });
