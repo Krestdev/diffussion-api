@@ -109,7 +109,7 @@ export class InstructionLatenessService
   private send(
     task: {
       id: string;
-      dossierId: string;
+      dossierId: string | null;
       courrierId: string | null;
       assignees: { userId: string; role: UserInstructionRole }[];
     },
@@ -133,7 +133,7 @@ export class InstructionLatenessService
         recipientIds,
         ...content,
         canal: NotificationCanal.IN_APP,
-        dossierId: task.dossierId,
+        dossierId: task.dossierId ?? undefined,
         courrierId: task.courrierId ?? undefined,
       })
       .catch((error: unknown) => {

@@ -54,6 +54,20 @@ export class FindOutgoingMailsQueryDto extends PaginationQueryDto {
   @IsUUID()
   dossierId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Only the courriers whose dossier is in this project',
+  })
+  @IsOptional()
+  @IsUUID()
+  projectId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Only the courriers whose dossier is under this contract',
+  })
+  @IsOptional()
+  @IsUUID()
+  contractId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()

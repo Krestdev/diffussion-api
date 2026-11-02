@@ -23,6 +23,7 @@ import {
 } from '../common/utils/dossier-lifecycle';
 import { createWithUniqueReference } from '../common/utils/generate-reference';
 import { DatabaseService } from '../database/database.service';
+import { nextLivrablePosition } from '../common/utils/livrable-history';
 import { suggestItemOpinion, suggestSheetOpinion } from './analysis-opinion';
 import {
   CreateAnalysisItemDto,
@@ -69,6 +70,7 @@ const sheetInclude = {
       title: true,
       status: true,
       version: true,
+      position: true,
       instructionId: true,
     },
   },
@@ -160,6 +162,7 @@ export class AnalysisSheetService {
         data: {
           instructionId,
           title: `Fiche d'analyse — ${courrier.number}`,
+          position: await nextLivrablePosition(tx, instructionId),
           createdById: authorId,
         },
       });
@@ -590,6 +593,7 @@ export class AnalysisSheetService {
           instructionId: previous.livrable.instructionId,
           title: previous.livrable.title,
           version: previous.livrable.version + 1,
+          position: previous.livrable.position,
           parentVersionId: previous.livrableId,
           createdById: previous.authorId,
         },

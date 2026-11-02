@@ -40,6 +40,30 @@ export class CreateMailDto {
   @IsUUID()
   dossierId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Optional project this courrier is attached to',
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsUUID()
+  projectId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional contract this courrier is attached to',
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsUUID()
+  contractId?: string;
+
+  @ApiPropertyOptional({
+    description: 'Optional supervisor assigned to this courrier',
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsUUID()
+  supervisorId?: string;
+
   @ApiProperty({ enum: CourrierDirection })
   @IsEnum(CourrierDirection)
   direction: CourrierDirection;

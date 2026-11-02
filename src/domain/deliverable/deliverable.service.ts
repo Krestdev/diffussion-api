@@ -11,11 +11,15 @@ import {
 } from '../../../generated/prisma/client';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RbacService } from '../../auth/rbac/rbac.service';
+import { ActivityService } from '../../activity/activity.service';
 import { assertDossierOpenForActivity } from '../../common/utils/dossier-lifecycle';
 import {
-  lastLivrableValidation,
+  livrableOrder,
+  livrableValidations,
+  nextLivrablePosition,
   withLivrableHistory,
 } from '../../common/utils/livrable-history';
+import { visibleContractWhere } from '../../common/utils/referential-access';
 import { DatabaseService } from '../../database/database.service';
 import { CreateDeliverableDto } from './dto/create-deliverable.dto';
 import { FindDeliverableQueryDto } from './dto/find-deliverable-query.dto';
@@ -25,13 +29,13 @@ const deliverableInclude = {
   documents: true,
   versions: { orderBy: { version: 'asc' } },
   // Latest supervisor decision, with its motif when rejected.
-  validations: lastLivrableValidation,
+  validations: livrableValidations,
 } satisfies Prisma.LivrableInclude;
 
 // Each earlier version in `history`: its files and its decision.
 const historyInclude = {
   documents: true,
-  validations: lastLivrableValidation,
+  validations: livrableValidations,
 } satisfies Prisma.LivrableInclude;
 
 const TERMINAL_INSTRUCTION_STATUSES: InstructionStatus[] = [
@@ -50,37 +54,82 @@ export class DeliverableService {
   constructor(
     private readonly database: DatabaseService,
     private readonly rbac: RbacService,
+    private readonly activity: ActivityService,
   ) {}
+
+  private recordInstructionEvent(
+    instructionId: string,
+    action: string,
+    metadata?: Record<string, unknown>,
+  ) {
+    this.activity
+      .tryRecord({
+        action,
+        entityType: 'Instruction',
+        entityId: instructionId,
+        metadata,
+      })
+      .catch(() => undefined);
+  }
 
   async create(dto: CreateDeliverableDto, createdById: string) {
     await this.assertInstructionDossierOpen(dto.instructionId);
     return this.database.livrable.create({
-      data: { ...dto, createdById },
+      data: {
+        ...dto,
+        position: await nextLivrablePosition(this.database, dto.instructionId),
+        createdById,
+      },
       include: deliverableInclude,
     });
   }
 
   async findAll(query: FindDeliverableQueryDto, userId: string) {
     // One row per livrable: its current version, earlier ones in `history`.
+    // Only the sites where the caller may read livrables (`{}` with a
+    // global grant).
+    const atReadableSites = await this.rbac.siteFilter(
+      userId,
+      PermissionCode.LivrableRead,
+      (siteId): Prisma.LivrableWhereInput => ({
+        instruction: { dossier: { siteId } },
+      }),
+    );
     const where: Prisma.LivrableWhereInput = {
       isLatest: true,
       instructionId: query.instructionId,
       status: query.status,
-      // Only the sites where the caller may read livrables.
-      ...(await this.rbac.siteFilter(
-        userId,
-        PermissionCode.LivrableRead,
-        (siteId): Prisma.LivrableWhereInput => ({
-          instruction: { dossier: { siteId } },
-        }),
-      )),
+      ...(Object.keys(atReadableSites).length === 0
+        ? {}
+        : {
+            OR: [
+              atReadableSites,
+              // A task under a contract has no dossier, hence no site: its
+              // livrables are read by those involved in it, and by those
+              // who may open its contract.
+              {
+                instruction: {
+                  dossierId: null,
+                  OR: [
+                    { createdById: userId },
+                    { assignees: { some: { userId } } },
+                    { contract: visibleContractWhere(userId) },
+                  ],
+                },
+              },
+            ],
+          }),
     };
 
     const [data, total] = await this.database.$transaction([
       this.database.livrable.findMany({
         where,
         include: deliverableInclude,
-        orderBy: { createdAt: 'desc' },
+        // A task's livrables in the order they were entered; across
+        // tasks, the most recent first.
+        orderBy: query.instructionId
+          ? livrableOrder
+          : [{ createdAt: 'desc' }, { id: 'asc' }],
         skip: query.skip ?? 0,
         take: query.take ?? 20,
       }),
@@ -167,6 +216,8 @@ export class DeliverableService {
           title: dto.title ?? parent.title,
           description: dto.description ?? parent.description,
           version: parent.version + 1,
+          // A new version keeps its place among the task's livrables.
+          position: parent.position,
           parentVersionId: parent.id,
           createdById,
         },
@@ -185,11 +236,24 @@ export class DeliverableService {
     await this.database.livrable.delete({ where: { id } });
   }
 
-  async deposit(id: string) {
+  async deposit(id: string, agentComment?: string) {
     const livrable = await this.requireStatus(id, [
       LivrableStatus.EN_PREPARATION,
     ]);
-    return this.setStatus(livrable.id, LivrableStatus.DEPOSE);
+    const updated = await this.database.livrable.update({
+      where: { id: livrable.id },
+      data: {
+        status: LivrableStatus.DEPOSE,
+        agentComment: agentComment ?? undefined,
+      },
+      include: deliverableInclude,
+    });
+    await this.recordInstructionEvent(
+      updated.instructionId,
+      'INSTRUCTION_LIVRABLE_DEPOSE',
+      { livrableId: id },
+    );
+    return updated;
   }
 
   // 10.5.4.4: once submitted, the parent instruction moves to
@@ -212,7 +276,8 @@ export class DeliverableService {
     const [updated] = await this.database.$transaction([
       this.database.livrable.update({
         where: { id: livrable.id },
-        data: { status: LivrableStatus.SOUMIS },
+        // Each submission goes through the validation chain from its start.
+        data: { status: LivrableStatus.SOUMIS, validationStep: 0 },
         include: deliverableInclude,
       }),
       this.database.instruction.updateMany({
@@ -275,6 +340,8 @@ export class DeliverableService {
         `Cannot create or modify a livrable on a ${instruction.status.toLowerCase()} task`,
       );
     }
-    await assertDossierOpenForActivity(this.database, instruction.dossierId);
+    if (instruction.dossierId) {
+      await assertDossierOpenForActivity(this.database, instruction.dossierId);
+    }
   }
 }

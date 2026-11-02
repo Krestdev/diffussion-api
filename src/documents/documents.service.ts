@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client';
+import { ContractStatus, Prisma } from '../../generated/prisma/client';
 import { SetAccessDto } from '../common/dto/access.dto';
 import { SetOwnerDto } from '../common/dto/set-owner.dto';
 import { assertDossierOpenForActivity } from '../common/utils/dossier-lifecycle';
@@ -37,13 +37,19 @@ export class DocumentsService {
     dto: UploadDocumentDto,
     uploadedById: string,
   ) {
-    const owners = [dto.dossierId, dto.courrierId, dto.livrableId].filter(
-      Boolean,
-    );
+    const owners = [
+      dto.dossierId,
+      dto.courrierId,
+      dto.livrableId,
+      dto.contractId,
+    ].filter(Boolean);
     if (owners.length !== 1) {
       throw new BadRequestException(
-        'Provide exactly one of dossierId, courrierId, livrableId',
+        'Provide exactly one of dossierId, courrierId, livrableId, contractId',
       );
+    }
+    if (dto.contractId) {
+      await this.assertContractOpen(dto.contractId);
     }
 
     // Null only for a sortant draft not yet attached to its dossier: its
@@ -57,7 +63,9 @@ export class DocumentsService {
       ? `dossiers/${dto.dossierId}`
       : dto.courrierId
         ? `courriers/${dto.courrierId}`
-        : `livrables/${dto.livrableId}`;
+        : dto.contractId
+          ? `contracts/${dto.contractId}`
+          : `livrables/${dto.livrableId}`;
 
     const { key } = await this.storage.upload(file.buffer, {
       originalName: file.originalname,
@@ -75,6 +83,7 @@ export class DocumentsService {
         dossierId: dto.dossierId,
         courrierId: dto.courrierId,
         livrableId: dto.livrableId,
+        contractId: dto.contractId,
         ownerId: dto.ownerId,
         uploadedById,
       },
@@ -95,6 +104,7 @@ export class DocumentsService {
       dossierId: query.dossierId,
       courrierId: query.courrierId,
       livrableId: query.livrableId,
+      contractId: query.contractId,
       ...(isAdmin
         ? {}
         : {
@@ -108,6 +118,7 @@ export class DocumentsService {
                   dossier: { site: { responsibleId: actingUserId } },
                 },
               },
+              { contract: { responsibleId: actingUserId } },
             ],
           }),
     };
@@ -125,6 +136,7 @@ export class DocumentsService {
         dossierId: true,
         courrierId: true,
         livrableId: true,
+        contractId: true,
         ownerId: true,
         uploadedById: true,
         createdAt: true,
@@ -138,6 +150,7 @@ export class DocumentsService {
       include: {
         dossier: { select: { site: true } },
         courrier: { select: { dossier: { select: { site: true } } } },
+        contract: { select: { responsibleId: true } },
         accesses: { where: { userId: actingUserId } },
       },
     });
@@ -174,6 +187,7 @@ export class DocumentsService {
       courrier: {
         dossier: { site: { responsibleId: string | null } | null } | null;
       } | null;
+      contract: { responsibleId: string | null } | null;
       accesses: { userId: string }[];
     },
     actingUserId: string,
@@ -184,6 +198,7 @@ export class DocumentsService {
 
     const site = document.dossier?.site ?? document.courrier?.dossier?.site;
     if (site?.responsibleId === actingUserId) return;
+    if (document.contract?.responsibleId === actingUserId) return;
 
     const isAdmin = await this.rbac.hasGlobalPermission(
       actingUserId,
@@ -196,11 +211,28 @@ export class DocumentsService {
     );
   }
 
+  private async assertContractOpen(contractId: string) {
+    const contract = await this.database.contract.findUnique({
+      where: { id: contractId },
+      select: { number: true, status: true },
+    });
+    if (!contract) {
+      throw new NotFoundException(`Contract ${contractId} not found`);
+    }
+    if (contract.status === ContractStatus.ARCHIVED) {
+      throw new BadRequestException(
+        `Contract ${contract.number} is archived — no document can be added to it`,
+      );
+    }
+  }
+
   // The dossier a new document ultimately lands in: directly, through its
-  // courrier, or through its livrable's instruction.
+  // courrier, or through its livrable's instruction. A contract's own
+  // document is in no dossier.
   private async resolveDossierId(
     dto: UploadDocumentDto,
   ): Promise<string | null> {
+    if (dto.contractId) return null;
     if (dto.dossierId) return dto.dossierId;
     if (dto.courrierId) {
       const courrier = await this.database.courrier.findUnique({

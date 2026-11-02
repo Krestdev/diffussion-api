@@ -1,8 +1,11 @@
 import { SetMetadata } from '@nestjs/common';
 import { PERMISSION_METADATA_KEY, PermissionCode } from './rbac.constants';
 
-export const RequirePermission = (permission: PermissionCode) =>
-  SetMetadata(PERMISSION_METADATA_KEY, permission);
+export const RequirePermission = (...permissions: PermissionCode[]) =>
+  SetMetadata(
+    PERMISSION_METADATA_KEY,
+    permissions.length === 1 ? permissions[0] : permissions,
+  );
 
 export const PLATFORM_ONLY_METADATA_KEY = 'rbac:platform-only';
 

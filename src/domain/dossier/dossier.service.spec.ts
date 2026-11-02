@@ -17,6 +17,7 @@ describe('DossierService', () => {
     instruction: Record<string, jest.Mock>;
     courrier: Record<string, jest.Mock>;
     livrable: Record<string, jest.Mock>;
+    contract: Record<string, jest.Mock>;
     activityLog: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
@@ -35,6 +36,7 @@ describe('DossierService', () => {
       instruction: { count: jest.fn(), findMany: jest.fn() },
       courrier: { findMany: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       livrable: { findMany: jest.fn() },
+      contract: { findUnique: jest.fn() },
       activityLog: { findMany: jest.fn() },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
     };
@@ -162,6 +164,94 @@ describe('DossierService', () => {
         service.update('d-1', { siteId: 's-2' }, 'u-1'),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(database.dossier.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('contract', () => {
+    const openDossier = {
+      id: 'd-1',
+      status: DossierStatus.IN_PROGRESS,
+      siteId: 's-1',
+      responsibleId: 'u-1',
+      projectId: null,
+      contractId: null,
+    };
+    const updatedData = () =>
+      (
+        database.dossier.update.mock.calls[0][0] as {
+          data: { projectId?: string | null; contractId?: string };
+        }
+      ).data;
+
+    it('takes the project from the contract', async () => {
+      database.dossier.findUnique.mockResolvedValue(openDossier);
+      database.contract.findUnique.mockResolvedValue({
+        number: 'CT-1',
+        projectId: 'p-1',
+      });
+      database.dossier.update.mockResolvedValue({ id: 'd-1' });
+
+      await service.update('d-1', { contractId: 'c-1' }, 'u-1');
+
+      expect(updatedData()).toMatchObject({
+        contractId: 'c-1',
+        projectId: 'p-1',
+      });
+    });
+
+    it("refuses a project other than the contract's", async () => {
+      database.dossier.findUnique.mockResolvedValue(openDossier);
+      database.contract.findUnique.mockResolvedValue({
+        number: 'CT-1',
+        projectId: 'p-1',
+      });
+
+      await expect(
+        service.update('d-1', { contractId: 'c-1', projectId: 'p-2' }, 'u-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(database.dossier.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses to change the project of a dossier under a contract', async () => {
+      database.dossier.findUnique.mockResolvedValue({
+        ...openDossier,
+        projectId: 'p-1',
+        contractId: 'c-1',
+      });
+      database.contract.findUnique.mockResolvedValue({
+        number: 'CT-1',
+        projectId: 'p-1',
+      });
+
+      await expect(
+        service.update('d-1', { projectId: 'p-2' }, 'u-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('refuses an unknown contract', async () => {
+      database.dossier.findUnique.mockResolvedValue(openDossier);
+      database.contract.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.update('d-1', { contractId: 'c-x' }, 'u-1'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('keeps the chosen project when the contract has none', async () => {
+      database.dossier.findUnique.mockResolvedValue(openDossier);
+      database.contract.findUnique.mockResolvedValue({
+        number: 'CT-1',
+        projectId: null,
+      });
+      database.dossier.update.mockResolvedValue({ id: 'd-1' });
+
+      await service.update(
+        'd-1',
+        { contractId: 'c-1', projectId: 'p-2' },
+        'u-1',
+      );
+
+      expect(updatedData().projectId).toBe('p-2');
     });
   });
 

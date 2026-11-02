@@ -16,4 +16,9 @@ export class FindDocumentsQueryDto {
   @IsOptional()
   @IsUUID()
   livrableId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  contractId?: string;
 }

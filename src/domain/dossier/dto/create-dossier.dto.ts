@@ -15,6 +15,16 @@ import {
 } from 'generated/prisma/enums';
 
 export class CreateDossierDto {
+  @ApiPropertyOptional({
+    example: 'DOS-2026-014',
+    description:
+      'The reference to give the dossier; generated (D-xxxxxx) when left out',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  number?: string;
+
   @ApiProperty({ example: 'Communauté urbaine de Douala' })
   @IsString()
   @MaxLength(200)
@@ -36,6 +46,14 @@ export class CreateDossierDto {
   @IsOptional()
   @IsUUID()
   projectId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "The contract this dossier is carried out under. A contract's project is the dossier's project.",
+  })
+  @IsOptional()
+  @IsUUID()
+  contractId?: string;
 
   @ApiProperty({
     description: 'Owning site (RG-DOS-003 — exactly one, mandatory)',

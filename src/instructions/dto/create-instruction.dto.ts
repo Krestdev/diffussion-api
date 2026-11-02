@@ -26,9 +26,21 @@ export class CreateInstructionLivrableDto {
 }
 
 export class CreateInstructionsDto {
-  @ApiProperty({ description: 'Dossier this instruction belongs to (7.3)' })
+  @ApiPropertyOptional({
+    description:
+      'Dossier this instruction belongs to. Exactly one of dossierId / contractId must be provided.',
+  })
+  @IsOptional()
   @IsUUID()
-  dossierId: string;
+  dossierId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Contract this instruction belongs to. Exactly one of dossierId / contractId must be provided.',
+  })
+  @IsOptional()
+  @IsUUID()
+  contractId?: string;
 
   @ApiPropertyOptional({
     description: 'Courrier that triggered this instruction, if any',
@@ -84,11 +96,19 @@ export class CreateInstructionsDto {
 
   @ApiPropertyOptional({
     description:
-      'RG-INS-002: or to a superviseur responsible for designating executants',
+      'RG-INS-002: or to a superviseur responsible for designating executants.',
   })
   @IsOptional()
   @IsUUID()
   superviseurId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Who decides on the livrables first, before the superviseur. Not one of the executants. Without one, the superviseur decides from the start.',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  validateurId?: string;
 
   @ApiPropertyOptional({
     description: 'Parent task this one depends on (sub-task)',

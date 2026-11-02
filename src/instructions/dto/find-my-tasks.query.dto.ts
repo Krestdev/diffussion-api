@@ -30,7 +30,9 @@ export const TASK_TABS = {
   terminees: [InstructionStatus.TERMINEE],
   // Tasks I created that no executant subscribed to: mine to reassign.
   renvoyees: [InstructionStatus.NON_SOUSCRITE],
-} as const satisfies Record<string, readonly InstructionStatus[]>;
+  // All my tasks regardless of status.
+  all: null,
+} as const satisfies Record<string, readonly InstructionStatus[] | null>;
 
 export type TaskTab = keyof typeof TASK_TABS;
 const TABS = Object.keys(TASK_TABS) as TaskTab[];
@@ -46,7 +48,7 @@ export class FindMyTasksQueryDto extends PaginationQueryDto {
     enum: TABS,
     default: 'en-cours',
     description:
-      'a-souscrire = AFFECTEE · en-cours = EN_COURS, EN_ATTENTE_VALIDATION, A_CORRIGER · terminees = TERMINEE · renvoyees = NON_SOUSCRITE, among the tasks I created',
+      'a-souscrire = AFFECTEE · en-cours = EN_COURS, EN_ATTENTE_VALIDATION, A_CORRIGER · terminees = TERMINEE · renvoyees = NON_SOUSCRITE, among the tasks I supervise (or created, when they have no superviseur)',
   })
   @IsOptional()
   @IsIn(TABS)
@@ -88,6 +90,11 @@ export class FindMyTasksQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsUUID()
   dossierId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  contractId?: string;
 
   @ApiPropertyOptional({
     example: '2026-09-01',

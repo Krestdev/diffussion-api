@@ -287,24 +287,24 @@ export class RbacService {
         });
         return courrier ? (courrier.dossier?.siteId ?? null) : undefined;
       }
-      case 'instruction':
-        return (
-          await db.instruction.findUnique({
-            where: { id },
-            select: { dossier: { select: { siteId: true } } },
-          })
-        )?.dossier.siteId;
-      case 'livrable':
-        return (
-          await db.livrable.findUnique({
-            where: { id },
-            select: {
-              instruction: {
-                select: { dossier: { select: { siteId: true } } },
-              },
+      case 'instruction': {
+        const instr = await db.instruction.findUnique({
+          where: { id },
+          select: { dossier: { select: { siteId: true } } },
+        });
+        return instr?.dossier?.siteId ?? null;
+      }
+      case 'livrable': {
+        const liv = await db.livrable.findUnique({
+          where: { id },
+          select: {
+            instruction: {
+              select: { dossier: { select: { siteId: true } } },
             },
-          })
-        )?.instruction.dossier.siteId;
+          },
+        });
+        return liv?.instruction.dossier?.siteId ?? null;
+      }
       case 'analysisSheet':
         return (
           await db.analysisSheet.findUnique({

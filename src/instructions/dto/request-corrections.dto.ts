@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsDateString,
   IsOptional,
   IsString,
   IsUUID,
@@ -43,4 +44,12 @@ export class RequestCorrectionsDto {
   @IsString()
   @MaxLength(2000)
   comment?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-11-15',
+    description: "New executants' deadline for the correction round",
+  })
+  @IsOptional()
+  @IsDateString()
+  agentDueDate?: string;
 }

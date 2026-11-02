@@ -18,6 +18,7 @@ describe('InstructionsController', () => {
       subscribe: jest.fn(),
       close: jest.fn(),
       cancel: jest.fn(),
+      deposerLivrables: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -58,6 +59,18 @@ describe('InstructionsController', () => {
     expect(service.declineSubscription).toHaveBeenCalledWith(
       'i-1',
       { motif: 'Non disponible' },
+      'u-1',
+    );
+  });
+
+  it('deposerLivrables() forwards id, dto, files and user id', () => {
+    const dto = { livrables: '[]', agentComment: 'OK' };
+    const files = [] as Express.Multer.File[];
+    controller.deposerLivrables('i-1', dto, files, user);
+    expect(service.deposerLivrables).toHaveBeenCalledWith(
+      'i-1',
+      dto,
+      files,
       'u-1',
     );
   });

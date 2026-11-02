@@ -3,8 +3,9 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  NotFoundException,
 } from '@nestjs/common';
-import { MailService } from './mail.service';
+import { MailService, formatCourrier } from './mail.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
@@ -14,6 +15,7 @@ import {
   ValidationDecision,
 } from '../../../generated/prisma/client';
 import { StorageService } from '../../storage/storage.service';
+import { ActivityService } from '../../activity/activity.service';
 
 // Global types, plus a type of site s-2.
 const EFFET_TYPES: Record<string, Record<string, unknown>> = {
@@ -64,6 +66,9 @@ describe('MailService', () => {
   let database: {
     courrier: Record<string, jest.Mock>;
     dossier: Record<string, jest.Mock>;
+    project: Record<string, jest.Mock>;
+    contract: Record<string, jest.Mock>;
+    instruction: Record<string, jest.Mock>;
     document: Record<string, jest.Mock>;
     site: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
@@ -88,9 +93,15 @@ describe('MailService', () => {
         delete: jest.fn(),
       },
       dossier: { findUnique: jest.fn(), updateMany: jest.fn() },
+      project: { findUnique: jest.fn() },
+      contract: { findUnique: jest.fn() },
+      instruction: { count: jest.fn().mockResolvedValue(0) },
       document: { create: jest.fn() },
       site: { findUnique: jest.fn() },
-      user: { findUnique: jest.fn() },
+      user: {
+        findUnique: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       validation: { create: jest.fn() },
       // The global "Courrier" type unless a test says otherwise.
       effetType: {
@@ -111,6 +122,7 @@ describe('MailService', () => {
     rbac = {
       hasPermission: jest.fn().mockResolvedValue(false),
       hasGlobalPermission: jest.fn().mockResolvedValue(false),
+      hasPermissionAtSite: jest.fn().mockResolvedValue(false),
       // Global grant by default: no site restriction.
       siteFilter: jest.fn().mockResolvedValue({}),
     };
@@ -125,6 +137,10 @@ describe('MailService', () => {
         { provide: NotificationsService, useValue: notifications },
         { provide: RbacService, useValue: rbac },
         { provide: StorageService, useValue: storage },
+        {
+          provide: ActivityService,
+          useValue: { tryRecord: jest.fn().mockResolvedValue('log-1') },
+        },
       ],
     }).compile();
 
@@ -141,19 +157,61 @@ describe('MailService', () => {
       database.courrier.count
         .mockResolvedValueOnce(1) // filtered total
         .mockResolvedValueOnce(57) // metrics.total
-        .mockResolvedValueOnce(9); // metrics.archived
+        .mockResolvedValueOnce(10) // toDispatch
+        .mockResolvedValueOnce(5) // dispatchPending
+        .mockResolvedValueOnce(8) // assigned
+        .mockResolvedValueOnce(15) // inTreatment
+        .mockResolvedValueOnce(4) // closed
+        .mockResolvedValueOnce(9) // metrics.archived
+        .mockResolvedValueOnce(6); // metrics.others
     });
 
     it('returns the page plus unfiltered metrics in one payload', async () => {
       const result = await service.findIncoming({ skip: 0, take: 20 }, 'u-1');
 
       expect(result).toEqual({
-        data: [{ id: 'c-1' }],
+        data: [{ id: 'c-1', instructionsProgress: { done: 0, total: 0 } }],
         total: 1,
         skip: 0,
         take: 20,
-        metrics: { total: 57, archived: 9 },
+        metrics: {
+          total: 57,
+          all: 57,
+          archived: 9,
+          toDispatch: 10,
+          dispatchPending: 5,
+          assigned: 8,
+          inTreatment: 15,
+          closed: 4,
+          aDispatcher: 10,
+          dispatchingAValider: 5,
+          affectes: 8,
+          enTraitement: 15,
+          clotures: 4,
+          others: 6,
+          byTab: {
+            all: 57,
+            toDispatch: 10,
+            dispatchPending: 5,
+            assigned: 8,
+            inTreatment: 15,
+            closed: 4,
+            archived: 9,
+            others: 6,
+          },
+        },
       });
+    });
+
+    it('filters by tab (e.g. toDispatch)', async () => {
+      await service.findIncoming({ tab: 'toDispatch' }, 'u-1');
+
+      const { where } = database.courrier.findMany.mock.calls[0][0];
+      const tabFilter = where.AND.find((f: any) => f?.status?.in);
+      expect(tabFilter.status.in).toEqual([
+        CourrierStatus.RECU,
+        CourrierStatus.ENREGISTRE,
+      ]);
     });
 
     it('filters by person in charge, without touching the metrics', async () => {
@@ -193,8 +251,11 @@ describe('MailService', () => {
       expect(where.OR[0].dossier.AND[1]).toEqual({ siteId: { in: ['s-A'] } });
       // Own drafts without a dossier are not tied to a site.
       expect(where.OR[1]).toEqual({ dossierId: null, createdById: 'u-1' });
+      // Whoever it is entrusted to sees it, wherever it sits.
+      expect(where.OR).toContainEqual({ ownerId: 'u-1' });
+      expect(where.OR).toContainEqual({ supervisorId: 'u-1' });
       // Entrants still waiting for their dossier: on the registrant's site.
-      expect(where.OR[2]).toEqual({
+      expect(where.OR).toContainEqual({
         dossierId: null,
         createdBy: { siteId: { in: ['s-A'] } },
       });
@@ -242,7 +303,7 @@ describe('MailService', () => {
       );
 
       expect(result).toEqual({
-        data: [{ id: 's-1' }],
+        data: [{ id: 's-1', instructionsProgress: { done: 0, total: 0 } }],
         total: 1,
         skip: 0,
         take: 20,
@@ -327,6 +388,39 @@ describe('MailService', () => {
         undefined,
       );
       expect(database.dossier.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('is received the day it is registered when no date is given', async () => {
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+
+      await service.create(ENTRANT, 'u-agent');
+
+      expect(
+        database.courrier.create.mock.calls[0][0].data.receivedAt,
+      ).toBeInstanceOf(Date);
+    });
+
+    it("takes its dossier's project and contract", async () => {
+      // Open, on an active site, in project p-1 under contract ct-1.
+      database.dossier.findUnique.mockResolvedValue({
+        number: 'D-1',
+        status: 'IN_PROGRESS',
+        siteId: 's-1',
+        projectId: 'p-1',
+        contractId: 'ct-1',
+      });
+      database.site.findUnique.mockResolvedValue({
+        name: 'Site',
+        status: 'ACTIVE',
+      });
+
+      await service.create({ ...ENTRANT, dossierId: 'd-1' }, 'u-agent');
+
+      expect(database.courrier.create.mock.calls[0][0].data).toMatchObject({
+        dossierId: 'd-1',
+        projectId: 'p-1',
+        contractId: 'ct-1',
+      });
     });
 
     it('needs a dossier when the registrant belongs to no site', async () => {
@@ -998,6 +1092,595 @@ describe('MailService', () => {
         BadRequestException,
       );
       expect(database.courrier.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('dispatch', () => {
+    const mockCourrier = (
+      status: CourrierStatus = CourrierStatus.RECU,
+      instructions: unknown[] = [],
+    ) => ({
+      id: 'c-1',
+      subject: 'Courrier entrant',
+      direction: CourrierDirection.ENTRANT,
+      status,
+      instructions,
+      dossier: null,
+      createdById: 'u-creator',
+    });
+
+    it('rejects if neither or both contractId and dossierId are provided', async () => {
+      await expect(
+        service.dispatch('c-1', { projectId: 'p-1' } as any, 'u-user'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      await expect(
+        service.dispatch(
+          'c-1',
+          { projectId: 'p-1', contractId: 'ct-1', dossierId: 'd-1' },
+          'u-user',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects if contract does not belong to project', async () => {
+      database.project.findUnique.mockResolvedValue({
+        id: 'p-1',
+        responsibleId: 'u-p-resp',
+      });
+      database.contract.findUnique.mockResolvedValue({
+        id: 'ct-1',
+        projectId: 'p-other',
+        responsibleId: 'u-ct-resp',
+      });
+
+      await expect(
+        service.dispatch(
+          'c-1',
+          { projectId: 'p-1', contractId: 'ct-1' },
+          'u-user',
+        ),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('dispatches with permission to TRANSMIS and sets owner to contract responsible', async () => {
+      database.project.findUnique.mockResolvedValue({
+        id: 'p-1',
+        responsibleId: 'u-p-resp',
+      });
+      database.contract.findUnique.mockResolvedValue({
+        id: 'ct-1',
+        projectId: 'p-1',
+        responsibleId: 'u-ct-resp',
+      });
+      database.courrier.findUnique.mockResolvedValue(
+        mockCourrier(CourrierStatus.RECU),
+      );
+      database.courrier.update.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.TRANSMIS,
+        ownerId: 'u-ct-resp',
+      });
+      // Dispatcher at the effet's site (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      rbac.hasPermissionAtSite.mockResolvedValue(true);
+
+      const res = await service.dispatch(
+        'c-1',
+        { projectId: 'p-1', contractId: 'ct-1' },
+        'u-dispatcher',
+      );
+
+      expect(res.status).toBe(CourrierStatus.TRANSMIS);
+      expect(database.courrier.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: CourrierStatus.TRANSMIS,
+            ownerId: 'u-ct-resp',
+            projectId: 'p-1',
+            contractId: 'ct-1',
+          }),
+        }),
+      );
+    });
+
+    it('stores proposal in EN_ATTENTE_TRANSMISSION when user lacks dispatch permission', async () => {
+      database.project.findUnique.mockResolvedValue({
+        id: 'p-1',
+        responsibleId: 'u-p-resp',
+      });
+      database.dossier.findUnique.mockResolvedValue({
+        id: 'd-1',
+        projectId: 'p-1',
+        responsibleId: 'u-d-resp',
+        site: { responsibleId: 'u-s-resp' },
+      });
+      database.courrier.findUnique.mockResolvedValue(
+        mockCourrier(CourrierStatus.ENREGISTRE),
+      );
+      database.courrier.update.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+        proposedProjectId: 'p-1',
+        proposedDossierId: 'd-1',
+      });
+      rbac.hasPermission.mockResolvedValue(false);
+      rbac.hasGlobalPermission.mockResolvedValue(false);
+
+      const res = await service.dispatch(
+        'c-1',
+        { projectId: 'p-1', dossierId: 'd-1' },
+        'u-agent',
+      );
+
+      expect(res.status).toBe(CourrierStatus.EN_ATTENTE_TRANSMISSION);
+      expect(database.courrier.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+            proposedProjectId: 'p-1',
+            proposedDossierId: 'd-1',
+            proposedById: 'u-agent',
+          }),
+        }),
+      );
+    });
+
+    it('allows changing assignment on TRANSMIS when caller has permission and no instructions exist', async () => {
+      database.project.findUnique.mockResolvedValue({
+        id: 'p-1',
+        responsibleId: 'u-p-resp',
+      });
+      database.contract.findUnique.mockResolvedValue({
+        id: 'ct-2',
+        projectId: 'p-1',
+        responsibleId: 'u-new-owner',
+      });
+      database.courrier.findUnique.mockResolvedValue(
+        mockCourrier(CourrierStatus.TRANSMIS, []),
+      );
+      database.courrier.update.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.TRANSMIS,
+        ownerId: 'u-new-owner',
+      });
+      // Dispatcher at the effet's site (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      rbac.hasPermissionAtSite.mockResolvedValue(true);
+
+      const res = await service.dispatch(
+        'c-1',
+        { projectId: 'p-1', contractId: 'ct-2' },
+        'u-supervisor',
+      );
+
+      expect(res.ownerId).toBe('u-new-owner');
+    });
+
+    it('rejects changing assignment on TRANSMIS with 409 if instructions exist', async () => {
+      database.project.findUnique.mockResolvedValue({
+        id: 'p-1',
+        responsibleId: 'u-p-resp',
+      });
+      database.contract.findUnique.mockResolvedValue({
+        id: 'ct-2',
+        projectId: 'p-1',
+        responsibleId: 'u-new-owner',
+      });
+      database.courrier.findUnique.mockResolvedValue(
+        mockCourrier(CourrierStatus.TRANSMIS, [{ id: 'ins-1' }]),
+      );
+      // Dispatcher at the effet's site (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      rbac.hasPermissionAtSite.mockResolvedValue(true);
+
+      await expect(
+        service.dispatch(
+          'c-1',
+          { projectId: 'p-1', contractId: 'ct-2' },
+          'u-supervisor',
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('rejects changing assignment on TRANSMIS with 409 if caller lacks permission', async () => {
+      database.project.findUnique.mockResolvedValue({
+        id: 'p-1',
+        responsibleId: 'u-p-resp',
+      });
+      database.contract.findUnique.mockResolvedValue({
+        id: 'ct-2',
+        projectId: 'p-1',
+        responsibleId: 'u-new-owner',
+      });
+      database.courrier.findUnique.mockResolvedValue(
+        mockCourrier(CourrierStatus.TRANSMIS, []),
+      );
+      rbac.hasPermission.mockResolvedValue(false);
+      rbac.hasGlobalPermission.mockResolvedValue(false);
+
+      await expect(
+        service.dispatch(
+          'c-1',
+          { projectId: 'p-1', contractId: 'ct-2' },
+          'u-agent',
+        ),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+  });
+
+  describe('assignSupervisor', () => {
+    it('assigns the supervisor and leaves the status alone', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        subject: 'Courrier',
+        status: CourrierStatus.TRANSMIS,
+        ownerId: 'u-owner',
+        dossier: null,
+      });
+      database.user.findUnique.mockResolvedValue({
+        id: 'u-sup',
+        name: 'Superviseur',
+        status: 'ACTIVE',
+      });
+      database.courrier.update.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.EN_TRAITEMENT,
+        supervisorId: 'u-sup',
+      });
+
+      const res = await service.assignSupervisor(
+        'c-1',
+        { supervisorId: 'u-sup' },
+        'u-owner',
+      );
+
+      expect(res.status).toBe(CourrierStatus.EN_TRAITEMENT);
+      expect(database.courrier.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            supervisorId: 'u-sup',
+            supervisorDueDate: null,
+            supervisorNote: null,
+          },
+        }),
+      );
+    });
+
+    it('forbids non-owner, non-admin from assigning supervisor', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        ownerId: 'u-owner',
+        dossier: null,
+      });
+
+      await expect(
+        service.assignSupervisor(
+          'c-1',
+          { supervisorId: 'u-sup' },
+          'u-intruder',
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('persists dueDate and note when provided', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        subject: 'Courrier avec consigne',
+        status: CourrierStatus.TRANSMIS,
+        ownerId: 'u-owner',
+        dossier: null,
+      });
+      database.user.findUnique.mockResolvedValue({
+        id: 'u-sup',
+        name: 'Superviseur',
+        status: 'ACTIVE',
+      });
+      database.courrier.update.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.EN_TRAITEMENT,
+        supervisorId: 'u-sup',
+        supervisorDueDate: new Date('2026-11-20'),
+        supervisorNote: 'Consigne urgente',
+      });
+
+      const res = await service.assignSupervisor(
+        'c-1',
+        {
+          supervisorId: 'u-sup',
+          dueDate: '2026-11-20',
+          note: 'Consigne urgente',
+        },
+        'u-owner',
+      );
+
+      expect(res.status).toBe(CourrierStatus.EN_TRAITEMENT);
+      expect(database.courrier.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: {
+            supervisorId: 'u-sup',
+            supervisorDueDate: new Date('2026-11-20'),
+            supervisorNote: 'Consigne urgente',
+          },
+        }),
+      );
+      expect(res.supervisorDueDate).toEqual(new Date('2026-11-20'));
+      expect(res.supervisorNote).toBe('Consigne urgente');
+    });
+  });
+
+  describe('rights at the effet site', () => {
+    it('refuses an inactive supervisor', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.TRANSMIS,
+        ownerId: 'u-owner',
+        dossier: null,
+      });
+      database.user.findUnique.mockResolvedValue({ status: 'SUSPENDED' });
+
+      await expect(
+        service.assignSupervisor('c-1', { supervisorId: 'u-sup' }, 'u-owner'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(database.courrier.update).not.toHaveBeenCalled();
+    });
+
+    it('a dispatcher of another site only proposes', async () => {
+      database.project.findUnique.mockResolvedValue({ id: 'p-1' });
+      database.contract.findUnique.mockResolvedValue({
+        id: 'ct-1',
+        projectId: 'p-1',
+        responsibleId: 'u-ct-resp',
+      });
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.RECU,
+        instructions: [],
+        dossier: null,
+        createdById: 'u-creator',
+      });
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      // COURRIER_DISPATCH somewhere, but not at s-1.
+      rbac.hasPermission.mockResolvedValue(true);
+      database.courrier.update.mockResolvedValue({ id: 'c-1' });
+
+      await service.dispatch(
+        'c-1',
+        { projectId: 'p-1', contractId: 'ct-1' },
+        'u-elsewhere',
+      );
+
+      expect(rbac.hasPermissionAtSite).toHaveBeenCalledWith(
+        'u-elsewhere',
+        'COURRIER_DISPATCH',
+        's-1',
+      );
+      expect(database.courrier.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+          }),
+        }),
+      );
+    });
+
+    it('hides the history of an effet the user may not see', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        direction: CourrierDirection.ENTRANT,
+      });
+      database.courrier.count.mockResolvedValue(0);
+
+      await expect(service.historique('c-1', 'u-1')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('validateDispatch', () => {
+    it('rejects if status is not EN_ATTENTE_TRANSMISSION', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.RECU,
+      });
+
+      await expect(
+        service.validateDispatch('c-1', 'u-validator'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects if no proposedProjectId', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+        proposedProjectId: null,
+      });
+
+      await expect(
+        service.validateDispatch('c-1', 'u-validator'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects if user is not authorized to validate dispatch', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+        proposedProjectId: 'p-1',
+        proposedContractId: 'ct-1',
+        dossierId: null,
+        createdById: 'u-creator',
+      });
+      rbac.hasGlobalPermission.mockResolvedValue(false);
+      rbac.hasPermission.mockResolvedValue(false);
+      database.contract.findUnique.mockResolvedValue({
+        id: 'ct-1',
+        responsibleId: 'u-other-resp',
+        project: { responsibleId: 'u-proj-resp' },
+      });
+
+      await expect(
+        service.validateDispatch('c-1', 'u-unauthorized'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('validates dispatch and sets owner to contract responsible', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        subject: 'Effet à valider',
+        status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+        proposedProjectId: 'p-1',
+        proposedContractId: 'ct-1',
+        dossierId: null,
+        createdById: 'u-creator',
+      });
+      // Dispatcher at the effet's site (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      rbac.hasPermissionAtSite.mockResolvedValue(true);
+      database.contract.findUnique.mockResolvedValue({
+        id: 'ct-1',
+        responsibleId: 'u-ct-resp',
+        project: { responsibleId: 'u-proj-resp' },
+      });
+      database.courrier.findUniqueOrThrow.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.TRANSMIS,
+        ownerId: 'u-ct-resp',
+        projectId: 'p-1',
+        contractId: 'ct-1',
+        proposedProjectId: null,
+        dispatchValidatedById: 'u-validator',
+        dispatchValidatedAt: new Date(),
+      });
+
+      const res = await service.validateDispatch('c-1', 'u-validator');
+
+      expect(res.status).toBe(CourrierStatus.TRANSMIS);
+      expect(database.courrier.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'c-1', status: CourrierStatus.EN_ATTENTE_TRANSMISSION },
+          data: expect.objectContaining({
+            status: CourrierStatus.TRANSMIS,
+            ownerId: 'u-ct-resp',
+            projectId: 'p-1',
+            contractId: 'ct-1',
+            proposedProjectId: null,
+            dispatchValidatedById: 'u-validator',
+          }),
+        }),
+      );
+      expect(database.validation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            courrierId: 'c-1',
+            validatorId: 'u-validator',
+            decision: ValidationDecision.VALIDE,
+          }),
+        }),
+      );
+      expect(notifications.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recipientIds: ['u-ct-resp'],
+          type: 'COURRIER_TRANSMITTED',
+        }),
+      );
+    });
+
+    it('validates dispatch and marks dossier in progress when target is a dossier', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        id: 'c-1',
+        subject: 'Effet avec dossier',
+        status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+        proposedProjectId: 'p-1',
+        proposedContractId: null,
+        proposedDossierId: 'd-1',
+        dossierId: null,
+        createdById: 'u-creator',
+      });
+      // Dispatcher at the effet's site (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      rbac.hasPermissionAtSite.mockResolvedValue(true);
+      database.dossier.findUnique.mockResolvedValue({
+        id: 'd-1',
+        responsibleId: 'u-d-resp',
+        contractId: 'ct-1',
+        site: { responsibleId: 'u-s-resp' },
+      });
+      database.courrier.findUniqueOrThrow.mockResolvedValue({
+        id: 'c-1',
+        status: CourrierStatus.TRANSMIS,
+        ownerId: 'u-d-resp',
+        projectId: 'p-1',
+        contractId: 'ct-1',
+        dossierId: 'd-1',
+      });
+
+      const res = await service.validateDispatch('c-1', 'u-validator');
+
+      expect(res.status).toBe(CourrierStatus.TRANSMIS);
+      expect(database.dossier.updateMany).toHaveBeenCalled();
+    });
+  });
+
+  describe('formatCourrier', () => {
+    it('shapes dispatch and supervisor nested objects', () => {
+      const raw = {
+        id: 'c-1',
+        subject: 'Test',
+        proposedBy: { id: 'u-prop', name: 'Proposer', email: 'prop@test.com' },
+        proposedAt: new Date('2026-10-30T10:00:00Z'),
+        dispatchValidatedBy: {
+          id: 'u-val',
+          name: 'Validator',
+          email: 'val@test.com',
+        },
+        dispatchValidatedAt: new Date('2026-10-30T11:00:00Z'),
+        supervisor: { id: 'u-sup', name: 'Supervisor', email: 'sup@test.com' },
+        supervisorDueDate: new Date('2026-11-01'),
+        supervisorNote: 'A traiter en priorite',
+      };
+
+      const formatted = formatCourrier(raw);
+
+      expect(formatted.dispatch).toEqual({
+        proposedBy: { id: 'u-prop', name: 'Proposer' },
+        proposedAt: new Date('2026-10-30T10:00:00Z'),
+        validatedBy: { id: 'u-val', name: 'Validator' },
+        validatedAt: new Date('2026-10-30T11:00:00Z'),
+      });
+      expect(formatted.supervisor).toEqual({
+        id: 'u-sup',
+        name: 'Supervisor',
+        email: 'sup@test.com',
+      });
+      expect(formatted.dueDate).toEqual(new Date('2026-11-01'));
+      expect(formatted.supervisorDueDate).toEqual(new Date('2026-11-01'));
+      expect(formatted.supervisorNote).toBe('A traiter en priorite');
+    });
+
+    it('handles courrier with null dispatch validation and null supervisor', () => {
+      const raw = {
+        id: 'c-2',
+        subject: 'Pending',
+        proposedBy: { id: 'u-prop', name: 'Proposer' },
+        proposedAt: new Date('2026-10-30T10:00:00Z'),
+        dispatchValidatedBy: null,
+        dispatchValidatedAt: null,
+        supervisor: null,
+        supervisorDueDate: null,
+        supervisorNote: null,
+      };
+
+      const formatted = formatCourrier(raw);
+
+      expect(formatted.dispatch).toEqual({
+        proposedBy: { id: 'u-prop', name: 'Proposer' },
+        proposedAt: new Date('2026-10-30T10:00:00Z'),
+        validatedBy: null,
+        validatedAt: null,
+      });
+      expect(formatted.supervisor).toBeNull();
+      expect(formatted.dueDate).toBeNull();
+      expect(formatted.supervisorDueDate).toBeNull();
+      expect(formatted.supervisorNote).toBeNull();
     });
   });
 });

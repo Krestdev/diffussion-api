@@ -1,10 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
+  ContractStatus,
   CourrierStatus,
   DossierConfidentiality,
   DossierStatus,
@@ -23,7 +25,7 @@ import {
 } from '../../common/dto/pagination.query.dto';
 import { computeDossierProgress } from '../../common/utils/dossier-lifecycle';
 import {
-  lastLivrableValidation,
+  livrableValidations,
   withLivrableHistory,
 } from '../../common/utils/livrable-history';
 import { visibleDossierWhere } from '../../common/utils/dossier-visibility';
@@ -38,6 +40,9 @@ const dossierInclude = {
   site: true,
   category: true,
   project: true,
+  contract: {
+    select: { id: true, number: true, title: true, reference: true },
+  },
   responsible: { select: { id: true, name: true, email: true } },
   createdBy: { select: { id: true, name: true, email: true } },
   _count: { select: { courriers: true, instructions: true } },
@@ -99,17 +104,22 @@ export class DossierService {
     const responsibleId = dto.responsibleId ?? createdById;
     await this.assertEligibleResponsible(responsibleId, dto.siteId);
 
-    const { keywords, dueDate: rawDueDate, ...data } = dto;
+    const projectId = await this.projectUnderContract(
+      dto.contractId,
+      dto.projectId,
+    );
+    const { keywords, dueDate: rawDueDate, number: givenNumber, ...data } = dto;
     const openedAt = new Date();
     const dueDate = rawDueDate ? new Date(rawDueDate) : null;
     const retentionUntil = await this.computeRetentionUntil(
       dto.categoryId,
       openedAt,
     );
-    return createWithUniqueReference('D', (number) =>
+    const create = (number: string) =>
       this.database.dossier.create({
         data: {
           ...data,
+          projectId,
           number,
           openedAt,
           dueDate,
@@ -120,8 +130,19 @@ export class DossierService {
           createdById,
         },
         include: dossierInclude,
-      }),
-    );
+      });
+    if (!givenNumber) {
+      return createWithUniqueReference('D', create);
+    }
+    const taken = await this.database.dossier.count({
+      where: { number: givenNumber },
+    });
+    if (taken) {
+      throw new ConflictException(
+        `A dossier numbered ${givenNumber} already exists`,
+      );
+    }
+    return create(givenNumber);
   }
 
   async findAll(query: FindDossiersQueryDto, userId?: string) {
@@ -130,6 +151,8 @@ export class DossierService {
       priority: query.priority,
       siteId: query.siteId,
       responsibleId: query.responsibleId,
+      projectId: query.projectId,
+      contractId: query.contractId,
       OR: query.search
         ? [
             { title: { contains: query.search, mode: 'insensitive' } },
@@ -243,6 +266,13 @@ export class DossierService {
         ? await this.computeRetentionUntil(dto.categoryId, dossier.openedAt)
         : undefined;
 
+    const projectId =
+      dto.contractId !== undefined || dto.projectId !== undefined
+        ? await this.projectUnderContract(
+            dto.contractId !== undefined ? dto.contractId : dossier.contractId,
+            dto.projectId !== undefined ? dto.projectId : dossier.projectId,
+          )
+        : undefined;
     const { keywords, dueDate: rawDueDate, ...data } = dto;
     const dueDateChanged = 'dueDate' in dto;
     const dueDate = rawDueDate ? new Date(rawDueDate) : null;
@@ -251,6 +281,7 @@ export class DossierService {
       where: { id },
       data: {
         ...data,
+        projectId,
         keywords,
         retentionUntil,
         ...(dueDateChanged
@@ -334,14 +365,18 @@ export class DossierService {
     entityType: 'dossier',
     operation: 'UPDATE',
   })
-  async archive(id: string) {
+  async archive(id: string, reason?: string) {
     const dossier = await this.findOne(id);
     if (dossier.status !== DossierStatus.CLOSED) {
       throw new BadRequestException('Only a closed dossier can be archived');
     }
     return this.database.dossier.update({
       where: { id },
-      data: { status: DossierStatus.ARCHIVED, archivedAt: new Date() },
+      data: {
+        status: DossierStatus.ARCHIVED,
+        archivedAt: new Date(),
+        archiveReason: reason ?? null,
+      },
       include: dossierInclude,
     });
   }
@@ -361,7 +396,11 @@ export class DossierService {
     }
     return this.database.dossier.update({
       where: { id },
-      data: { status: DossierStatus.CLOSED, archivedAt: null },
+      data: {
+        status: DossierStatus.CLOSED,
+        archivedAt: null,
+        archiveReason: null,
+      },
       include: dossierInclude,
     });
   }
@@ -439,7 +478,7 @@ export class DossierService {
     const [data, total] = await this.database.$transaction([
       this.database.livrable.findMany({
         where,
-        include: { validations: lastLivrableValidation },
+        include: { validations: livrableValidations },
         orderBy: { createdAt: 'desc' },
         skip,
         take,
@@ -447,7 +486,7 @@ export class DossierService {
       this.database.livrable.count({ where }),
     ]);
     const withHistory = await withLivrableHistory(this.database, data, {
-      validations: lastLivrableValidation,
+      validations: livrableValidations,
     });
     return { data: withHistory, total, skip, take };
   }
@@ -540,6 +579,35 @@ export class DossierService {
       changes: { accesses: [summarize(before), summarize(after)] },
     });
     return after;
+  }
+
+  // A dossier under a contract belongs to that contract's project: the
+  // project is taken from the contract, and a different one is refused.
+  // Returns the dossier's project.
+  private async projectUnderContract(
+    contractId: string | null | undefined,
+    projectId: string | null | undefined,
+  ): Promise<string | null | undefined> {
+    if (!contractId) return projectId;
+    const contract = await this.database.contract.findUnique({
+      where: { id: contractId },
+      select: { number: true, projectId: true, status: true },
+    });
+    if (!contract) {
+      throw new BadRequestException(`Contract ${contractId} not found`);
+    }
+    if (contract.status === ContractStatus.ARCHIVED) {
+      throw new BadRequestException(
+        `Contract ${contract.number} is archived — no dossier can be added to it`,
+      );
+    }
+    if (!contract.projectId) return projectId;
+    if (projectId && projectId !== contract.projectId) {
+      throw new BadRequestException(
+        `Contract ${contract.number} belongs to another project — a dossier under it belongs to the contract's project`,
+      );
+    }
+    return contract.projectId;
   }
 
   // RG-DOS-004: the responsible must be able to act on the dossier —

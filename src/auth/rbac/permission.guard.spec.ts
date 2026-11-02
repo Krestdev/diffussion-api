@@ -163,5 +163,23 @@ describe('PermissionGuard', () => {
         guard.canActivate(context({ params: { uuid: 's-B' } })),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
+
+    it('requires all permissions when multiple are specified', async () => {
+      metadata[PERMISSION_METADATA_KEY] = [
+        PermissionCode.LivrableDeposit,
+        PermissionCode.LivrableSubmit,
+      ];
+      rbac.hasPermission.mockImplementation(
+        async (_user: string, code: PermissionCode) =>
+          code === PermissionCode.LivrableDeposit,
+      );
+
+      await expect(guard.canActivate(context({}))).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+
+      rbac.hasPermission.mockResolvedValue(true);
+      await expect(guard.canActivate(context({}))).resolves.toBe(true);
+    });
   });
 });

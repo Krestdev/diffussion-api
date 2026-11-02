@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -21,6 +22,7 @@ import {
 import { JwtPayloadWithRefreshToken } from '../auth/types/jwt-payload.type';
 import { NotificationStatus } from '../../generated/prisma/client';
 import { CreateNotificationDto } from './dto/create-notification.dto';
+import { SetNotificationPreferencesDto } from './dto/set-notification-preferences.dto';
 import { NotificationsService } from './notifications.service';
 
 @ApiTags('notifications')
@@ -39,6 +41,20 @@ export class NotificationsController {
   @PlatformOnly()
   create(@Body() dto: CreateNotificationDto) {
     return this.notificationsService.create(dto);
+  }
+
+  // Each user chooses which notifications they receive.
+  @Get('preferences')
+  getPreferences(@CurrentUser() user: JwtPayloadWithRefreshToken) {
+    return this.notificationsService.getPreferences(user.sub);
+  }
+
+  @Put('preferences')
+  setPreferences(
+    @Body() dto: SetNotificationPreferencesDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.notificationsService.setPreferences(user.sub, dto.preferences);
   }
 
   @Get('me')

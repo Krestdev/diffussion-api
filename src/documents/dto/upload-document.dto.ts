@@ -24,6 +24,12 @@ export class UploadDocumentDto {
   @IsUUID()
   livrableId?: string;
 
+  @ApiPropertyOptional({ description: "A contract's own documents" })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsUUID()
+  contractId?: string;
+
   @ApiPropertyOptional({
     description:
       'Person in charge of the document — also gets access to it. Can be ' +

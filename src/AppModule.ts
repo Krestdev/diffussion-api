@@ -1,6 +1,7 @@
-import { BullModule } from '@nestjs/bullmq';
 import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_GUARD } from '@nestjs/core';
+import { ConfigModule } from '@nestjs/config';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { randomUUID } from 'crypto';
 import { ClsModule, ClsMiddleware } from 'nestjs-cls';
 import { ActivityModule } from './activity/activity.module';
@@ -31,14 +32,14 @@ import { StorageModule } from './storage/storage.module';
       global: true,
     }),
     ConfigModule.forRoot({ isGlobal: true }),
-    BullModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        connection: {
-          url: config.get<string>('REDIS_URL'),
-        },
-      }),
-    }),
+    // Global rate limiting: 100 requests per minute per IP by default.
+    // Sensitive routes (auth) override this with a tighter @Throttle({...}).
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000, // 1-minute window (ms)
+        limit: 100, // max requests per window per client IP
+      },
+    ]),
     DatabaseModule,
     MailModule,
     // Global: every domain module can inject ActivityService directly to
@@ -59,7 +60,16 @@ import { StorageModule } from './storage/storage.module';
     RealtimeModule,
   ],
   controllers: [AppController],
-  providers: [AppService, DbLogger],
+  providers: [
+    AppService,
+    DbLogger,
+    // Register ThrottlerGuard globally so every route is rate-limited without
+    // needing @UseGuards(ThrottlerGuard) on each controller.
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
+  ],
 })
 export class AppModule implements NestModule {
   // Authentication/authorization is enforced per-controller via

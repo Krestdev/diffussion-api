@@ -12,6 +12,8 @@ export enum PermissionCode {
 
   // Courriers (7.6.4.2)
   CourrierRegisterEntrant = 'COURRIER_REGISTER_ENTRANT',
+  CourrierDispatch = 'COURRIER_DISPATCH',
+  CourrierDispatchValidate = 'COURRIER_DISPATCH_VALIDATE',
   CourrierWriteSortant = 'COURRIER_WRITE_SORTANT',
   CourrierUpdateDraft = 'COURRIER_UPDATE_DRAFT',
   CourrierSend = 'COURRIER_SEND',
@@ -73,6 +75,8 @@ export const PERMISSION_LABELS: Record<PermissionCode, string> = {
   [PermissionCode.DossierReopen]: 'Rouvrir un dossier',
   [PermissionCode.DossierArchive]: 'Archiver un dossier',
   [PermissionCode.CourrierRegisterEntrant]: 'Enregistrer un effet entrant',
+  [PermissionCode.CourrierDispatch]: 'Dispatcher un effet entrant',
+  [PermissionCode.CourrierDispatchValidate]: 'Valider un dispatching',
   [PermissionCode.CourrierWriteSortant]: 'Rédiger un effet sortant',
   [PermissionCode.CourrierUpdateDraft]: "Modifier un brouillon d'effet",
   [PermissionCode.CourrierSend]: 'Envoyer un effet sortant',

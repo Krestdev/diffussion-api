@@ -27,6 +27,7 @@ import {
 } from '../../auth/types/jwt-payload.type';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { ArchiveReasonDto } from '../../common/dto/archive-reason.dto';
 import { DossierService } from './dossier.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
 import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
@@ -94,8 +95,11 @@ export class DossierController {
 
   @Post(':id/archive')
   @RequirePermission(PermissionCode.DossierArchive)
-  archive(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierService.archive(id);
+  archive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ArchiveReasonDto,
+  ) {
+    return this.dossierService.archive(id, dto.reason);
   }
 
   @Post(':id/unarchive')

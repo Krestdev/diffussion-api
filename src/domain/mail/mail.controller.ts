@@ -3,18 +3,22 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
   Put,
   Query,
+  Res,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
@@ -38,6 +42,8 @@ import { FindMailsQueryDto } from './dto/find-mails.query.dto';
 import { FindOutgoingMailsQueryDto } from './dto/find-outgoing-mails.query.dto';
 import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 import { UpdateMailDto } from './dto/update-mail.dto';
+import { DispatchMailDto } from './dto/dispatch-mail.dto';
+import { AssignSupervisorDto } from './dto/assign-supervisor.dto';
 import { MailService } from './mail.service';
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
@@ -140,9 +146,42 @@ export class MailController {
     return this.mailService.findAwaitingMyValidation(user.sub);
   }
 
+  // Declared before @Get(':id') so static segments aren't parsed as UUIDs.
+  @Get('entrants/export')
+  @RequirePermission(PermissionCode.CourrierRead)
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async exportIncoming(
+    @Query() query: FindIncomingMailsQueryDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @Res() res: Response,
+  ) {
+    const csv = await this.mailService.exportIncoming(query, user.sub);
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="effets-entrants.csv"',
+    );
+    res.end(csv);
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.mailService.findOne(id);
+  }
+
+  @Get(':id/historique')
+  @RequirePermission(PermissionCode.CourrierRead)
+  historique(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @Query('skip') skip?: string,
+    @Query('take') take?: string,
+  ) {
+    return this.mailService.historique(
+      id,
+      user.sub,
+      skip ? parseInt(skip, 10) : 0,
+      take ? parseInt(take, 10) : 20,
+    );
   }
 
   @Patch(':id')
@@ -167,6 +206,35 @@ export class MailController {
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
     return this.mailService.transmit(id, user.sub);
+  }
+
+  @Post(':id/dispatch')
+  @RequirePermission(PermissionCode.CourrierRead)
+  dispatch(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DispatchMailDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.dispatch(id, dto, user.sub);
+  }
+
+  @Post(':id/dispatch/validate')
+  @RequirePermission(PermissionCode.CourrierDispatchValidate)
+  validateDispatch(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.validateDispatch(id, user.sub);
+  }
+
+  @Post(':id/supervisor')
+  @RequirePermission(PermissionCode.CourrierRead)
+  assignSupervisor(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AssignSupervisorDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.assignSupervisor(id, dto, user.sub);
   }
 
   // Sends the courrier to its validator (the dossier's responsible, or the

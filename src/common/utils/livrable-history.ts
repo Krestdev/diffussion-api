@@ -8,17 +8,36 @@ type Version = {
   isLatest: boolean;
 };
 
-// A livrable's latest supervisor decision, with its motif when rejected.
-export const lastLivrableValidation = {
+// A livrable's decisions and opinions, latest first: the validateur's AVIS
+// (with its comment) and the superviseur's decisions (with their motif
+// when rejected).
+export const livrableValidations = {
   orderBy: { decidedAt: 'desc' },
-  take: 1,
   select: {
     decision: true,
     motif: true,
+    comment: true,
     decidedAt: true,
     validator: { select: { id: true, name: true } },
   },
 } satisfies Prisma.Livrable$validationsArgs;
+
+// A task's livrables in the order they were entered (position), the
+// identifier settling livrables of the same position for a stable order.
+export const livrableOrder = [
+  { position: 'asc' },
+  { version: 'asc' },
+  { id: 'asc' },
+] satisfies Prisma.LivrableOrderByWithRelationInput[];
+
+// The position of a livrable added to a task now: after all the others.
+export async function nextLivrablePosition(db: Db, instructionId: string) {
+  const { _max } = await db.livrable.aggregate({
+    where: { instructionId },
+    _max: { position: true },
+  });
+  return _max.position === null ? 0 : _max.position + 1;
+}
 
 // Earlier versions of `livrable`, most recent first, found in `byId`.
 function historyOf<H extends Version>(

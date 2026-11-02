@@ -42,19 +42,33 @@ function requireEnv(name: string): string {
 export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
   private readonly client: S3Client;
+  private readonly publicClient: S3Client;
   private readonly bucket: string;
 
   constructor() {
     this.bucket = requireEnv('RUSTFS_BUCKET');
+    const credentials = {
+      accessKeyId: requireEnv('RUSTFS_ACCESS_KEY'),
+      secretAccessKey: requireEnv('RUSTFS_SECRET_KEY'),
+    };
     this.client = new S3Client({
       endpoint: requireEnv('RUSTFS_ENDPOINT'),
       region: process.env.RUSTFS_REGION ?? 'us-east-1',
       forcePathStyle: true,
-      credentials: {
-        accessKeyId: requireEnv('RUSTFS_ACCESS_KEY'),
-        secretAccessKey: requireEnv('RUSTFS_SECRET_KEY'),
-      },
+      credentials,
     });
+    // Presigned URLs must be signed with the endpoint the client will actually
+    // call — the host is part of the signature. Use a dedicated client pointed
+    // at the public endpoint when one is configured.
+    const publicEndpoint = process.env.RUSTFS_PUBLIC_ENDPOINT;
+    this.publicClient = publicEndpoint
+      ? new S3Client({
+          endpoint: publicEndpoint,
+          region: process.env.RUSTFS_REGION ?? 'us-east-1',
+          forcePathStyle: true,
+          credentials,
+        })
+      : this.client;
   }
 
   /**
@@ -127,7 +141,7 @@ export class StorageService implements OnModuleInit {
 
   getSignedDownloadUrl(key: string, expiresInSeconds = 900): Promise<string> {
     return getSignedUrl(
-      this.client,
+      this.publicClient,
       new GetObjectCommand({ Bucket: this.bucket, Key: key }),
       { expiresIn: expiresInSeconds },
     );

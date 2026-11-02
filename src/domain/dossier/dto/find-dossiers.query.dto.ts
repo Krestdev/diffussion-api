@@ -29,6 +29,16 @@ export class FindDossiersQueryDto {
   @IsUUID()
   responsibleId?: string;
 
+  @ApiPropertyOptional({ description: 'Only the dossiers of this project' })
+  @IsOptional()
+  @IsUUID()
+  projectId?: string;
+
+  @ApiPropertyOptional({ description: 'Only the dossiers of this contract' })
+  @IsOptional()
+  @IsUUID()
+  contractId?: string;
+
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()
   @Type(() => Number)

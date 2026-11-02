@@ -94,30 +94,38 @@ model User {
   // Restrict: a site can't be deleted while users still belong to it.
   site Site? @relation("SiteUsers", fields: [siteId], references: [id], onDelete: Restrict)
 
-  userRoles         UserRole[]
-  userInstructions  UserInstructions[]
-  userNotifications UserNotification[]
-  validations       Validation[]
-  subscriptions     InstructionSubscription[]
+  userRoles               UserRole[]
+  userInstructions        UserInstructions[]
+  userNotifications       UserNotification[]
+  validations             Validation[]
+  subscriptions           InstructionSubscription[]
+  notificationPreferences NotificationPreference[]
 
-  managedSites        Site[]               @relation("SiteManager")
-  responsibleDossiers Dossier[]            @relation("DossierResponsible")
-  createdDossiers     Dossier[]            @relation("DossierCreatedBy")
-  createdCourriers    Courrier[]           @relation("CourrierCreatedBy")
-  dischargedCourriers Courrier[]           @relation("CourrierDischargedBy")
-  ownedCourriers      Courrier[]           @relation("CourrierOwner")
-  createdInstructions Instruction[]        @relation("InstructionCreatedBy")
-  createdLivrables    Livrable[]           @relation("LivrableCreatedBy")
-  uploadedDocuments   Document[]           @relation("DocumentUploadedBy")
-  ownedDocuments      Document[]           @relation("DocumentOwner")
-  delegationsGiven    Delegation[]         @relation("DelegationDelegant")
-  delegationsReceived Delegation[]         @relation("DelegationDelegataire")
-  dossierAccesses     DossierAccess[]
-  courrierAccesses    CourrierAccess[]
-  documentAccesses    DocumentAccess[]
-  passwordResetTokens PasswordResetToken[]
-  analysisSheets      AnalysisSheet[]      @relation("AnalysisSheetAuthor")
-  analysisDecisions   AnalysisSheet[]      @relation("AnalysisSheetDecidedBy")
+  managedSites               Site[]               @relation("SiteManager")
+  responsibleDossiers        Dossier[]            @relation("DossierResponsible")
+  responsibleProjects        Project[]            @relation("ProjectResponsible")
+  createdDossiers            Dossier[]            @relation("DossierCreatedBy")
+  createdCourriers           Courrier[]           @relation("CourrierCreatedBy")
+  dischargedCourriers        Courrier[]           @relation("CourrierDischargedBy")
+  ownedCourriers             Courrier[]           @relation("CourrierOwner")
+  supervisedCourriers        Courrier[]           @relation("CourrierSupervisor")
+  proposedCourriers          Courrier[]           @relation("CourrierProposedBy")
+  dispatchValidatedCourriers Courrier[]           @relation("CourrierDispatchValidatedBy")
+  createdInstructions        Instruction[]        @relation("InstructionCreatedBy")
+  createdLivrables           Livrable[]           @relation("LivrableCreatedBy")
+  uploadedDocuments          Document[]           @relation("DocumentUploadedBy")
+  ownedDocuments             Document[]           @relation("DocumentOwner")
+  delegationsGiven           Delegation[]         @relation("DelegationDelegant")
+  delegationsReceived        Delegation[]         @relation("DelegationDelegataire")
+  dossierAccesses            DossierAccess[]
+  courrierAccesses           CourrierAccess[]
+  projectAccesses            ProjectAccess[]
+  contractAccesses           ContractAccess[]
+  responsibleContracts       Contract[]           @relation("ContractResponsible")
+  documentAccesses           DocumentAccess[]
+  passwordResetTokens        PasswordResetToken[]
+  analysisSheets             AnalysisSheet[]      @relation("AnalysisSheetAuthor")
+  analysisDecisions          AnalysisSheet[]      @relation("AnalysisSheetDecidedBy")
 
   @@index([siteId])
   @@map("user")
@@ -358,6 +366,7 @@ model Correspondent {
   type            CorrespondentType? @relation(fields: [typeId], references: [id])
   courriers       Courrier[]
   maitreOuvrageOf Project[]          @relation("ProjectMaitreOuvrage")
+  clientOf        Contract[]         @relation("ContractClient")
 
   @@map("correspondent")
 }
@@ -397,6 +406,8 @@ model Dossier {
   categoryId      String?
   /// Optional grouping of dossiers under a wider project/programme.
   projectId       String?
+  /// The contract this dossier is carried out under, if any.
+  contractId      String?
   /// RG-DOS-003: exactly one owning site.
   siteId          String
   /// RG-DOS-004: always has a responsible at any instant.
@@ -413,6 +424,8 @@ model Dossier {
   dueDate        DateTime?
   closedAt       DateTime?
   archivedAt     DateTime?
+  /// Why the dossier was archived (given when archiving).
+  archiveReason  String?
   /// RG-ARC-001: openedAt + the category's retentionMonths, fixed at
   /// creation (recomputed if the category changes). Null = no retention rule.
   retentionUntil DateTime?
@@ -422,6 +435,7 @@ model Dossier {
 
   category    Category? @relation(fields: [categoryId], references: [id])
   project     Project?  @relation(fields: [projectId], references: [id])
+  contract    Contract? @relation(fields: [contractId], references: [id], onDelete: Restrict)
   site        Site      @relation(fields: [siteId], references: [id])
   responsible User?     @relation("DossierResponsible", fields: [responsibleId], references: [id])
   createdBy   User?     @relation("DossierCreatedBy", fields: [createdById], references: [id])
@@ -441,23 +455,132 @@ model Dossier {
 /// A wider project/programme a dossier can optionally be tagged under —
 /// purely organisational, carries no workflow of its own.
 model Project {
-  id              String   @id @default(uuid())
-  name            String   @unique @db.VarChar(200)
+  id              String        @id @default(uuid())
+  name            String        @unique @db.VarChar(200)
   /// "Réf Projet" on an analysis sheet.
-  reference       String?  @db.VarChar(50)
+  reference       String?       @db.VarChar(50)
   /// "Mode" (ex. marché public, gré à gré...).
-  mode            String?  @db.VarChar(100)
+  mode            String?       @db.VarChar(100)
   /// Maître d'ouvrage: the party the project is carried out for (ex. Port
   /// Autonome de Douala) — an external correspondent.
   maitreOuvrageId String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  /// Who answers for the project.
+  responsibleId   String?
+  /// ACTIVE -> CLOSED -> ARCHIVED; closedAt / archivedAt record when.
+  status          ProjectStatus @default(ACTIVE)
+  startDate       DateTime?
+  endDate         DateTime?
+  closedAt        DateTime?
+  archivedAt      DateTime?
+  /// Why the project was archived (given when archiving).
+  archiveReason   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
   maitreOuvrage  Correspondent?  @relation("ProjectMaitreOuvrage", fields: [maitreOuvrageId], references: [id])
+  responsible    User?           @relation("ProjectResponsible", fields: [responsibleId], references: [id], onDelete: SetNull)
   dossiers       Dossier[]
+  contracts      Contract[]
+  courriers      Courrier[]
   analysisSheets AnalysisSheet[]
+  /// Who may open the project; nobody listed = everyone (see ProjectAccess).
+  accesses       ProjectAccess[]
 
+  @@index([status])
+  @@index([responsibleId])
   @@map("project")
+}
+
+enum ProjectStatus {
+  ACTIVE
+  CLOSED
+  ARCHIVED
+}
+
+/// A contract (marché) a set of dossiers is carried out under. Optionally
+/// part of a project; a dossier under a contract belongs to that contract's
+/// project.
+model Contract {
+  id              String         @id @default(uuid())
+  /// System-generated reference (CT-xxxxxx).
+  number          String         @unique @db.VarChar(30)
+  title           String         @db.VarChar(200)
+  /// The contract's own reference, e.g. its marché number.
+  reference       String?        @db.VarChar(100)
+  description     String?
+  projectId       String?
+  status          ContractStatus @default(ACTIVE)
+  type            ContractType?
+  amount          Decimal?       @db.Decimal(15, 2)
+  signedAt        DateTime?
+  /// Reference of the tender (appel d'offres) the contract came from.
+  tenderReference String?        @db.VarChar(100)
+  /// The party the contract is carried out for — a correspondent.
+  clientId        String?
+  responsibleId   String?
+  startDate       DateTime?
+  endDate         DateTime?
+  archivedAt      DateTime?
+  archiveReason   String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  project      Project?         @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  client       Correspondent?   @relation("ContractClient", fields: [clientId], references: [id])
+  responsible  User?            @relation("ContractResponsible", fields: [responsibleId], references: [id], onDelete: SetNull)
+  dossiers     Dossier[]
+  courriers    Courrier[]
+  documents    Document[]
+  instructions Instruction[]    @relation("InstructionContract")
+  /// Who may open the contract; nobody listed = everyone (see ContractAccess).
+  accesses     ContractAccess[]
+
+  @@index([projectId])
+  @@index([status])
+  @@map("contract")
+}
+
+enum ContractStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum ContractType {
+  MOE
+  AMO
+  TRAVAUX
+  ETUDES
+  CONTROLE
+  AUTRE
+}
+
+/// A user allowed to open a project. A project nobody is listed on is open
+/// to everyone; its responsible and platform administrators always may.
+model ProjectAccess {
+  projectId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, userId])
+  @@index([userId])
+  @@map("project_access")
+}
+
+/// Same as ProjectAccess, for a contract.
+model ContractAccess {
+  contractId String
+  userId     String
+  createdAt  DateTime @default(now())
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([contractId, userId])
+  @@index([userId])
+  @@map("contract_access")
 }
 
 /// Explicit per-user grant on a dossier, on top of its `confidentiality`.
@@ -493,6 +616,10 @@ enum CourrierStatus {
   EN_TRAITEMENT
   EN_ATTENTE
   BROUILLON
+  /// An entrant whose dispatching (project, contract or dossier) was
+  /// proposed by someone without the dispatch permission: waits for the
+  /// Dispatching corridor to validate it -> TRANSMIS.
+  EN_ATTENTE_TRANSMISSION
   /// Submitted, awaiting its validator's decision (the dossier's
   /// responsible, or the site's) — VALIDE or A_CORRIGER.
   EN_ATTENTE_VALIDATION
@@ -513,6 +640,9 @@ model Courrier {
   /// System-generated internal registration number (10.2.4.2).
   number          String            @unique @db.VarChar(30)
   dossierId       String?
+  projectId       String?
+  contractId      String?
+  supervisorId    String?
   direction       CourrierDirection
   correspondentId String?
   natureId        String?
@@ -559,23 +689,39 @@ model Courrier {
   /// not cascaded, if that courrier is deleted.
   respondsToId String?
 
+  proposedProjectId  String?
+  proposedContractId String?
+  proposedDossierId  String?
+  proposedById       String?
+  proposedAt         DateTime?
+
+  dispatchValidatedById String?
+  dispatchValidatedAt   DateTime?
+  supervisorDueDate     DateTime?
+  supervisorNote        String?
+
   createdById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  respondsTo    Courrier?       @relation("CourrierResponses", fields: [respondsToId], references: [id], onDelete: SetNull)
-  responses     Courrier[]      @relation("CourrierResponses")
-  type          EffetType?      @relation(fields: [typeId], references: [id], onDelete: Restrict)
+  respondsTo          Courrier?       @relation("CourrierResponses", fields: [respondsToId], references: [id], onDelete: SetNull)
+  responses           Courrier[]      @relation("CourrierResponses")
+  type                EffetType?      @relation(fields: [typeId], references: [id], onDelete: Restrict)
   // SetNull: deleting a bordereau leaves the effets it listed in place.
-  parent        Courrier?       @relation("BordereauEffets", fields: [parentId], references: [id], onDelete: SetNull)
-  children      Courrier[]      @relation("BordereauEffets")
-  dossier       Dossier?        @relation(fields: [dossierId], references: [id], onDelete: Restrict)
-  correspondent Correspondent?  @relation(fields: [correspondentId], references: [id])
-  nature        CourrierNature? @relation(fields: [natureId], references: [id])
-  canal         Canal?          @relation(fields: [canalId], references: [id])
-  createdBy     User?           @relation("CourrierCreatedBy", fields: [createdById], references: [id])
-  dischargedBy  User?           @relation("CourrierDischargedBy", fields: [dischargedById], references: [id])
-  owner         User?           @relation("CourrierOwner", fields: [ownerId], references: [id])
+  parent              Courrier?       @relation("BordereauEffets", fields: [parentId], references: [id], onDelete: SetNull)
+  children            Courrier[]      @relation("BordereauEffets")
+  dossier             Dossier?        @relation(fields: [dossierId], references: [id], onDelete: Restrict)
+  project             Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  contract            Contract?       @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  supervisor          User?           @relation("CourrierSupervisor", fields: [supervisorId], references: [id], onDelete: SetNull)
+  proposedBy          User?           @relation("CourrierProposedBy", fields: [proposedById], references: [id], onDelete: SetNull)
+  dispatchValidatedBy User?           @relation("CourrierDispatchValidatedBy", fields: [dispatchValidatedById], references: [id], onDelete: SetNull)
+  correspondent       Correspondent?  @relation(fields: [correspondentId], references: [id])
+  nature              CourrierNature? @relation(fields: [natureId], references: [id])
+  canal               Canal?          @relation(fields: [canalId], references: [id])
+  createdBy           User?           @relation("CourrierCreatedBy", fields: [createdById], references: [id])
+  dischargedBy        User?           @relation("CourrierDischargedBy", fields: [dischargedById], references: [id])
+  owner               User?           @relation("CourrierOwner", fields: [ownerId], references: [id])
 
   documents      Document[]
   instructions   Instruction[]
@@ -592,6 +738,8 @@ model Courrier {
 
   @@index([typeId])
   @@index([parentId])
+  @@index([projectId])
+  @@index([contractId])
   @@map("courrier")
 }
 
@@ -622,6 +770,7 @@ enum InstructionPriority {
   URGENT
   NORMAL
   MEDIUM
+  LOW
 }
 
 enum InstructionStatus {
@@ -642,6 +791,9 @@ enum InstructionStatus {
 enum UserInstructionRole {
   EXECUTANT
   SUPERVISEUR
+  /// Optional: gives their opinion (AVIS) on each submitted livrable
+  /// before the superviseur decides. Never decides. One per task at most.
+  VALIDATEUR
 }
 
 /// Action (or set of actions) confided to collaborators as part of treating a
@@ -651,7 +803,9 @@ model Instruction {
   id                     String              @id @default(uuid())
   /// System-generated, human-readable reference (matches Dossier/Courrier).
   number                 String              @unique @db.VarChar(30)
-  dossierId              String
+  /// Exactly one of dossierId / contractId must be set (enforced in service).
+  dossierId              String?
+  contractId             String?
   courrierId             String?
   title                  String              @db.VarChar(200)
   description            String?
@@ -674,12 +828,19 @@ model Instruction {
   /// Summary of the corrections last requested on its livrables. The
   /// motifs of non-subscriptions live in InstructionSubscription.
   refusalReason          String?
+  /// Free-text note recorded when the task is (re)assigned.
+  assignNote             String?
+  /// Reason provided when the task is cancelled.
+  cancellationReason     String?
+  /// Comment recorded when the task is closed (TERMINEE).
+  closingComment         String?
   createdById            String?
   createdAt              DateTime            @default(now())
   updatedAt              DateTime            @updatedAt
   closedAt               DateTime?
 
-  dossier   Dossier   @relation(fields: [dossierId], references: [id])
+  dossier   Dossier?  @relation(fields: [dossierId], references: [id])
+  contract  Contract? @relation("InstructionContract", fields: [contractId], references: [id])
   courrier  Courrier? @relation(fields: [courrierId], references: [id])
   createdBy User?     @relation("InstructionCreatedBy", fields: [createdById], references: [id])
 
@@ -694,6 +855,7 @@ model Instruction {
   dependsOn  InstructionDependency[] @relation("Dependent")
   dependents InstructionDependency[] @relation("Dependency")
 
+  @@index([contractId])
   @@map("instruction")
 }
 
@@ -764,6 +926,13 @@ model Livrable {
   title           String         @db.VarChar(200)
   description     String?
   status          LivrableStatus @default(EN_PREPARATION)
+  /// Its rank among the task's livrables, in the order they were entered
+  /// (0, 1, 2...; added later: after the others). Kept by its new versions.
+  position        Int            @default(0)
+  /// While SOUMIS: 0 = awaits the validateur's opinion (AVIS), 1 = awaits
+  /// the superviseur's decision. A task without a validateur: its
+  /// superviseur decides from 0. Back to 0 at each submission.
+  validationStep  Int            @default(0)
   version         Int            @default(1)
   /// False once a newer version replaces this one. History is linear:
   /// only the latest version, once REJETE, can get a new version.
@@ -772,6 +941,8 @@ model Livrable {
   createdById     String?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
+  /// Optional comment from the agent when depositing the livrable.
+  agentComment    String?
 
   instruction   Instruction @relation(fields: [instructionId], references: [id])
   parentVersion Livrable?   @relation("LivrableVersions", fields: [parentVersionId], references: [id])
@@ -792,6 +963,9 @@ enum ValidationDecision {
   VALIDE
   REJETE
   CORRECTIONS_DEMANDEES
+  /// The validateur's opinion on a livrable (its `comment`): no decision —
+  /// the superviseur decides after it.
+  AVIS
 }
 
 /// A validation decision (10.6). Applies to an instruction (and, through it,
@@ -810,6 +984,8 @@ model Validation {
   /// The task's cycle the decision was made in (Instruction.cycle).
   cycle           Int?
   motif           String?
+  /// The validateur's opinion, with an AVIS.
+  comment         String?
   decidedAt       DateTime           @default(now())
 
   instruction   Instruction?   @relation(fields: [instructionId], references: [id])
@@ -843,6 +1019,7 @@ model Document {
   dossierId  String?
   courrierId String?
   livrableId String?
+  contractId String?
 
   uploadedById String?
   createdAt    DateTime @default(now())
@@ -853,6 +1030,7 @@ model Document {
   dossier    Dossier?  @relation(fields: [dossierId], references: [id])
   courrier   Courrier? @relation(fields: [courrierId], references: [id])
   livrable   Livrable? @relation(fields: [livrableId], references: [id])
+  contract   Contract? @relation(fields: [contractId], references: [id], onDelete: Restrict)
   uploadedBy User?     @relation("DocumentUploadedBy", fields: [uploadedById], references: [id])
   owner      User?     @relation("DocumentOwner", fields: [ownerId], references: [id])
 
@@ -929,6 +1107,20 @@ model UserNotification {
 
   @@id([userId, notificationId])
   @@map("user_notification")
+}
+
+/// A notification type a user chose not to receive (opt-out: no row means
+/// they get it). See NOTIFICATION_TYPES for the types one can turn off.
+model NotificationPreference {
+  userId    String
+  type      String   @db.VarChar(50)
+  enabled   Boolean
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, type])
+  @@map("notification_preference")
 }
 
 // ---------------------------------------------------------------------------

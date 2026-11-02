@@ -1,0 +1,3 @@
+-- AlterEnum
+ALTER TYPE "CourrierStatus" ADD VALUE 'EN_ATTENTE_TRANSMISSION';
+

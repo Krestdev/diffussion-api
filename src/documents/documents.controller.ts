@@ -45,10 +45,16 @@ export class DocumentsController {
       required: ['file'],
       properties: {
         file: { type: 'string', format: 'binary' },
-        name: { type: 'string', maxLength: 200, description: 'Human-readable display name (defaults to filename if omitted)' },
+        name: {
+          type: 'string',
+          maxLength: 200,
+          description:
+            'Human-readable display name (defaults to filename if omitted)',
+        },
         dossierId: { type: 'string', format: 'uuid' },
         courrierId: { type: 'string', format: 'uuid' },
         livrableId: { type: 'string', format: 'uuid' },
+        contractId: { type: 'string', format: 'uuid' },
       },
     },
   })

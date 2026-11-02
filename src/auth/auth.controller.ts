@@ -8,7 +8,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -29,7 +29,6 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   // Brute-force protection: 5 attempts per minute per client IP.
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -39,7 +38,6 @@ export class AuthController {
 
   // Always 204, whether or not the address exists — the endpoint must not
   // reveal which emails have an account.
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('forgot-password')
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -47,7 +45,6 @@ export class AuthController {
     await this.authService.forgotPassword(dto);
   }
 
-  @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('reset-password')
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -55,7 +52,7 @@ export class AuthController {
     await this.authService.resetPassword(dto);
   }
 
-  @UseGuards(ThrottlerGuard, JwtRefreshGuard)
+  @UseGuards(JwtRefreshGuard)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @ApiBearerAuth()
   @Post('refresh')

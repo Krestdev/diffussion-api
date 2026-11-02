@@ -1,5 +1,5 @@
-# Local infrastructure for diffussion-api: PostgreSQL, Redis (BullMQ) and
-# RustFS (S3-compatible file storage).
+# Local infrastructure for diffussion-api: PostgreSQL and RustFS
+# (S3-compatible file storage).
 #
 # Credentials come from .env (loaded automatically by Docker Compose):
 #   POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB  -> must match DATABASE_URL
@@ -7,7 +7,6 @@
 #
 # Host ports match the API's .env:
 #   DATABASE_URL    postgresql://...@localhost:5433/diffusion
-#   REDIS_URL       redis://localhost:6380
 #   RUSTFS_ENDPOINT http://localhost:9001   (RustFS web console on :9002)
 #
 # Start:  docker compose up -d
@@ -34,22 +33,6 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    container_name: diffussion-redis
-    restart: unless-stopped
-    # Append-only file so queued BullMQ jobs survive a container restart.
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "6380:6379"
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   rustfs:
     image: rustfs/rustfs:latest
     container_name: diffussion-rustfs
@@ -69,5 +52,4 @@ services:
 
 volumes:
   postgres-data:
-  redis-data:
   rustfs-data:

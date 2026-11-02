@@ -6,7 +6,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  ContractStatus,
+  CourrierStatus,
   InstructionStatus,
+  Livrable,
   LivrableStatus,
   NotificationCanal,
   Prisma,
@@ -16,7 +19,10 @@ import {
 } from '../../generated/prisma/client';
 import { DEFAULT_TAKE } from '../common/dto/pagination.query.dto';
 import { dateRange } from '../common/utils/date-range';
-import { lastLivrableValidation } from '../common/utils/livrable-history';
+import {
+  livrableOrder,
+  livrableValidations,
+} from '../common/utils/livrable-history';
 import { createWithUniqueReference } from '../common/utils/generate-reference';
 import {
   assertDossierOpenForActivity,
@@ -25,6 +31,7 @@ import {
 } from '../common/utils/dossier-lifecycle';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { ActivityService } from '../activity/activity.service';
 import { AssignInstructionDto } from './dto/assign-instruction.dto';
 import { CreateInstructionsDto } from './dto/create-instruction.dto';
 import { FindInstructionsQueryDto } from './dto/find-instructions.query.dto';
@@ -37,6 +44,11 @@ import { DeclineSubscriptionDto } from './dto/decline-subscription.dto';
 import { overdueWhere, withOverdue } from './instruction-overdue';
 import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 import { UpdateInstructionDto } from './dto/update-instruction.dto';
+import { PermissionCode } from '../auth/rbac/rbac.constants';
+import { RbacService } from '../auth/rbac/rbac.service';
+import { visibleContractWhere } from '../common/utils/referential-access';
+import { StorageService } from '../storage/storage.service';
+import { DeposerLivrablesDto } from './dto/deposer-livrables.dto';
 
 const dependencyRefSelect = { id: true, number: true, title: true } as const;
 
@@ -57,10 +69,11 @@ const instructionInclude = {
     orderBy: { decidedAt: 'desc' },
   },
   livrables: {
-    include: { validations: lastLivrableValidation },
-    orderBy: { createdAt: 'asc' },
+    include: { validations: livrableValidations, documents: true },
+    orderBy: livrableOrder,
   },
   dossier: { select: { id: true, number: true, title: true } },
+  contract: { select: { id: true, number: true, title: true } },
   courrier: { select: { id: true, number: true, subject: true } },
   // Sub-tasks (parentTask in the frontend's AddTaskDialog): the parent
   // task(s) this one depends on, and the task(s) that depend on it — a
@@ -79,11 +92,18 @@ function statusOnAssignment(executantIds?: string[]): InstructionStatus {
 
 function assignmentRows(dto: {
   executantIds?: string[];
+  validateurId?: string;
   superviseurId?: string;
 }) {
   const rows: Prisma.UserInstructionsCreateManyInstructionInput[] = [];
   for (const userId of dto.executantIds ?? []) {
     rows.push({ userId, role: UserInstructionRole.EXECUTANT });
+  }
+  if (dto.validateurId) {
+    rows.push({
+      userId: dto.validateurId,
+      role: UserInstructionRole.VALIDATEUR,
+    });
   }
   if (dto.superviseurId) {
     rows.push({
@@ -92,6 +112,69 @@ function assignmentRows(dto: {
     });
   }
   return rows;
+}
+
+/**
+ * Who handles a task's submitted livrables: its validateur (optional) gives
+ * their opinion first (AVIS, Livrable.validationStep 0 -> 1); its
+ * superviseur then decides — conforme, or corrections (validationStep 1, or
+ * from 0 when there is no validateur). A task without a superviseur is
+ * decided by its creator. Corrected, a livrable starts again from the
+ * validateur.
+ */
+export function validationChain(instruction: {
+  createdById: string | null;
+  assignees: { role: UserInstructionRole; user: { id: string } }[];
+}) {
+  const of = (role: UserInstructionRole) =>
+    instruction.assignees.find((assignee) => assignee.role === role)?.user.id;
+  return {
+    validateur: of(UserInstructionRole.VALIDATEUR),
+    decider: of(UserInstructionRole.SUPERVISEUR) ?? instruction.createdById,
+  };
+}
+
+// Waiting for the validateur's opinion, not yet for a decision.
+function awaitsAvis(
+  chain: ReturnType<typeof validationChain>,
+  livrable: { validationStep: number },
+) {
+  return Boolean(chain.validateur) && livrable.validationStep === 0;
+}
+
+// Only the superviseur decides, and only once the validateur gave their
+// opinion (when the task has one).
+function assertDecider(
+  instruction: Parameters<typeof validationChain>[0],
+  livrables: { title: string; validationStep: number }[],
+  userId: string,
+) {
+  const chain = validationChain(instruction);
+  if (chain.decider !== userId) {
+    throw new ForbiddenException(
+      chain.validateur === userId
+        ? 'The validateur gives their opinion (PATCH /deliverables/:id/avis): only the superviseur decides'
+        : "Only this task's superviseur decides on its livrables",
+    );
+  }
+  const waiting = livrables.filter((livrable) => awaitsAvis(chain, livrable));
+  if (waiting.length) {
+    throw new ForbiddenException(
+      `Awaiting the validateur's opinion: ${waiting.map((l) => l.title).join(', ')}`,
+    );
+  }
+}
+
+// The validateur judges the executants' work: never one of them.
+function assertValidateurApart(
+  validateurId: string | undefined,
+  executantIds: string[] | undefined,
+) {
+  if (validateurId && executantIds?.includes(validateurId)) {
+    throw new BadRequestException(
+      'The validateur cannot be one of the executants',
+    );
+  }
 }
 
 // Work has started: changing the request now opens a new cycle (H12).
@@ -124,10 +207,129 @@ export class InstructionsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly notifications: NotificationsService,
+    private readonly activity: ActivityService,
+    private readonly storage: StorageService,
+    private readonly rbac: RbacService,
   ) {}
 
+  /**
+   * Who may prepare, edit or remove a task's livrables: the executant who
+   * subscribed to it — that engagement is their right to work on it,
+   * whatever their role — or anyone holding every one of `permissions` at
+   * the task's site. Depositing and submitting are the subscriber's alone
+   * (assertSubscriber).
+   */
+  async assertMayWorkOn(
+    instructionId: string,
+    userId: string,
+    permissions: PermissionCode[],
+  ) {
+    const instruction = await this.database.instruction.findUnique({
+      where: { id: instructionId },
+      select: { dossier: { select: { siteId: true } } },
+    });
+    if (!instruction) {
+      throw new NotFoundException(`Instruction ${instructionId} not found`);
+    }
+    if (await this.isSubscriber(instructionId, userId)) {
+      return;
+    }
+    const siteId = instruction.dossier?.siteId;
+    for (const permission of permissions) {
+      const granted = siteId
+        ? await this.rbac.hasPermissionAtSite(userId, permission, siteId)
+        : await this.rbac.hasPermission(userId, permission);
+      if (!granted) {
+        throw new ForbiddenException(
+          `Missing permission${siteId ? ' at this site' : ''}: ${permission} — or be an executant of this task once subscribed to`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Only the executant who subscribed to a task hands its livrables in
+   * (deposit, submit) — and, after corrections, hands them in again. Its
+   * other executants and permission holders don't.
+   */
+  async assertSubscriber(instructionId: string, userId: string) {
+    if (!(await this.isSubscriber(instructionId, userId))) {
+      throw new ForbiddenException(
+        'Only the executant who subscribed to this task can hand its livrables in',
+      );
+    }
+  }
+
+  // Subscribed to the task, and still one of its executants (one taken off
+  // it by a reassignment no longer is).
+  private async isSubscriber(instructionId: string, userId: string) {
+    const count = await this.database.instruction.count({
+      where: {
+        id: instructionId,
+        assignees: { some: { userId, role: UserInstructionRole.EXECUTANT } },
+        subscriptions: {
+          some: { userId, decision: SubscriptionDecision.SOUSCRITE },
+        },
+      },
+    });
+    return count > 0;
+  }
+
+  // A task under a contract (no dossier): the contract must exist, be
+  // active, and be one its creator may open — contracts have no site, so
+  // this stands in for the dossier's site check.
+  private async assertContractOpenTo(contractId: string, userId: string) {
+    const contract = await this.database.contract.findUnique({
+      where: { id: contractId },
+      select: { number: true, status: true },
+    });
+    if (!contract) {
+      throw new BadRequestException(`Contract ${contractId} not found`);
+    }
+    if (contract.status === ContractStatus.ARCHIVED) {
+      throw new BadRequestException(
+        `Contract ${contract.number} is archived — no task can be added to it`,
+      );
+    }
+    const isAdmin = await this.rbac.hasGlobalPermission(
+      userId,
+      PermissionCode.AdminManageReferentials,
+    );
+    const visible =
+      isAdmin ||
+      (await this.database.contract.count({
+        where: { id: contractId, ...visibleContractWhere(userId) },
+      })) > 0;
+    if (!visible) {
+      throw new ForbiddenException(
+        `You may not open contract ${contract.number}`,
+      );
+    }
+  }
+
+  private recordEvent(
+    id: string,
+    action: string,
+    metadata?: Record<string, unknown>,
+    message?: string,
+  ) {
+    this.activity
+      .tryRecord({
+        action,
+        entityType: 'Instruction',
+        entityId: id,
+        metadata,
+        message,
+      })
+      .catch(() => undefined);
+  }
+
   private notifyInstruction(
-    instruction: { id: string; dossierId: string; courrierId: string | null },
+    instruction: {
+      id: string;
+      dossierId: string | null;
+      courrierId: string | null;
+    },
     userIds: (string | null | undefined)[],
     event: { type: string; message: string },
     excludeUserId?: string,
@@ -148,7 +350,7 @@ export class InstructionsService {
         type: event.type,
         message: event.message,
         canal: NotificationCanal.IN_APP,
-        dossierId: instruction.dossierId,
+        dossierId: instruction.dossierId ?? undefined,
         courrierId: instruction.courrierId ?? undefined,
       })
       .catch((error: unknown) => {
@@ -160,7 +362,7 @@ export class InstructionsService {
     instruction: {
       id: string;
       title: string;
-      dossierId: string;
+      dossierId: string | null;
       courrierId: string | null;
     },
     userIds: (string | null | undefined)[],
@@ -181,15 +383,41 @@ export class InstructionsService {
     const {
       executantIds,
       superviseurId,
+      validateurId,
       dueDate,
       agentDueDate,
       dependsOnId,
       livrables,
       ...data
     } = dto;
+    assertValidateurApart(validateurId, executantIds);
+
+    if (!data.dossierId && !data.contractId) {
+      throw new BadRequestException('Provide either dossierId or contractId');
+    }
+    if (data.dossierId && data.contractId) {
+      throw new BadRequestException(
+        'Provide either dossierId or contractId, not both',
+      );
+    }
+
     assertDeadlines(toDate(dueDate), toDate(agentDueDate));
-    const hasAssignees = Boolean(executantIds?.length || superviseurId);
-    await assertDossierOpenForActivity(this.database, data.dossierId);
+    if (data.dossierId) {
+      await assertDossierOpenForActivity(this.database, data.dossierId);
+    }
+    if (data.contractId) {
+      await this.assertContractOpenTo(data.contractId, createdById);
+    }
+
+    // No superviseur named: the effet's supervisor, when it has one.
+    let superviseur = superviseurId;
+    if (!superviseur && data.courrierId) {
+      const courrier = await this.database.courrier.findUnique({
+        where: { id: data.courrierId },
+        select: { supervisorId: true },
+      });
+      superviseur = courrier?.supervisorId ?? undefined;
+    }
 
     if (dependsOnId) {
       const parent = await this.database.instruction.findUnique({
@@ -212,13 +440,15 @@ export class InstructionsService {
           // (subscribe());
           // without one yet, a superviseur still has to designate them.
           status: statusOnAssignment(executantIds),
-          assignees: hasAssignees
-            ? {
-                createMany: {
-                  data: assignmentRows({ executantIds, superviseurId }),
-                },
-              }
-            : undefined,
+          assignees: {
+            createMany: {
+              data: assignmentRows({
+                executantIds,
+                validateurId,
+                superviseurId: superviseur,
+              }),
+            },
+          },
           // Sub-tasks: a single parent picked at creation (the frontend's
           // AddTaskDialog exposes one "Tâche parent" field) — the schema
           // itself allows several, this just doesn't expose that yet.
@@ -226,7 +456,8 @@ export class InstructionsService {
           livrables: livrables?.length
             ? {
                 createMany: {
-                  data: livrables.map((l) => ({
+                  data: livrables.map((l, position) => ({
+                    position,
                     title: l.title,
                     description: l.description,
                     createdById,
@@ -239,19 +470,24 @@ export class InstructionsService {
       }),
     );
 
-    if (hasAssignees) {
-      const assigneeIds = [...(executantIds ?? []), superviseurId].filter(
-        (userId): userId is string => Boolean(userId),
-      );
-      await this.ensureViewAccess(assigneeIds, {
-        dossierId: instruction.dossierId,
-        courrierId: instruction.courrierId,
-      });
-      this.notifyAssignment(instruction, assigneeIds, createdById);
-    }
+    const assigneeIds = [
+      ...new Set(
+        [...(executantIds ?? []), validateurId, superviseur].filter(
+          (userId): userId is string => Boolean(userId),
+        ),
+      ),
+    ];
+    await this.ensureViewAccess(assigneeIds, {
+      dossierId: instruction.dossierId,
+      courrierId: instruction.courrierId,
+    });
+    this.notifyAssignment(instruction, assigneeIds, createdById);
 
-    await markDossierInProgress(this.database, instruction.dossierId);
-    await refreshDossierProgress(this.database, instruction.dossierId);
+    if (instruction.dossierId) {
+      await markDossierInProgress(this.database, instruction.dossierId);
+      await refreshDossierProgress(this.database, instruction.dossierId);
+    }
+    this.recordEvent(instruction.id, 'INSTRUCTION_CREEE');
     return instruction;
   }
 
@@ -300,12 +536,60 @@ export class InstructionsService {
     const mine: Prisma.InstructionWhereInput = {
       assignees: { some: { userId, role: query.role } },
     };
-    // "Renvoyées" is the creator's queue: tasks no executant subscribed to
-    // come back to whoever created them.
-    const inTab = (name: TaskTab): Prisma.InstructionWhereInput => ({
-      ...(name === 'renvoyees' ? { createdById: userId } : mine),
-      status: { in: [...TASK_TABS[name]] },
-    });
+    // Once subscribed to, a task is its subscriber's: a co-executant who
+    // didn't subscribe no longer sees it in progress or done. Its validateur
+    // and superviseur still do.
+    const subscribed: Prisma.InstructionWhereInput = {
+      assignees: { some: { userId, role: UserInstructionRole.EXECUTANT } },
+      subscriptions: {
+        some: { userId, decision: SubscriptionDecision.SOUSCRITE },
+      },
+    };
+    const takingPart: Prisma.InstructionWhereInput =
+      query.role === UserInstructionRole.EXECUTANT
+        ? subscribed
+        : query.role
+          ? mine
+          : {
+              OR: [
+                {
+                  assignees: {
+                    some: {
+                      userId,
+                      role: { not: UserInstructionRole.EXECUTANT },
+                    },
+                  },
+                },
+                subscribed,
+              ],
+            };
+    // "Renvoyées": tasks no executant subscribed to come back to their
+    // superviseur, or to their creator when they have none.
+    // "all" ignores the status filter entirely.
+    const sentBack: Prisma.InstructionWhereInput = {
+      OR: [
+        {
+          assignees: {
+            some: { userId, role: UserInstructionRole.SUPERVISEUR },
+          },
+        },
+        {
+          createdById: userId,
+          assignees: { none: { role: UserInstructionRole.SUPERVISEUR } },
+        },
+      ],
+    };
+    const inTab = (name: TaskTab): Prisma.InstructionWhereInput => {
+      const statuses = TASK_TABS[name];
+      return {
+        ...(name === 'renvoyees'
+          ? sentBack
+          : name === 'en-cours' || name === 'terminees'
+            ? takingPart
+            : mine),
+        ...(statuses ? { status: { in: [...statuses] } } : {}),
+      };
+    };
 
     const contains = query.search
       ? { contains: query.search, mode: 'insensitive' as const }
@@ -317,6 +601,7 @@ export class InstructionsService {
           status: query.status,
           priority: query.priority,
           dossierId: query.dossierId,
+          contractId: query.contractId,
           ...(query.overdue ? overdueWhere(new Date()) : {}),
           createdAt: dateRange(query.createdFrom, query.createdTo),
         },
@@ -335,20 +620,67 @@ export class InstructionsService {
       ],
     };
 
-    const [data, total, inProgress, completed, returned] =
-      await this.database.$transaction([
-        this.database.instruction.findMany({
-          where,
-          include: instructionInclude,
-          orderBy: { createdAt: 'desc' },
-          skip,
-          take,
-        }),
-        this.database.instruction.count({ where }),
-        this.database.instruction.count({ where: inTab('en-cours') }),
-        this.database.instruction.count({ where: inTab('terminees') }),
-        this.database.instruction.count({ where: inTab('renvoyees') }),
-      ]);
+    // aSubscrire: tasks in AFFECTEE where I am executant with no subscription decision yet.
+    const aSubscrireWhere: Prisma.InstructionWhereInput = {
+      status: InstructionStatus.AFFECTEE,
+      assignees: { some: { userId, role: UserInstructionRole.EXECUTANT } },
+      subscriptions: { none: { userId } },
+    };
+
+    // Submitted livrables waiting on me: my opinion as validateur (step 0),
+    // my decision as superviseur (step 1, or from 0 without a validateur).
+    const submitted = { status: LivrableStatus.SOUMIS, isLatest: true };
+    const avisWhere: Prisma.LivrableWhereInput = {
+      ...submitted,
+      validationStep: 0,
+      instruction: {
+        assignees: {
+          some: { userId, role: UserInstructionRole.VALIDATEUR },
+        },
+      },
+    };
+    const toDecideWhere: Prisma.LivrableWhereInput = {
+      ...submitted,
+      instruction: {
+        assignees: {
+          some: { userId, role: UserInstructionRole.SUPERVISEUR },
+        },
+      },
+      OR: [
+        { validationStep: { gte: 1 } },
+        {
+          instruction: {
+            assignees: { none: { role: UserInstructionRole.VALIDATEUR } },
+          },
+        },
+      ],
+    };
+
+    const [
+      data,
+      total,
+      inProgress,
+      completed,
+      returned,
+      aSubscrire,
+      avisAttendus,
+      aValider,
+    ] = await this.database.$transaction([
+      this.database.instruction.findMany({
+        where,
+        include: instructionInclude,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.database.instruction.count({ where }),
+      this.database.instruction.count({ where: inTab('en-cours') }),
+      this.database.instruction.count({ where: inTab('terminees') }),
+      this.database.instruction.count({ where: inTab('renvoyees') }),
+      this.database.instruction.count({ where: aSubscrireWhere }),
+      this.database.livrable.count({ where: avisWhere }),
+      this.database.livrable.count({ where: toDecideWhere }),
+    ]);
 
     const now = new Date();
     return {
@@ -356,7 +688,16 @@ export class InstructionsService {
       total,
       skip,
       take,
-      metrics: { inProgress, completed, returned },
+      // avisAttendus: livrables awaiting my opinion as validateur;
+      // aValider: livrables awaiting my decision as superviseur.
+      metrics: {
+        inProgress,
+        completed,
+        returned,
+        aSubscrire,
+        avisAttendus,
+        aValider,
+      },
     };
   }
 
@@ -369,6 +710,21 @@ export class InstructionsService {
       throw new NotFoundException(`Instruction ${id} not found`);
     }
     return withOverdue(instruction);
+  }
+
+  async historique(id: string, skip = 0, take = 20) {
+    await this.findOne(id); // 404 if not found
+    const where = { entityId: id, entityType: 'Instruction' };
+    const [data, total] = await this.database.$transaction([
+      this.database.activityLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      }),
+      this.database.activityLog.count({ where }),
+    ]);
+    return { data, total, skip, take };
   }
 
   // RG-INS-005: mutable as long as the dossier is not closed. The dossier
@@ -421,9 +777,17 @@ export class InstructionsService {
     const superviseurs = instruction.assignees.filter(
       (assignee) => assignee.role === UserInstructionRole.SUPERVISEUR,
     );
-    const allowed = superviseurs.length
-      ? superviseurs.some((assignee) => assignee.user.id === userId)
-      : instruction.createdById === userId;
+    // The validateur only gives opinions: never the deadline.
+    const isValidateur = instruction.assignees.some(
+      (assignee) =>
+        assignee.role === UserInstructionRole.VALIDATEUR &&
+        assignee.user.id === userId,
+    );
+    const allowed =
+      !isValidateur &&
+      (superviseurs.length
+        ? superviseurs.some((assignee) => assignee.user.id === userId)
+        : instruction.createdById === userId);
     if (!allowed) {
       throw new ForbiddenException(
         superviseurs.length
@@ -461,40 +825,69 @@ export class InstructionsService {
   // responsible for designating them.
   async assign(id: string, dto: AssignInstructionDto) {
     const instruction = await this.ensureNotTerminal(id);
-    if (!dto.executantIds?.length && !dto.superviseurId) {
+    if (!dto.executantIds?.length && !dto.superviseurId && !dto.validateurId) {
       throw new BadRequestException(
-        'Provide at least one executant or a superviseur',
+        'Provide at least one executant, a superviseur or a validateur',
       );
     }
 
-    const updated = await this.database.instruction.update({
-      where: { id: instruction.id },
-      data: {
-        status: statusOnAssignment(dto.executantIds),
-        assignees: {
-          deleteMany: {},
-          createMany: { data: assignmentRows(dto) },
+    // Merge: keep existing roles not explicitly mentioned in this call.
+    // Sending only executantIds keeps the validateur and the superviseur,
+    // and vice-versa.
+    const current = (role: UserInstructionRole) =>
+      (instruction.assignees ?? []).find((assignee) => assignee.role === role)
+        ?.user.id;
+    const mergedDto = {
+      executantIds: dto.executantIds,
+      validateurId: dto.validateurId ?? current(UserInstructionRole.VALIDATEUR),
+      superviseurId:
+        dto.superviseurId ?? current(UserInstructionRole.SUPERVISEUR),
+    };
+    assertValidateurApart(mergedDto.validateurId, mergedDto.executantIds);
+
+    const updated = await this.database.$transaction(async (tx) => {
+      // A different chain decides from its first link: livrables awaiting
+      // a decision start again from it.
+      await tx.livrable.updateMany({
+        where: { instructionId: instruction.id, status: LivrableStatus.SOUMIS },
+        data: { validationStep: 0 },
+      });
+      return tx.instruction.update({
+        where: { id: instruction.id },
+        data: {
+          status: statusOnAssignment(mergedDto.executantIds),
+          assignNote: dto.note ?? undefined,
+          assignees: {
+            deleteMany: {},
+            createMany: { data: assignmentRows(mergedDto) },
+          },
         },
-      },
-      include: instructionInclude,
+        include: instructionInclude,
+      });
     });
 
-    const assigneeIds = [...(dto.executantIds ?? []), dto.superviseurId].filter(
-      (userId): userId is string => Boolean(userId),
-    );
+    const assigneeIds = [
+      ...new Set(
+        [
+          ...(mergedDto.executantIds ?? []),
+          mergedDto.validateurId,
+          mergedDto.superviseurId,
+        ].filter((userId): userId is string => Boolean(userId)),
+      ),
+    ];
     await this.ensureViewAccess(assigneeIds, {
       dossierId: instruction.dossierId,
       courrierId: instruction.courrierId,
     });
     this.notifyAssignment(updated, assigneeIds);
-
+    this.recordEvent(id, 'INSTRUCTION_REAFFECTEE');
     return updated;
   }
 
   // RG-INS-003/004: an executant doesn't subscribe, with a motif, and
   // leaves the task — which they never modify. The other executants keep
-  // it; with none left it goes back to its creator (NON_SOUSCRITE), who
-  // reassigns or adjusts it. Only before subscribing: once subscribed, the
+  // it; with none left it goes back (NON_SOUSCRITE) to its superviseur —
+  // to its creator when it has none — who reassigns or adjusts it. Only before subscribing: once subscribed, the
   // task is an engagement, raised with its creator instead. By designation:
   // only one of its executants may decline it.
   async declineSubscription(
@@ -550,9 +943,12 @@ export class InstructionsService {
     });
 
     const updated = await this.findOne(id);
+    const superviseurs = updated.assignees
+      .filter((assignee) => assignee.role === UserInstructionRole.SUPERVISEUR)
+      .map((assignee) => assignee.user.id);
     this.notifyInstruction(
       updated,
-      [updated.createdById],
+      superviseurs.length ? superviseurs : [updated.createdById],
       {
         type: 'TASK_NOT_SUBSCRIBED',
         message:
@@ -563,6 +959,7 @@ export class InstructionsService {
       },
       userId,
     );
+    this.recordEvent(id, 'INSTRUCTION_NON_SOUSCRITE', { userId });
     return updated;
   }
 
@@ -601,6 +998,25 @@ export class InstructionsService {
           decision: SubscriptionDecision.SOUSCRITE,
         },
       });
+      // The first executant at work on a task of an effet puts that effet
+      // "En traitement" (only from TRANSMIS: once is enough).
+      if (instruction.courrierId) {
+        const { count: started } = await tx.courrier.updateMany({
+          where: {
+            id: instruction.courrierId,
+            status: CourrierStatus.TRANSMIS,
+          },
+          data: { status: CourrierStatus.EN_TRAITEMENT },
+        });
+        if (started) {
+          await this.activity.tryRecord({
+            action: 'COURRIER_EN_TRAITEMENT',
+            entityType: 'Courrier',
+            entityId: instruction.courrierId,
+            metadata: { instructionId: id, userId },
+          });
+        }
+      }
     });
     const subscribed = await this.findOne(id);
     const subscriber = instruction.assignees.find(
@@ -622,13 +1038,14 @@ export class InstructionsService {
       },
       userId,
     );
+    this.recordEvent(id, 'INSTRUCTION_SOUSCRITE', { userId });
     return subscribed;
   }
 
   // 10.4.4.7: closing requires every livrable attached to the instruction to
   // already be VALIDE (RG-LIV-005 — validation is pronounced on the
   // instruction as a whole, so this is the gate for that pronouncement).
-  async close(id: string) {
+  async close(id: string, comment?: string) {
     const instruction = await this.requireStatus(id, [
       InstructionStatus.EN_COURS,
       InstructionStatus.A_CORRIGER,
@@ -652,28 +1069,45 @@ export class InstructionsService {
 
     const closed = await this.database.instruction.update({
       where: { id: instruction.id },
-      data: { status: InstructionStatus.TERMINEE, closedAt: new Date() },
+      data: {
+        status: InstructionStatus.TERMINEE,
+        closedAt: new Date(),
+        closingComment: comment ?? undefined,
+      },
       include: instructionInclude,
     });
-    await refreshDossierProgress(this.database, closed.dossierId);
+    if (closed.dossierId) {
+      await refreshDossierProgress(this.database, closed.dossierId);
+    }
+    this.recordEvent(id, 'INSTRUCTION_TERMINEE');
     return closed;
   }
 
-  async cancel(id: string) {
+  async cancel(id: string, reason?: string) {
     const instruction = await this.ensureNotTerminal(id);
-    const cancelled = await this.setStatus(
-      instruction.id,
-      InstructionStatus.ANNULEE,
-    );
-    await refreshDossierProgress(this.database, cancelled.dossierId);
+    const cancelled = await this.database.instruction.update({
+      where: { id: instruction.id },
+      data: {
+        status: InstructionStatus.ANNULEE,
+        cancellationReason: reason ?? undefined,
+      },
+      include: instructionInclude,
+    });
+    if (cancelled.dossierId) {
+      await refreshDossierProgress(this.database, cancelled.dossierId);
+    }
+    this.recordEvent(id, 'INSTRUCTION_ANNULEE', { reason });
     return cancelled;
   }
 
-  // 10.4.4.6 "Contrôle par le superviseur" — the approving half. Livrables
-  // submitted for this round move to VALIDE; once every current version is
-  // validated the instruction closes itself (TERMINEE), and if livrables
-  // rejected one by one earlier in the round are still open it goes back
-  // for corrections instead (see settleValidationRound).
+  // 10.4.4.6 "Contrôle par le superviseur" — the approving half, by the
+  // link of the validation chain whose turn it is (validationChain): the
+  // livrables move on to the next link, or to VALIDE after the last one.
+  // Once every current version is validated the instruction closes itself
+  // (TERMINEE), and if livrables rejected one by one earlier in the round
+  // are still open it goes back for corrections instead (see
+  // settleValidationRound). Without a list: every submitted livrable
+  // awaiting the caller.
   async approveLivrables(id: string, validatorId: string) {
     return this.approve(id, undefined, validatorId);
   }
@@ -693,9 +1127,10 @@ export class InstructionsService {
     return this.approve(id, livrableIds, validatorId);
   }
 
-  // 10.4.4.6, rejection branch: the listed submitted livrables go to REJETE,
-  // each with its own motif (a Validation row), and the instruction moves
-  // to A_CORRIGER for the executant to address them. Submitted livrables
+  // 10.4.4.6, rejection branch, by the link whose turn it is: the listed
+  // submitted livrables go to REJETE, each with its own motif (a Validation
+  // row), and the instruction moves to A_CORRIGER for the executant to
+  // address them — corrected, they start again from the validateur. Submitted livrables
   // not listed stay SOUMIS. `refusalReason` keeps a readable summary for
   // the task view (it is shared with the instruction refusal path).
   async requestCorrections(
@@ -708,6 +1143,7 @@ export class InstructionsService {
       instruction.id,
       dto.livrables.map((entry) => entry.livrableId),
     );
+    assertDecider(instruction, livrables, validatorId);
     const motifs = new Map(
       dto.livrables.map((entry) => [entry.livrableId, entry.motif]),
     );
@@ -737,6 +1173,9 @@ export class InstructionsService {
                 (livrable) => `${livrable.title} : ${motifs.get(livrable.id)}`,
               )
               .join('\n'),
+          ...(dto.agentDueDate
+            ? { agentDueDate: new Date(dto.agentDueDate) }
+            : {}),
         },
         include: instructionInclude,
       });
@@ -753,6 +1192,13 @@ export class InstructionsService {
       },
       validatorId,
     );
+    for (const livrable of livrables) {
+      this.recordEvent(id, 'INSTRUCTION_CORRECTION_DEMANDEE', {
+        livrableId: livrable.id,
+        title: livrable.title,
+        motif: motifs.get(livrable.id),
+      });
+    }
     return updated;
   }
 
@@ -774,6 +1220,7 @@ export class InstructionsService {
     const [rejected] = await this.requireSubmitted(instruction.id, [
       livrableId,
     ]);
+    assertDecider(instruction, [rejected], validatorId);
 
     const settled = await this.database.$transaction(async (tx) => {
       await this.recordDecisions(
@@ -801,9 +1248,14 @@ export class InstructionsService {
       },
       validatorId,
     );
+    this.recordEvent(instruction.id, 'INSTRUCTION_CORRECTION_DEMANDEE', {
+      livrableId: rejected.id,
+      title: rejected.title,
+      motif,
+    });
     return this.database.livrable.findUniqueOrThrow({
       where: { id: livrableId },
-      include: { validations: lastLivrableValidation },
+      include: { validations: livrableValidations },
     });
   }
 
@@ -813,13 +1265,19 @@ export class InstructionsService {
     validatorId: string,
   ) {
     const instruction = await this.requireStatus(id, DECIDING_STATUSES);
+    const chain = validationChain(instruction);
     const livrables = livrableIds
       ? await this.requireSubmitted(instruction.id, livrableIds)
       : instruction.livrables.filter(
-          (livrable) => livrable.status === LivrableStatus.SOUMIS,
+          (livrable) =>
+            livrable.status === LivrableStatus.SOUMIS &&
+            !awaitsAvis(chain, livrable),
         );
+    assertDecider(instruction, livrables, validatorId);
     if (livrables.length === 0) {
-      throw new BadRequestException('No submitted livrable to approve');
+      throw new BadRequestException(
+        'No submitted livrable awaits your decision',
+      );
     }
 
     const settled = await this.database.$transaction(async (tx) => {
@@ -846,7 +1304,97 @@ export class InstructionsService {
         validatorId,
       );
     }
+    for (const livrable of livrables) {
+      this.recordEvent(instruction.id, 'INSTRUCTION_LIVRABLE_VALIDE', {
+        livrableId: livrable.id,
+        title: livrable.title,
+      });
+    }
     return this.findOne(instruction.id);
+  }
+
+  /**
+   * The validateur's opinion on a submitted livrable (AVIS, with its
+   * comment): it moves on to the superviseur, who decides. Only while it
+   * awaits that opinion (SOUMIS, validationStep 0).
+   */
+  async giveAvis(livrableId: string, comment: string, userId: string) {
+    const livrable = await this.database.livrable.findUnique({
+      where: { id: livrableId },
+      select: {
+        instructionId: true,
+        title: true,
+        status: true,
+        validationStep: true,
+      },
+    });
+    if (!livrable) {
+      throw new NotFoundException(`Livrable ${livrableId} not found`);
+    }
+    const instruction = await this.requireStatus(
+      livrable.instructionId,
+      DECIDING_STATUSES,
+    );
+    const chain = validationChain(instruction);
+    if (!chain.validateur || chain.validateur !== userId) {
+      throw new ForbiddenException(
+        "Only this task's validateur gives an opinion on its livrables",
+      );
+    }
+    if (
+      livrable.status !== LivrableStatus.SOUMIS ||
+      livrable.validationStep !== 0
+    ) {
+      throw new BadRequestException(
+        `Livrable « ${livrable.title} » doesn't await an opinion (it is ${livrable.status}, step ${livrable.validationStep})`,
+      );
+    }
+
+    await this.database.$transaction(async (tx) => {
+      // Guarded on the step read above: a second opinion meanwhile fails.
+      const { count } = await tx.livrable.updateMany({
+        where: {
+          id: livrableId,
+          status: LivrableStatus.SOUMIS,
+          validationStep: 0,
+        },
+        data: { validationStep: 1 },
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          'An opinion was given on this livrable meanwhile — reload and try again',
+        );
+      }
+      await tx.validation.create({
+        data: {
+          instructionId: instruction.id,
+          livrableId,
+          validatorId: userId,
+          decision: ValidationDecision.AVIS,
+          comment,
+          cycle: instruction.cycle,
+        },
+      });
+    });
+
+    if (chain.decider) {
+      this.notifyInstruction(
+        instruction,
+        [chain.decider],
+        {
+          type: 'TASK_VALIDATION_PENDING',
+          message: `Le validateur a donné son avis sur « ${livrable.title} » (tâche « ${instruction.title} ») : à vous de décider.`,
+        },
+        userId,
+      );
+    }
+    this.recordEvent(instruction.id, 'INSTRUCTION_AVIS_DONNE', {
+      livrableId,
+    });
+    return this.database.livrable.findUniqueOrThrow({
+      where: { id: livrableId },
+      include: { validations: livrableValidations },
+    });
   }
 
   // The given livrables, which must all be SOUMIS livrables of this
@@ -862,7 +1410,7 @@ export class InstructionsService {
         instructionId,
         status: LivrableStatus.SOUMIS,
       },
-      select: { id: true, title: true },
+      select: { id: true, title: true, validationStep: true },
     });
     const missing = ids.filter((id) => !livrables.some((l) => l.id === id));
     if (missing.length) {
@@ -953,7 +1501,9 @@ export class InstructionsService {
         data: { status: InstructionStatus.TERMINEE, closedAt: new Date() },
         select: { dossierId: true },
       });
-      await refreshDossierProgress(tx, dossierId);
+      if (dossierId) {
+        await refreshDossierProgress(tx, dossierId);
+      }
       return InstructionStatus.TERMINEE;
     }
     return null;
@@ -987,22 +1537,24 @@ export class InstructionsService {
   // widens, never narrows, access.
   private async ensureViewAccess(
     userIds: string[],
-    target: { dossierId: string; courrierId: string | null },
+    target: { dossierId: string | null; courrierId: string | null },
   ) {
     const uniqueIds = [...new Set(userIds)];
     if (uniqueIds.length === 0) {
       return;
     }
     await this.database.$transaction([
-      ...uniqueIds.map((userId) =>
-        this.database.dossierAccess.upsert({
-          where: {
-            dossierId_userId: { dossierId: target.dossierId, userId },
-          },
-          create: { dossierId: target.dossierId, userId, canView: true },
-          update: { canView: true },
-        }),
-      ),
+      ...(target.dossierId
+        ? uniqueIds.map((userId) =>
+            this.database.dossierAccess.upsert({
+              where: {
+                dossierId_userId: { dossierId: target.dossierId!, userId },
+              },
+              create: { dossierId: target.dossierId!, userId, canView: true },
+              update: { canView: true },
+            }),
+          )
+        : []),
       ...(target.courrierId
         ? uniqueIds.map((userId) =>
             this.database.courrierAccess.upsert({
@@ -1032,5 +1584,280 @@ export class InstructionsService {
       );
     }
     return instruction;
+  }
+
+  async deposerLivrables(
+    instructionId: string,
+    dto: DeposerLivrablesDto,
+    files: Array<Express.Multer.File>,
+    userId: string,
+  ) {
+    if (!dto || !dto.livrables) {
+      throw new BadRequestException('Le champ livrables est obligatoire');
+    }
+
+    let livrablesList: Array<{ livrableId: string; files: string[] }>;
+    if (typeof dto.livrables === 'string') {
+      try {
+        livrablesList = JSON.parse(dto.livrables);
+      } catch {
+        throw new BadRequestException(
+          'Format JSON invalide pour le champ livrables',
+        );
+      }
+    } else if (Array.isArray(dto.livrables)) {
+      livrablesList = dto.livrables;
+    } else {
+      throw new BadRequestException('Le champ livrables doit être un tableau');
+    }
+
+    if (!Array.isArray(livrablesList) || livrablesList.length === 0) {
+      throw new BadRequestException('Au moins un livrable doit être fourni');
+    }
+
+    const seenIds = new Set<string>();
+    for (const item of livrablesList) {
+      if (!item.livrableId) {
+        throw new BadRequestException('Chaque entrée doit avoir un livrableId');
+      }
+      if (seenIds.has(item.livrableId)) {
+        throw new BadRequestException(
+          `Livrable ${item.livrableId} : spécifié plusieurs fois`,
+        );
+      }
+      seenIds.add(item.livrableId);
+
+      if (!Array.isArray(item.files) || item.files.length === 0) {
+        throw new BadRequestException(
+          `Livrable ${item.livrableId} : aucun fichier fourni`,
+        );
+      }
+      for (const fileField of item.files) {
+        const found = files.find((f) => f.fieldname === fileField);
+        if (!found) {
+          throw new BadRequestException(
+            `Livrable ${item.livrableId} : fichier "${fileField}" manquant ou refusé`,
+          );
+        }
+      }
+    }
+
+    // 1. Vérifier que l'instruction est EN_COURS, A_CORRIGER ou
+    // EN_ATTENTE_VALIDATION, et que l'utilisateur est l'exécutant qui y a
+    // souscrit : lui seul dépose ses livrables, sans avoir besoin de
+    // LIVRABLE_DEPOSIT ni LIVRABLE_SUBMIT (assertSubscriber).
+    const instruction = await this.database.instruction.findUnique({
+      where: { id: instructionId },
+      include: {
+        assignees: { include: { user: { select: { id: true, name: true } } } },
+        dossier: { select: { id: true, siteId: true } },
+      },
+    });
+    if (!instruction) {
+      throw new NotFoundException(`Instruction ${instructionId} not found`);
+    }
+
+    const ALLOWED_STATUSES: InstructionStatus[] = [
+      InstructionStatus.EN_COURS,
+      InstructionStatus.A_CORRIGER,
+      InstructionStatus.EN_ATTENTE_VALIDATION,
+    ];
+    if (!ALLOWED_STATUSES.includes(instruction.status)) {
+      throw new BadRequestException(
+        `Instruction is ${instruction.status} — livrables can only be deposited while it is ${ALLOWED_STATUSES.join(', ')}`,
+      );
+    }
+
+    await this.assertSubscriber(instructionId, userId);
+
+    if (instruction.dossierId) {
+      await assertDossierOpenForActivity(this.database, instruction.dossierId);
+    }
+
+    // 2. Vérifier que chaque livrableId appartient à l'instruction,
+    // est la dernière version (isLatest) et est EN_PREPARATION ou REJETE.
+    const current = new Map<string, Livrable>();
+    for (const item of livrablesList) {
+      const livrable = await this.database.livrable.findUnique({
+        where: { id: item.livrableId },
+      });
+      if (!livrable) {
+        throw new NotFoundException(`Livrable ${item.livrableId} introuvable`);
+      }
+      if (livrable.instructionId !== instruction.id) {
+        throw new BadRequestException(
+          `Livrable ${item.livrableId} : n'appartient pas à cette instruction`,
+        );
+      }
+      if (!livrable.isLatest) {
+        throw new BadRequestException(
+          `Livrable ${item.livrableId} : n'est pas la dernière version`,
+        );
+      }
+      if (
+        livrable.status !== LivrableStatus.EN_PREPARATION &&
+        livrable.status !== LivrableStatus.REJETE
+      ) {
+        throw new BadRequestException(
+          `Livrable ${item.livrableId} : statut ${livrable.status} incompatible (attendu : EN_PREPARATION ou REJETE)`,
+        );
+      }
+      current.set(livrable.id, livrable);
+    }
+
+    // 3 & 5. Pour chaque livrable : enregistrer les fichiers (comme POST /documents avec livrableId),
+    // passer le livrable à DEPOSE puis SOUMIS, enregistrer agentComment.
+    // En cas d'erreur sur n'importe quel livrable : tout annuler, y compris les fichiers déjà
+    // envoyés au stockage, et renvoyer 400 en précisant le livrableId en cause.
+    const uploadedKeys: string[] = [];
+    // The livrable each deposited one ends up as: itself, or its new
+    // version when it was sent back for corrections.
+    const target = new Map<string, string>();
+    const filesToPersist: Array<{
+      livrableId: string;
+      file: Express.Multer.File;
+      storageKey: string;
+    }> = [];
+
+    try {
+      for (const item of livrablesList) {
+        const prefix = `livrables/${item.livrableId}`;
+        for (const fileField of item.files) {
+          const file = files.find((f) => f.fieldname === fileField)!;
+          try {
+            const { key } = await this.storage.upload(file.buffer, {
+              originalName: file.originalname,
+              contentType: file.mimetype,
+              prefix,
+            });
+            uploadedKeys.push(key);
+            filesToPersist.push({
+              livrableId: item.livrableId,
+              file,
+              storageKey: key,
+            });
+          } catch (storageError) {
+            throw new BadRequestException(
+              `Livrable ${item.livrableId} : échec du stockage du fichier "${file.originalname}"`,
+            );
+          }
+        }
+      }
+
+      await this.database.$transaction(async (tx) => {
+        // Un livrable renvoyé en correction (REJETE) est redéposé comme une
+        // nouvelle version (version + 1, même position) : la version
+        // corrigée garde ses fichiers et reste consultable dans `history`,
+        // les nouveaux fichiers vont à la nouvelle version.
+        for (const item of livrablesList) {
+          const livrable = current.get(item.livrableId)!;
+          if (livrable.status !== LivrableStatus.REJETE) {
+            target.set(livrable.id, livrable.id);
+            continue;
+          }
+          const { count } = await tx.livrable.updateMany({
+            where: { id: livrable.id, isLatest: true },
+            data: { isLatest: false },
+          });
+          if (count === 0) {
+            throw new ConflictException(
+              `Livrable ${livrable.id} : une nouvelle version vient d'être créée — rechargez la tâche`,
+            );
+          }
+          const next = await tx.livrable.create({
+            data: {
+              instructionId: livrable.instructionId,
+              title: livrable.title,
+              description: livrable.description,
+              version: livrable.version + 1,
+              position: livrable.position,
+              parentVersionId: livrable.id,
+              createdById: userId,
+            },
+            select: { id: true },
+          });
+          target.set(livrable.id, next.id);
+        }
+
+        // Enregistrer les fichiers
+        for (const doc of filesToPersist) {
+          await tx.document.create({
+            data: {
+              originalName: doc.file.originalname,
+              name: doc.file.originalname,
+              storageKey: doc.storageKey,
+              mimeType: doc.file.mimetype,
+              sizeBytes: doc.file.size,
+              livrableId: target.get(doc.livrableId)!,
+              uploadedById: userId,
+            },
+          });
+        }
+
+        // Passer chaque livrable à SOUMIS et enregistrer agentComment si fourni
+        for (const item of livrablesList) {
+          await tx.livrable.update({
+            where: { id: target.get(item.livrableId)! },
+            data: {
+              status: LivrableStatus.SOUMIS,
+              validationStep: 0,
+              ...(dto.agentComment !== undefined
+                ? { agentComment: dto.agentComment }
+                : {}),
+            },
+          });
+        }
+
+        // Mettre à jour le statut de l'instruction (EN_ATTENTE_VALIDATION)
+        await tx.instruction.update({
+          where: { id: instruction.id },
+          data: { status: InstructionStatus.EN_ATTENTE_VALIDATION },
+        });
+      });
+    } catch (error) {
+      await Promise.all(
+        uploadedKeys.map((k) => this.storage.delete(k).catch(() => undefined)),
+      );
+      throw error;
+    }
+
+    // 4. Notifier le superviseur une seule fois et journaliser dans /instructions/{id}/historique
+    const executantUser = instruction.assignees.find(
+      (a) => a.user.id === userId,
+    )?.user;
+    const actorName = executantUser?.name ?? 'Un exécutant';
+
+    // The validateur gives their opinion first; without one, the superviseur
+    // decides straight away.
+    const chain = validationChain(instruction);
+    const firstLink = chain.validateur ?? chain.decider;
+    const recipientIds = firstLink ? [firstLink] : [];
+
+    const n = livrablesList.length;
+    const livrablesLabel = `${n} livrable${n > 1 ? 's' : ''}`;
+
+    this.notifyInstruction(
+      instruction,
+      recipientIds,
+      {
+        type: 'TASK_LIVRABLES_DEPOSITED',
+        message: `${actorName} a déposé ${livrablesLabel} pour la tâche « ${instruction.title} ».`,
+      },
+      userId,
+    );
+
+    this.recordEvent(
+      instruction.id,
+      'INSTRUCTION_LIVRABLES_DEPOSES',
+      {
+        livrableIds: livrablesList.map((l) => target.get(l.livrableId)),
+        count: n,
+        agentComment: dto.agentComment,
+      },
+      `${actorName} a déposé ${livrablesLabel}`,
+    );
+
+    // Réponse 201 : l'instruction complète, comme GET /instructions/{id}
+    return this.findOne(instruction.id);
   }
 }

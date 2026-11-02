@@ -30,7 +30,7 @@ export class PermissionGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const required = this.reflector.getAllAndOverride<
-      PermissionCode | undefined
+      PermissionCode | PermissionCode[] | undefined
     >(PERMISSION_METADATA_KEY, [context.getHandler(), context.getClass()]);
     if (!required) {
       return true;
@@ -44,20 +44,10 @@ export class PermissionGuard implements CanActivate {
       throw new ForbiddenException('Missing authenticated user');
     }
 
-    const platformOnly =
-      PLATFORM_PERMISSIONS.has(required) ||
-      this.reflector.getAllAndOverride<boolean | undefined>(
-        PLATFORM_ONLY_METADATA_KEY,
-        [context.getHandler(), context.getClass()],
-      );
-    if (platformOnly) {
-      if (!(await this.rbacService.hasGlobalPermission(user.sub, required))) {
-        throw new ForbiddenException(
-          `Reserved to platform administrators: ${required}`,
-        );
-      }
-      return true;
-    }
+    const permissions = Array.isArray(required) ? required : [required];
+    const isPlatformOnly = this.reflector.getAllAndOverride<
+      boolean | undefined
+    >(PLATFORM_ONLY_METADATA_KEY, [context.getHandler(), context.getClass()]);
 
     const sources = this.reflector.getAllAndOverride<SiteSource[] | undefined>(
       SITE_SCOPE_METADATA_KEY,
@@ -65,22 +55,36 @@ export class PermissionGuard implements CanActivate {
     );
     const siteIds = sources ? await this.targetSites(sources, request) : [];
 
-    const granted = siteIds.length
-      ? (
-          await Promise.all(
-            siteIds.map((siteId) =>
-              this.rbacService.hasPermissionAtSite(user.sub, required, siteId),
-            ),
-          )
-        ).every(Boolean)
-      : await this.rbacService.hasPermission(user.sub, required);
-    if (!granted) {
-      throw new ForbiddenException(
-        siteIds.length
-          ? `Missing permission at this site: ${required}`
-          : `Missing permission: ${required}`,
-      );
+    for (const code of permissions) {
+      const platformOnly = PLATFORM_PERMISSIONS.has(code) || isPlatformOnly;
+      if (platformOnly) {
+        if (!(await this.rbacService.hasGlobalPermission(user.sub, code))) {
+          throw new ForbiddenException(
+            `Reserved to platform administrators: ${code}`,
+          );
+        }
+        continue;
+      }
+
+      const granted = siteIds.length
+        ? (
+            await Promise.all(
+              siteIds.map((siteId) =>
+                this.rbacService.hasPermissionAtSite(user.sub, code, siteId),
+              ),
+            )
+          ).every(Boolean)
+        : await this.rbacService.hasPermission(user.sub, code);
+
+      if (!granted) {
+        throw new ForbiddenException(
+          siteIds.length
+            ? `Missing permission at this site: ${code}`
+            : `Missing permission: ${code}`,
+        );
+      }
     }
+
     return true;
   }
 

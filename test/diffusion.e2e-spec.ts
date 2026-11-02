@@ -7,7 +7,7 @@
  * whole application boots on it, and the scenarios below run as real users.
  * The developer's own database is never touched.
  *
- * Run: npm run test:e2e (needs the docker-compose Postgres and Redis).
+ * Run: npm run test:e2e (needs the docker-compose Postgres).
  */
 import 'dotenv/config';
 import { execSync } from 'child_process';
@@ -72,6 +72,15 @@ describe('Diffusion, end to end', () => {
         .patch(url)
         .set('Authorization', `Bearer ${token[who]}`)
         .send(body ?? {}),
+    put: (url: string, body?: object) =>
+      request(app.getHttpServer())
+        .put(url)
+        .set('Authorization', `Bearer ${token[who]}`)
+        .send(body ?? {}),
+    delete: (url: string) =>
+      request(app.getHttpServer())
+        .delete(url)
+        .set('Authorization', `Bearer ${token[who]}`),
   });
 
   async function tokenFor(name: string, userId: string, email: string) {
@@ -485,6 +494,7 @@ describe('Diffusion, end to end', () => {
           dossierId: id.dossier,
           title: 'Analyser les carottes',
           executantIds: [id.exec1, id.exec2],
+          validateurId: id.respA,
           superviseurId: id.chefA,
           dueDate: '2026-12-15',
         })
@@ -565,7 +575,7 @@ describe('Diffusion, end to end', () => {
         .expect(400);
     });
 
-    it('the executant hands in a livrable, the superviseur approves: done', async () => {
+    it('the executant hands in a livrable: the validateur gives an opinion, the superviseur decides', async () => {
       const livrable = await as('exec1')
         .post('/deliverables', {
           instructionId: id.task,
@@ -583,6 +593,29 @@ describe('Diffusion, end to end', () => {
         .get(`/instructions/${id.task}`)
         .expect(200);
       expect(waiting.body.status).toBe('EN_ATTENTE_VALIDATION');
+
+      // The superviseur waits for the validateur.
+      await as('chefA')
+        .patch(`/instructions/${id.task}/approve-livrables`)
+        .expect(400);
+      // The validateur gives an opinion, never a decision.
+      await as('respA')
+        .patch(`/instructions/${id.task}/approve-livrables`)
+        .expect(403);
+      // An opinion made only of spaces is empty.
+      await as('respA')
+        .patch(`/deliverables/${livrable.body.id}/avis`, { comment: '   ' })
+        .expect(400);
+      const avis = await as('respA')
+        .patch(`/deliverables/${livrable.body.id}/avis`, {
+          comment: 'Analyse complète',
+        })
+        .expect(200);
+      expect(avis.body.validationStep).toBe(1);
+      expect(avis.body.validations[0]).toMatchObject({
+        decision: 'AVIS',
+        comment: 'Analyse complète',
+      });
 
       const done = await as('chefA')
         .patch(`/instructions/${id.task}/approve-livrables`)
@@ -603,6 +636,358 @@ describe('Diffusion, end to end', () => {
       expect(
         siteB.body.data.every((log: any) => siteBUsers.has(log.userId)),
       ).toBe(true);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('7. Contrats', () => {
+    it('only a platform administrator creates a contract', async () => {
+      const project = await db.project.create({
+        data: { name: 'Port de Kribi' },
+      });
+      id.project = project.id;
+      id.otherProject = (
+        await db.project.create({ data: { name: 'Route Douala' } })
+      ).id;
+      const body = { title: 'Marché des quais', projectId: id.project };
+      await as('chefA').post('/contracts', body).expect(403);
+      const res = await as('super').post('/contracts', body).expect(201);
+      expect(res.body.number).toMatch(/^CT-/);
+      id.contract = res.body.id;
+    });
+
+    it("a dossier under the contract takes the contract's project", async () => {
+      const res = await as('chefA')
+        .post('/dossiers', {
+          title: 'Quai nord',
+          siteId: id.siteA,
+          responsibleId: id.chefA,
+          contractId: id.contract,
+        })
+        .expect(201);
+      expect(res.body.projectId).toBe(id.project);
+      expect(res.body.contract.id).toBe(id.contract);
+      id.contractDossier = res.body.id;
+    });
+
+    it("refuses a project other than the contract's", async () => {
+      await as('chefA')
+        .post('/dossiers', {
+          title: 'Quai sud',
+          siteId: id.siteA,
+          responsibleId: id.chefA,
+          contractId: id.contract,
+          projectId: id.otherProject,
+        })
+        .expect(400);
+    });
+
+    it('lists the dossiers of a contract', async () => {
+      const list = await as('chefA')
+        .get(`/dossiers?contractId=${id.contract}`)
+        .expect(200);
+      expect(list.body.data.map((d: any) => d.id)).toEqual([
+        id.contractDossier,
+      ]);
+      const contract = await as('chefA')
+        .get(`/contracts/${id.contract}`)
+        .expect(200);
+      expect(contract.body.dossiers.map((d: any) => d.id)).toEqual([
+        id.contractDossier,
+      ]);
+    });
+
+    it('moving the contract to another project moves its dossiers', async () => {
+      await as('super')
+        .patch(`/contracts/${id.contract}`, { projectId: id.otherProject })
+        .expect(200);
+      const dossier = await as('chefA')
+        .get(`/dossiers/${id.contractDossier}`)
+        .expect(200);
+      expect(dossier.body.projectId).toBe(id.otherProject);
+    });
+
+    it('lists the entrants of a contract, or of a project', async () => {
+      const effet = await as('agentA')
+        .post('/courriers', {
+          direction: 'ENTRANT',
+          subject: 'Plans du quai nord',
+          dossierId: id.contractDossier,
+        })
+        .expect(201);
+
+      const ids = async (filter: string) =>
+        (
+          await as('chefA').get(`/courriers/entrants?${filter}`).expect(200)
+        ).body.data.map((c: any) => c.id);
+      expect(await ids(`contractId=${id.contract}`)).toEqual([effet.body.id]);
+      expect(await ids(`projectId=${id.otherProject}`)).toEqual([
+        effet.body.id,
+      ]);
+      expect(await ids(`projectId=${id.project}`)).toEqual([]);
+    });
+
+    it('cannot be deleted while it contains dossiers', async () => {
+      await as('super').delete(`/contracts/${id.contract}`).expect(409);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('7b. Projets', () => {
+    it('lists projects with their responsible, counts and metrics', async () => {
+      const updated = await as('super')
+        .patch(`/projects/${id.otherProject}`, {
+          responsibleId: id.chefA,
+          startDate: '2026-01-01',
+          endDate: '2027-12-31',
+        })
+        .expect(200);
+      expect(updated.body.responsible.id).toBe(id.chefA);
+
+      const res = await as('chefA').get('/projects').expect(200);
+      const project = res.body.data.find((p: any) => p.id === id.otherProject);
+      expect(project.status).toBe('ACTIVE');
+      expect(project._count).toEqual({ contracts: 1, dossiers: 1 });
+      expect(res.body.metrics.byStatus).toEqual({
+        ACTIVE: 2,
+        CLOSED: 0,
+        ARCHIVED: 0,
+      });
+      expect(res.body.metrics.withoutResponsible).toBe(1);
+    });
+
+    it('closes, then archives, one step at a time', async () => {
+      await as('super')
+        .patch(`/projects/${id.project}`, { status: 'ARCHIVED' })
+        .expect(400);
+      const closed = await as('super')
+        .patch(`/projects/${id.project}`, { status: 'CLOSED' })
+        .expect(200);
+      expect(closed.body.closedAt).not.toBeNull();
+
+      const tab = await as('chefA').get('/projects?status=CLOSED').expect(200);
+      expect(tab.body.data.map((p: any) => p.id)).toEqual([id.project]);
+      expect(tab.body.metrics.byStatus.ACTIVE).toBe(1);
+    });
+
+    it('lists the contracts ending within N days', async () => {
+      const soon = new Date();
+      soon.setDate(soon.getDate() + 10);
+      await as('super')
+        .patch(`/contracts/${id.contract}`, {
+          endDate: soon.toISOString().slice(0, 10),
+        })
+        .expect(200);
+      const ids = async (days: number) =>
+        (
+          await as('chefA')
+            .get(`/contracts?endingWithinDays=${days}`)
+            .expect(200)
+        ).body.data.map((c: any) => c.id);
+      expect(await ids(30)).toEqual([id.contract]);
+      expect(await ids(5)).toEqual([]);
+      const metrics = (await as('chefA').get('/projects').expect(200)).body
+        .metrics;
+      expect(metrics.contractsEndingSoon).toBe(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('7c. Fiches projet et contrat', () => {
+    it("names the maître d'ouvrage by name, creating the correspondent", async () => {
+      const res = await as('super')
+        .patch(`/projects/${id.otherProject}`, {
+          maitreOuvrageName: 'Port Autonome de Kribi',
+        })
+        .expect(200);
+      expect(res.body.maitreOuvrage.name).toBe('Port Autonome de Kribi');
+      id.client = res.body.maitreOuvrage.id;
+    });
+
+    it('creates a complete contract, open to its authorized users only', async () => {
+      const types = await as('chefA').get('/contracts/types').expect(200);
+      expect(types.body.map((t: any) => t.value)).toContain('TRAVAUX');
+
+      const res = await as('super')
+        .post('/contracts', {
+          title: 'Marché des digues',
+          projectId: id.otherProject,
+          type: 'TRAVAUX',
+          amount: 1500000.5,
+          tenderReference: 'AO-2026-012',
+          clientId: id.client,
+          responsibleId: id.chefA,
+          authorizedUserIds: [id.chefA],
+        })
+        .expect(201);
+      expect(res.body).toMatchObject({
+        status: 'ACTIVE',
+        type: 'TRAVAUX',
+        client: { name: 'Port Autonome de Kribi' },
+        responsible: { id: id.chefA },
+        _count: { dossiers: 0, authorized: 1, courriers: 0 },
+      });
+      id.restrictedContract = res.body.id;
+
+      await as('chefA').get(`/contracts/${id.restrictedContract}`).expect(200);
+      await as('agentA').get(`/contracts/${id.restrictedContract}`).expect(404);
+      const list = await as('agentA').get('/contracts').expect(200);
+      expect(list.body.data.map((c: any) => c.id)).not.toContain(
+        id.restrictedContract,
+      );
+    });
+
+    it("the project page shows what's going on in it", async () => {
+      const res = await as('chefA')
+        .get(`/projects/${id.otherProject}`)
+        .expect(200);
+      expect(res.body.metrics).toEqual({
+        contractsSigning: 2,
+        dossiersActive: 1,
+        openCourriers: { incoming: 1, outgoing: 0 },
+        overdueInstructions: { count: 0, firstReference: null },
+        courriers: 1,
+        authorized: 0,
+      });
+    });
+
+    it("only the project's responsible restricts it, and it is then hidden", async () => {
+      await as('respB')
+        .put(`/projects/${id.otherProject}/access`, { userIds: [id.respB] })
+        .expect(403);
+      const res = await as('chefA')
+        .put(`/projects/${id.otherProject}/access`, { userIds: [id.chefA] })
+        .expect(200);
+      expect(res.body.map((u: any) => u.id)).toEqual([id.chefA]);
+      await as('agentA').get(`/projects/${id.otherProject}`).expect(404);
+
+      const history = await as('chefA')
+        .get(`/projects/${id.otherProject}/historique`)
+        .expect(200);
+      expect(history.body.data.map((log: any) => log.action)).toEqual(
+        expect.arrayContaining(['project.access.updated', 'project.updated']),
+      );
+    });
+
+    it('archives a contract with its reason, which then takes nothing new', async () => {
+      const res = await as('super')
+        .post(`/contracts/${id.restrictedContract}/archive`, {
+          reason: 'Marché résilié',
+        })
+        .expect(201);
+      expect(res.body).toMatchObject({
+        status: 'ARCHIVED',
+        archiveReason: 'Marché résilié',
+      });
+
+      await as('chefA')
+        .post('/dossiers', {
+          title: 'Digue est',
+          siteId: id.siteA,
+          responsibleId: id.chefA,
+          contractId: id.restrictedContract,
+        })
+        .expect(400);
+      await request(app.getHttpServer())
+        .post('/documents')
+        .set('Authorization', `Bearer ${token.chefA}`)
+        .field('contractId', id.restrictedContract)
+        .attach('file', Buffer.from('%PDF-1.4'), 'pv.pdf')
+        .expect(400);
+
+      const history = await as('chefA')
+        .get(`/contracts/${id.restrictedContract}/historique`)
+        .expect(200);
+      expect(history.body.data.map((log: any) => log.action)).toContain(
+        'contract.archived',
+      );
+    });
+
+    it('lists the dossiers of a project', async () => {
+      const res = await as('chefA')
+        .get(`/dossiers?projectId=${id.otherProject}`)
+        .expect(200);
+      expect(res.body.data.map((d: any) => d.id)).toEqual([id.contractDossier]);
+    });
+
+    it('takes the number typed for a dossier, once', async () => {
+      const body = {
+        title: 'Dossier saisi',
+        siteId: id.siteA,
+        responsibleId: id.chefA,
+        number: 'DOS-E2E-001',
+      };
+      const res = await as('chefA').post('/dossiers', body).expect(201);
+      expect(res.body.number).toBe('DOS-E2E-001');
+      await as('chefA').post('/dossiers', body).expect(409);
+    });
+
+    it("an effet shows its dossier's contract", async () => {
+      const res = await as('chefA')
+        .get(`/courriers/entrants?contractId=${id.contract}`)
+        .expect(200);
+      expect(res.body.data[0].dossier.contract).toMatchObject({
+        id: id.contract,
+        title: 'Marché des quais',
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('8. Préférences de notification', () => {
+    const assignedCount = async (who: string) => {
+      const inbox = await as(who).get('/notifications/me').expect(200);
+      return inbox.body.filter(
+        (n: any) => n.notification.type === 'TASK_ASSIGNED',
+      ).length;
+    };
+
+    it('every notification is on by default', async () => {
+      const res = await as('exec1')
+        .get('/notifications/preferences')
+        .expect(200);
+      expect(res.body.length).toBeGreaterThan(0);
+      expect(res.body.every((p: any) => p.enabled && p.label)).toBe(true);
+    });
+
+    it('refuses an unknown type', async () => {
+      await as('exec1')
+        .put('/notifications/preferences', {
+          preferences: [{ type: 'NOPE', enabled: false }],
+        })
+        .expect(400);
+    });
+
+    it('a user who turned a type off no longer receives it', async () => {
+      const res = await as('exec1')
+        .put('/notifications/preferences', {
+          preferences: [{ type: 'TASK_ASSIGNED', enabled: false }],
+        })
+        .expect(200);
+      expect(
+        res.body.find((p: any) => p.type === 'TASK_ASSIGNED').enabled,
+      ).toBe(false);
+
+      const exec1Before = await assignedCount('exec1');
+      const exec2Before = await assignedCount('exec2');
+      await as('chefA')
+        .post('/instructions', {
+          dossierId: id.contractDossier,
+          title: 'Relevé du quai',
+          executantIds: [id.exec1, id.exec2],
+          validateurId: id.respA,
+          superviseurId: id.chefA,
+          dueDate: '2026-12-15',
+        })
+        .expect(201);
+
+      // Both are decided in the same notification: once exec2 has it,
+      // exec1 was left out or never will be.
+      await eventually(
+        () => assignedCount('exec2'),
+        (n: number) => n > exec2Before,
+      );
+      expect(await assignedCount('exec1')).toBe(exec1Before);
     });
   });
 });
