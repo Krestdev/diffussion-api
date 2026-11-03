@@ -305,22 +305,22 @@ export class RbacService {
         });
         return liv?.instruction.dossier?.siteId ?? null;
       }
-      case 'analysisSheet':
-        return (
-          await db.analysisSheet.findUnique({
-            where: { id },
-            select: { dossier: { select: { siteId: true } } },
-          })
-        )?.dossier.siteId;
-      case 'analysisItem':
-        return (
-          await db.analysisItem.findUnique({
-            where: { id },
-            select: {
-              sheet: { select: { dossier: { select: { siteId: true } } } },
-            },
-          })
-        )?.sheet.dossier.siteId;
+      // A fiche's dossier's site, or — without a dossier — the site of
+      // whoever registered its courrier.
+      case 'analysisSheet': {
+        const sheet = await db.analysisSheet.findUnique({
+          where: { id },
+          select: sheetSiteSelect,
+        });
+        return sheet ? sheetSite(sheet) : undefined;
+      }
+      case 'analysisItem': {
+        const item = await db.analysisItem.findUnique({
+          where: { id },
+          select: { sheet: { select: sheetSiteSelect } },
+        });
+        return item ? sheetSite(item.sheet) : undefined;
+      }
     }
   }
 
@@ -377,4 +377,16 @@ export class RbacService {
       }
     }
   }
+}
+
+const sheetSiteSelect = {
+  dossier: { select: { siteId: true } },
+  courrier: { select: { createdBy: { select: { siteId: true } } } },
+} as const;
+
+function sheetSite(sheet: {
+  dossier: { siteId: string } | null;
+  courrier: { createdBy: { siteId: string | null } | null };
+}): string | null {
+  return sheet.dossier?.siteId ?? sheet.courrier.createdBy?.siteId ?? null;
 }

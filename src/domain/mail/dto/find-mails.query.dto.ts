@@ -1,3 +1,4 @@
+import { COURRIER_STATUS_DOC } from './courrier-status.doc';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsUUID } from 'class-validator';
@@ -28,7 +29,10 @@ export class FindMailsQueryDto {
   @IsEnum(CourrierDirection)
   direction?: CourrierDirection;
 
-  @ApiPropertyOptional({ enum: CourrierStatus })
+  @ApiPropertyOptional({
+    enum: CourrierStatus,
+    description: COURRIER_STATUS_DOC,
+  })
   @IsOptional()
   @IsEnum(CourrierStatus)
   status?: CourrierStatus;

@@ -8,20 +8,42 @@ import {
 } from 'class-validator';
 import { CourrierStatus } from 'generated/prisma/enums';
 import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
+import { COURRIER_STATUS_DOC } from './courrier-status.doc';
+
+const AUTHORIZED = [
+  CourrierStatus.VALIDE,
+  CourrierStatus.SIGNE,
+  CourrierStatus.PRET_A_ENVOYER,
+  CourrierStatus.ENVOYE,
+  CourrierStatus.DECHARGE,
+] as const;
 
 /**
- * The three tabs of the "Courriers sortants" page. Each one groups several
- * statuses, so the frontend can't express it as a single `status` filter.
+ * The tabs of the "Courriers sortants" page, by status: drafts, submitted,
+ * corrections, authorized, cancelled and archived — and the earlier
+ * pending / approved / rejected grouping, still accepted.
  */
 export const OUTGOING_STATUS_GROUPS = {
+  drafts: [CourrierStatus.BROUILLON],
+  submitted: [CourrierStatus.EN_ATTENTE_VALIDATION],
+  corrections: [CourrierStatus.A_CORRIGER],
+  authorized: AUTHORIZED,
+  cancelled: [CourrierStatus.ANNULE],
+  archived: [CourrierStatus.ARCHIVE],
   pending: [CourrierStatus.BROUILLON, CourrierStatus.EN_ATTENTE_VALIDATION],
-  approved: [
-    CourrierStatus.VALIDE,
-    CourrierStatus.PRET_A_ENVOYER,
-    CourrierStatus.ENVOYE,
-  ],
+  approved: AUTHORIZED,
   rejected: [CourrierStatus.A_CORRIGER, CourrierStatus.ANNULE],
 } as const satisfies Record<string, readonly CourrierStatus[]>;
+
+// The tabs counted in metrics.byTab, besides `all`.
+export const OUTGOING_TABS = [
+  'drafts',
+  'submitted',
+  'corrections',
+  'authorized',
+  'cancelled',
+  'archived',
+] as const satisfies readonly (keyof typeof OUTGOING_STATUS_GROUPS)[];
 
 export type OutgoingStatusGroup = keyof typeof OUTGOING_STATUS_GROUPS;
 const GROUPS = Object.keys(OUTGOING_STATUS_GROUPS) as OutgoingStatusGroup[];
@@ -35,7 +57,7 @@ export class FindOutgoingMailsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     enum: GROUPS,
     description:
-      'Tab: pending = BROUILLON, EN_ATTENTE_VALIDATION · approved = VALIDE, PRET_A_ENVOYER, ENVOYE · rejected = A_CORRIGER, ANNULE',
+      'Tab: drafts = BROUILLON · submitted = EN_ATTENTE_VALIDATION · corrections = A_CORRIGER · authorized = VALIDE, SIGNE, PRET_A_ENVOYER, ENVOYE, DECHARGE · cancelled = ANNULE · archived = ARCHIVE. Also: pending = BROUILLON, EN_ATTENTE_VALIDATION · approved = authorized · rejected = A_CORRIGER, ANNULE',
   })
   @IsOptional()
   @IsIn(GROUPS)
@@ -43,7 +65,7 @@ export class FindOutgoingMailsQueryDto extends PaginationQueryDto {
 
   @ApiPropertyOptional({
     enum: CourrierStatus,
-    description: 'Exact status; combined with `group` if both are given',
+    description: `Exact status; combined with \`group\` if both are given. ${COURRIER_STATUS_DOC}`,
   })
   @IsOptional()
   @IsEnum(CourrierStatus)

@@ -4,8 +4,12 @@ import { AuditLog } from '../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../database/database.service';
 import {
   CreateCriterionTemplateDto,
+  UpdateAnalysisSettingsDto,
   UpdateCriterionTemplateDto,
 } from './dto/analysis.dto';
+
+// The settings live in a single row.
+const SETTINGS_ID = 1;
 
 /**
  * The "document de critères d'analyse" as data: the default grid proposed on
@@ -68,5 +72,31 @@ export class CriterionTemplateService {
     // Criteria already copied onto elements keep their own label, so removing
     // a template never mutates a filled sheet.
     await this.database.analysisCriterionTemplate.delete({ where: { id } });
+  }
+
+  /** The fiches' settings — the defaults until an admin changes them. */
+  async getSettings() {
+    const settings = await this.database.analysisSettings.findUnique({
+      where: { id: SETTINGS_ID },
+      select: { allowCustomCriteria: true, updatedAt: true },
+    });
+    return settings ?? { allowCustomCriteria: true, updatedAt: null };
+  }
+
+  async updateSettings(dto: UpdateAnalysisSettingsDto) {
+    await this.database.analysisSettings.upsert({
+      where: { id: SETTINGS_ID },
+      create: { id: SETTINGS_ID, ...dto },
+      update: dto,
+    });
+    await this.activity
+      .tryRecord({
+        action: 'analysis-settings.updated',
+        entityType: 'analysis-settings',
+        entityId: String(SETTINGS_ID),
+        metadata: { ...dto },
+      })
+      .catch(() => undefined);
+    return this.getSettings();
   }
 }

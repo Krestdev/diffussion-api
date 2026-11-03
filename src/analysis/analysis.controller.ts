@@ -11,9 +11,17 @@ import {
   Post,
   Put,
   Query,
+  Res,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
+  Header,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
+import { Response } from 'express';
+import { ArchiveReasonDto } from '../common/dto/archive-reason.dto';
+import { attachmentUploadOptions } from '../common/utils/attachment-upload';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../auth/rbac/permission.guard';
@@ -31,7 +39,9 @@ import {
   CreateAnalysisSheetDto,
   DecideAnalysisSheetDto,
   FindAnalysisSheetsQueryDto,
+  NewAnalysisVersionDto,
   SetCriteriaDto,
+  SignAnalysisSheetDto,
   UpdateAnalysisItemDto,
   UpdateAnalysisSheetDto,
 } from './dto/analysis.dto';
@@ -72,6 +82,75 @@ export class AnalysisController {
   @RequirePermission(PermissionCode.AnalysisRead)
   summary(@Param('id', ParseUUIDPipe) id: string) {
     return this.sheets.summary(id);
+  }
+
+  @Get(':id/pdf')
+  @RequirePermission(PermissionCode.AnalysisRead)
+  @Header('Content-Type', 'application/pdf')
+  async pdf(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
+    const { pdf, filename } = await this.sheets.pdf(id);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.end(pdf);
+  }
+
+  // A draft (BROUILLON) only.
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @RequirePermission(PermissionCode.AnalysisUpdate)
+  remove(@Param('id', ParseUUIDPipe) id: string) {
+    return this.sheets.remove(id);
+  }
+
+  // BROUILLON or ENREGISTREE -> SIGNEE, locked: the signed PDF, its
+  // signatory, its date.
+  @Post(':id/sign')
+  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file', 'signatoryName', 'signedAt'],
+      properties: {
+        file: { type: 'string', format: 'binary', description: 'PDF' },
+        signatoryName: { type: 'string', maxLength: 255 },
+        signedAt: { type: 'string', format: 'date', example: '2026-11-02' },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', attachmentUploadOptions()))
+  sign(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SignAnalysisSheetDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.sheets.sign(id, dto, file, user.sub);
+  }
+
+  // From an ENREGISTREE or SIGNEE fiche: a new BROUILLON, elements and
+  // criteria copied.
+  @Post(':id/new-version')
+  @RequirePermission(PermissionCode.AnalysisUpdate)
+  newVersion(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: NewAnalysisVersionDto,
+  ) {
+    return this.sheets.newVersion(id, dto);
+  }
+
+  @Post(':id/archive')
+  @RequirePermission(PermissionCode.AnalysisUpdate)
+  archive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ArchiveReasonDto,
+  ) {
+    return this.sheets.archive(id, dto?.reason);
+  }
+
+  @Post(':id/unarchive')
+  @RequirePermission(PermissionCode.AnalysisUpdate)
+  unarchive(@Param('id', ParseUUIDPipe) id: string) {
+    return this.sheets.unarchive(id);
   }
 
   @Patch(':id')

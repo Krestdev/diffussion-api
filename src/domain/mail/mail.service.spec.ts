@@ -74,11 +74,13 @@ describe('MailService', () => {
     user: Record<string, jest.Mock>;
     validation: Record<string, jest.Mock>;
     effetType: Record<string, jest.Mock>;
+    canal: Record<string, jest.Mock>;
     $transaction: jest.Mock;
+    $queryRaw: jest.Mock;
   };
   let notifications: { create: jest.Mock };
   let rbac: Record<string, jest.Mock>;
-  let storage: { upload: jest.Mock };
+  let storage: { upload: jest.Mock; delete: jest.Mock };
 
   beforeEach(async () => {
     database = {
@@ -91,11 +93,16 @@ describe('MailService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         findUniqueOrThrow: jest.fn(),
         delete: jest.fn(),
+        groupBy: jest.fn().mockResolvedValue([]),
       },
       dossier: { findUnique: jest.fn(), updateMany: jest.fn() },
       project: { findUnique: jest.fn() },
       contract: { findUnique: jest.fn() },
-      instruction: { count: jest.fn().mockResolvedValue(0) },
+      instruction: {
+        count: jest.fn().mockResolvedValue(0),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
+      canal: { findUnique: jest.fn() },
       document: { create: jest.fn() },
       site: { findUnique: jest.fn() },
       user: {
@@ -112,6 +119,8 @@ describe('MailService', () => {
             Promise.resolve(EFFET_TYPES[where.id] ?? null),
           ),
       },
+      // The yearly sequence of outgoing references.
+      $queryRaw: jest.fn().mockResolvedValue([{ last: 7 }]),
       $transaction: jest.fn((arg: unknown) =>
         typeof arg === 'function'
           ? (arg as (tx: unknown) => unknown)(database)
@@ -128,6 +137,7 @@ describe('MailService', () => {
     };
     storage = {
       upload: jest.fn().mockResolvedValue({ key: 'test-key' }),
+      delete: jest.fn().mockResolvedValue(undefined),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -159,11 +169,13 @@ describe('MailService', () => {
         .mockResolvedValueOnce(57) // metrics.total
         .mockResolvedValueOnce(10) // toDispatch
         .mockResolvedValueOnce(5) // dispatchPending
+        .mockResolvedValueOnce(3) // affected
         .mockResolvedValueOnce(8) // assigned
         .mockResolvedValueOnce(15) // inTreatment
         .mockResolvedValueOnce(4) // closed
         .mockResolvedValueOnce(9) // metrics.archived
-        .mockResolvedValueOnce(6); // metrics.others
+        .mockResolvedValueOnce(6) // metrics.others
+        .mockResolvedValueOnce(20); // dispatched
     });
 
     it('returns the page plus unfiltered metrics in one payload', async () => {
@@ -180,6 +192,7 @@ describe('MailService', () => {
           archived: 9,
           toDispatch: 10,
           dispatchPending: 5,
+          affected: 3,
           assigned: 8,
           inTreatment: 15,
           closed: 4,
@@ -193,11 +206,13 @@ describe('MailService', () => {
             all: 57,
             toDispatch: 10,
             dispatchPending: 5,
+            affected: 3,
             assigned: 8,
             inTreatment: 15,
             closed: 4,
             archived: 9,
             others: 6,
+            dispatched: 20,
           },
         },
       });
@@ -287,27 +302,68 @@ describe('MailService', () => {
 
   describe('findOutgoing', () => {
     beforeEach(() => {
-      database.courrier.findMany.mockResolvedValue([{ id: 's-1' }]);
-      database.courrier.count
-        .mockResolvedValueOnce(1) // filtered total
-        .mockResolvedValueOnce(4) // pending
-        .mockResolvedValueOnce(3) // approved
-        .mockResolvedValueOnce(2) // rejected
-        .mockResolvedValueOnce(10); // all
+      database.courrier.findMany.mockResolvedValue([
+        { id: 's-1', dossierId: null, createdById: 'u-1' },
+      ]);
+      database.courrier.count.mockResolvedValue(1);
+      const counted = {
+        BROUILLON: 3,
+        EN_ATTENTE_VALIDATION: 1,
+        A_CORRIGER: 2,
+        VALIDE: 1,
+        ENVOYE: 2,
+        ANNULE: 1,
+        ARCHIVE: 4,
+      };
+      database.courrier.groupBy.mockResolvedValue(
+        Object.entries(counted).map(([status, n]) => ({
+          status,
+          _count: { _all: n },
+        })),
+      );
+      // Its approver: its registrant's site's responsible.
+      database.user.findUnique.mockResolvedValue({
+        site: { responsibleId: 'u-chef' },
+      });
+      database.user.findMany.mockResolvedValue([
+        { id: 'u-chef', name: 'Chef' },
+      ]);
     });
 
-    it('returns one tab of rows plus every tab count', async () => {
+    it('returns one tab of rows, with their approver, plus every tab count', async () => {
       const result = await service.findOutgoing(
         { group: 'pending', skip: 0, take: 20 },
         'u-1',
       );
 
       expect(result).toEqual({
-        data: [{ id: 's-1', instructionsProgress: { done: 0, total: 0 } }],
+        data: [
+          {
+            id: 's-1',
+            dossierId: null,
+            createdById: 'u-1',
+            instructionsProgress: { done: 0, total: 0 },
+            approver: { id: 'u-chef', name: 'Chef' },
+          },
+        ],
         total: 1,
         skip: 0,
         take: 20,
-        metrics: { pending: 4, approved: 3, rejected: 2, total: 10 },
+        metrics: {
+          pending: 4,
+          approved: 3,
+          rejected: 3,
+          total: 14,
+          byTab: {
+            all: 14,
+            drafts: 3,
+            submitted: 1,
+            corrections: 2,
+            authorized: 3,
+            cancelled: 1,
+            archived: 4,
+          },
+        },
       });
     });
 
@@ -319,9 +375,9 @@ describe('MailService', () => {
 
       const { where } = database.courrier.findMany.mock.calls[0][0];
       expect(where.ownerId).toBe('owner-1');
-      for (const call of database.courrier.count.mock.calls.slice(1)) {
-        expect(call[0].where).not.toHaveProperty('ownerId');
-      }
+      expect(
+        database.courrier.groupBy.mock.calls[0][0].where,
+      ).not.toHaveProperty('ownerId');
     });
 
     it('turns a tab into its statuses and keeps the visibility scope', async () => {
@@ -338,19 +394,17 @@ describe('MailService', () => {
         status: {
           in: [
             CourrierStatus.VALIDE,
+            CourrierStatus.SIGNE,
             CourrierStatus.PRET_A_ENVOYER,
             CourrierStatus.ENVOYE,
+            CourrierStatus.DECHARGE,
           ],
         },
       });
       // Tab counts ignore the selected tab and other filters.
-      const pendingWhere = database.courrier.count.mock.calls[1][0].where;
-      expect(pendingWhere).toEqual({
+      expect(database.courrier.groupBy.mock.calls[0][0].where).toEqual({
         direction: CourrierDirection.SORTANT,
         OR: where.OR,
-        status: {
-          in: [CourrierStatus.BROUILLON, CourrierStatus.EN_ATTENTE_VALIDATION],
-        },
       });
     });
 
@@ -480,7 +534,11 @@ describe('MailService', () => {
 
       expect(database.courrier.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: { status: CourrierStatus.TRANSMIS },
+          data: {
+            status: CourrierStatus.TRANSMIS,
+            transmittedAt: expect.any(Date) as Date,
+            transmittedById: 'u-agent',
+          },
         }),
       );
       expect(notifications.create).toHaveBeenCalledWith(
@@ -516,6 +574,36 @@ describe('MailService', () => {
       );
     });
 
+    it('transmits an effet affected to a contract to its designated responsible', async () => {
+      database.courrier.findUnique.mockResolvedValue(
+        entrant({
+          status: CourrierStatus.AFFECTE,
+          dossierId: null,
+          contractId: 'ct-1',
+          ownerId: 'u-ct-resp',
+        }),
+      );
+
+      await service.transmit('c-1', 'u-agent');
+
+      expect(notifications.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          recipientIds: ['u-ct-resp'],
+          type: 'COURRIER_TRANSMITTED',
+        }),
+      );
+    });
+
+    it('refuses an effet already transmitted', async () => {
+      database.courrier.findUnique.mockResolvedValue(
+        entrant({ status: CourrierStatus.TRANSMIS }),
+      );
+
+      await expect(service.transmit('c-1', 'u-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
+
     describe('in the same request ("Voulez-vous transmettre ?")', () => {
       beforeEach(() => {
         database.courrier.create.mockImplementation(({ data }) =>
@@ -542,7 +630,9 @@ describe('MailService', () => {
         ).not.toHaveProperty('transmit');
         expect(database.courrier.update).toHaveBeenCalledWith(
           expect.objectContaining({
-            data: { status: CourrierStatus.TRANSMIS },
+            data: expect.objectContaining({
+              status: CourrierStatus.TRANSMIS,
+            }) as unknown,
           }),
         );
         expect(notifications.create).toHaveBeenCalledWith(
@@ -598,7 +688,11 @@ describe('MailService', () => {
         );
         expect(calls[0]).toMatchObject({ dossierId: 'd-1' });
         expect(calls[0]).not.toHaveProperty('transmit');
-        expect(calls).toContainEqual({ status: CourrierStatus.TRANSMIS });
+        expect(calls).toContainEqual({
+          status: CourrierStatus.TRANSMIS,
+          transmittedAt: expect.any(Date) as Date,
+          transmittedById: 'u-dispatch',
+        });
       });
 
       it('refuses before writing when it was already transmitted', async () => {
@@ -859,6 +953,291 @@ describe('MailService', () => {
         site: { responsibleId: siteResponsibleId },
       });
 
+    describe('cancel / archive / unarchive', () => {
+      it('refuses to cancel a sortant without its reason', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.BROUILLON),
+        );
+
+        await expect(service.cancel('c-1')).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+        expect(database.courrier.update).not.toHaveBeenCalled();
+      });
+
+      it('cancels a sortant with its reason', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.A_CORRIGER),
+        );
+
+        await service.cancel('c-1', 'Le client a retiré sa demande');
+
+        expect(database.courrier.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: {
+              status: CourrierStatus.ANNULE,
+              cancelledAt: expect.any(Date) as Date,
+              cancellationReason: 'Le client a retiré sa demande',
+            },
+          }),
+        );
+      });
+
+      it('archives a discharged sortant, keeping the status it leaves', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.DECHARGE),
+        );
+
+        await service.archive('c-1', 'Dossier soldé');
+
+        expect(database.courrier.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: {
+              status: CourrierStatus.ARCHIVE,
+              archivedAt: expect.any(Date) as Date,
+              archiveReason: 'Dossier soldé',
+              archivedFromStatus: CourrierStatus.DECHARGE,
+            },
+          }),
+        );
+      });
+
+      it('refuses to archive a sortant sent but not yet discharged', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.ENVOYE),
+        );
+
+        await expect(service.archive('c-1')).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+      });
+
+      it('refuses to archive a sortant still in its draft', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.BROUILLON),
+        );
+
+        await expect(service.archive('c-1')).rejects.toBeInstanceOf(
+          BadRequestException,
+        );
+      });
+
+      it('gives an unarchived effet back its earlier status', async () => {
+        database.courrier.findUnique.mockResolvedValue({
+          ...courrier(CourrierStatus.ARCHIVE),
+          archivedFromStatus: CourrierStatus.ANNULE,
+        });
+
+        await service.unarchive('c-1');
+
+        expect(database.courrier.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: {
+              status: CourrierStatus.ANNULE,
+              archivedAt: null,
+              archiveReason: null,
+              archivedFromStatus: null,
+            },
+          }),
+        );
+      });
+    });
+
+    describe('sign / send / discharge', () => {
+      const scan = {
+        originalname: 'signe.pdf',
+        mimetype: 'application/pdf',
+        size: 12,
+        buffer: Buffer.from('%PDF-1.4'),
+      } as Express.Multer.File;
+
+      beforeEach(() => {
+        database.document.create.mockResolvedValue({ id: 'doc-1' });
+        database.courrier.findUniqueOrThrow.mockResolvedValue({
+          id: 'c-1',
+          bordereauNumber: `BT-${new Date().getFullYear()}-000007`,
+        });
+      });
+
+      it('signs an approved sortant with its scan, its signatory and its date', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.VALIDE),
+        );
+        database.user.findUnique.mockResolvedValue({ status: 'ACTIVE' });
+
+        await service.sign(
+          'c-1',
+          { signatoryId: 'u-dg', signedAt: '2026-11-02' },
+          scan,
+          'u-secretary',
+        );
+
+        expect(database.document.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            courrierId: 'c-1',
+            storageKey: 'test-key',
+          }) as unknown,
+        });
+        expect(database.courrier.updateMany).toHaveBeenCalledWith({
+          where: { id: 'c-1', status: CourrierStatus.VALIDE },
+          data: {
+            status: CourrierStatus.SIGNE,
+            signedAt: new Date('2026-11-02'),
+            signedById: 'u-dg',
+            signedDocumentId: 'doc-1',
+          },
+        });
+      });
+
+      it('refuses to sign without the scan', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.VALIDE),
+        );
+
+        await expect(
+          service.sign(
+            'c-1',
+            { signatoryId: 'u-dg', signedAt: '2026-11-02' },
+            undefined,
+            'u-secretary',
+          ),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      });
+
+      it('removes the stored scan when the effet changed meanwhile', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.VALIDE),
+        );
+        database.user.findUnique.mockResolvedValue({ status: 'ACTIVE' });
+        database.courrier.updateMany.mockResolvedValue({ count: 0 });
+
+        await expect(
+          service.sign(
+            'c-1',
+            { signatoryId: 'u-dg', signedAt: '2026-11-02' },
+            scan,
+            'u-secretary',
+          ),
+        ).rejects.toBeInstanceOf(ConflictException);
+        expect(storage.delete).toHaveBeenCalledWith('test-key');
+      });
+
+      it('sends a signed sortant under the next bordereau number', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.SIGNE),
+        );
+        database.canal.findUnique.mockResolvedValue({ name: 'Porteur' });
+
+        await service.send(
+          'c-1',
+          {
+            canalId: 'canal-1',
+            recipient: 'M. Diallo',
+            transmittedAt: '2026-11-03',
+          },
+          'u-secretary',
+        );
+
+        expect(database.courrier.updateMany).toHaveBeenCalledWith({
+          where: { id: 'c-1', status: { in: expect.any(Array) as unknown } },
+          data: {
+            status: CourrierStatus.ENVOYE,
+            bordereauNumber: `BT-${new Date().getFullYear()}-000007`,
+            canalId: 'canal-1',
+            transmissionMode: 'Porteur',
+            transmissionRecipient: 'M. Diallo',
+            transmittedAt: new Date('2026-11-03'),
+            transmittedById: 'u-secretary',
+            sentAt: new Date('2026-11-03'),
+          },
+        });
+      });
+
+      it('refuses to send a sortant not yet signed', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.VALIDE),
+        );
+
+        await expect(
+          service.send(
+            'c-1',
+            {
+              canalId: 'canal-1',
+              recipient: 'M. Diallo',
+              transmittedAt: '2026-11-03',
+            },
+            'u-secretary',
+          ),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      });
+
+      it('discharges a sent sortant with the discharged bordereau', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.ENVOYE),
+        );
+
+        await service.discharge(
+          'c-1',
+          'u-secretary',
+          { receivedBy: 'Mme Ndiaye', dischargedAt: '2026-11-04' },
+          scan,
+        );
+
+        expect(database.courrier.updateMany).toHaveBeenCalledWith({
+          where: { id: 'c-1', status: CourrierStatus.ENVOYE },
+          data: {
+            status: CourrierStatus.DECHARGE,
+            dischargedAt: new Date('2026-11-04'),
+            dischargedById: 'u-secretary',
+            dischargedStamp: true,
+            dischargeReceivedBy: 'Mme Ndiaye',
+            dischargeDocumentId: 'doc-1',
+          },
+        });
+      });
+
+      it('refuses to discharge a sortant without its bordereau', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.ENVOYE),
+        );
+
+        await expect(
+          service.discharge('c-1', 'u-secretary', {
+            receivedBy: 'Mme Ndiaye',
+            dischargedAt: '2026-11-04',
+          }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+      });
+    });
+
+    describe('close', () => {
+      it('closes an entrant with its note, cancelling its open instructions', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.EN_TRAITEMENT, CourrierDirection.ENTRANT),
+        );
+        database.instruction.updateMany.mockResolvedValue({ count: 2 });
+
+        await service.close('c-1', { note: 'Réponse envoyée' });
+
+        expect(database.instruction.updateMany).toHaveBeenCalledWith({
+          where: {
+            courrierId: 'c-1',
+            status: { notIn: ['TERMINEE', 'ANNULEE'] },
+          },
+          data: { status: 'ANNULEE', cancellationReason: 'Effet clôturé' },
+        });
+        expect(database.courrier.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: {
+              status: CourrierStatus.CLOTURE,
+              closedAt: expect.any(Date) as Date,
+              closingNote: 'Réponse envoyée',
+            },
+          }),
+        );
+      });
+    });
+
     describe('submitForValidation', () => {
       it('refuses a sortant courrier that is not a draft', async () => {
         database.courrier.findUnique.mockResolvedValue(
@@ -891,7 +1270,10 @@ describe('MailService', () => {
 
         expect(database.courrier.update).toHaveBeenCalledWith(
           expect.objectContaining({
-            data: { status: CourrierStatus.EN_ATTENTE_VALIDATION },
+            data: {
+              status: CourrierStatus.EN_ATTENTE_VALIDATION,
+              submittedAt: expect.any(Date) as Date,
+            },
           }),
         );
         expect(notifications.create).toHaveBeenCalledWith(
@@ -941,7 +1323,16 @@ describe('MailService', () => {
 
         expect(database.courrier.updateMany).toHaveBeenCalledWith({
           where: { id: 'c-1', status: CourrierStatus.EN_ATTENTE_VALIDATION },
-          data: { status: CourrierStatus.VALIDE },
+          data: {
+            status: CourrierStatus.VALIDE,
+            approvedAt: expect.any(Date) as Date,
+            approvedById: 'u-chef',
+          },
+        });
+        // An approved sortant gets the year's next outgoing reference.
+        expect(database.courrier.update).toHaveBeenCalledWith({
+          where: { id: 'c-1' },
+          data: { reference: `SOR-${new Date().getFullYear()}-000007` },
         });
         expect(database.validation.create).toHaveBeenCalledWith({
           data: {
@@ -977,6 +1368,20 @@ describe('MailService', () => {
             motif: 'Signature manquante',
           }) as unknown,
         });
+        expect(database.$queryRaw).not.toHaveBeenCalled();
+      });
+
+      it('gives an approved entrant no outgoing reference', async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(
+            CourrierStatus.EN_ATTENTE_VALIDATION,
+            CourrierDirection.ENTRANT,
+          ),
+        );
+
+        await service.validate('c-1', 'u-chef');
+
+        expect(database.$queryRaw).not.toHaveBeenCalled();
       });
 
       it('refuses anyone but the validator', async () => {
@@ -1143,7 +1548,7 @@ describe('MailService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('dispatches with permission to TRANSMIS and sets owner to contract responsible', async () => {
+    it('dispatches with permission to AFFECTE and sets owner to contract responsible', async () => {
       database.project.findUnique.mockResolvedValue({
         id: 'p-1',
         responsibleId: 'u-p-resp',
@@ -1158,7 +1563,7 @@ describe('MailService', () => {
       );
       database.courrier.update.mockResolvedValue({
         id: 'c-1',
-        status: CourrierStatus.TRANSMIS,
+        status: CourrierStatus.AFFECTE,
         ownerId: 'u-ct-resp',
       });
       // Dispatcher at the effet's site (its registrant's, s-1).
@@ -1171,11 +1576,13 @@ describe('MailService', () => {
         'u-dispatcher',
       );
 
-      expect(res.status).toBe(CourrierStatus.TRANSMIS);
+      expect(res.status).toBe(CourrierStatus.AFFECTE);
+      // Its responsible is told once it is transmitted, not before.
+      expect(notifications.create).not.toHaveBeenCalled();
       expect(database.courrier.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            status: CourrierStatus.TRANSMIS,
+            status: CourrierStatus.AFFECTE,
             ownerId: 'u-ct-resp',
             projectId: 'p-1',
             contractId: 'ct-1',
@@ -1226,7 +1633,7 @@ describe('MailService', () => {
       );
     });
 
-    it('allows changing assignment on TRANSMIS when caller has permission and no instructions exist', async () => {
+    it('allows changing assignment on AFFECTE when caller has permission and no instructions exist', async () => {
       database.project.findUnique.mockResolvedValue({
         id: 'p-1',
         responsibleId: 'u-p-resp',
@@ -1237,11 +1644,11 @@ describe('MailService', () => {
         responsibleId: 'u-new-owner',
       });
       database.courrier.findUnique.mockResolvedValue(
-        mockCourrier(CourrierStatus.TRANSMIS, []),
+        mockCourrier(CourrierStatus.AFFECTE, []),
       );
       database.courrier.update.mockResolvedValue({
         id: 'c-1',
-        status: CourrierStatus.TRANSMIS,
+        status: CourrierStatus.AFFECTE,
         ownerId: 'u-new-owner',
       });
       // Dispatcher at the effet's site (its registrant's, s-1).
@@ -1542,7 +1949,7 @@ describe('MailService', () => {
       });
       database.courrier.findUniqueOrThrow.mockResolvedValue({
         id: 'c-1',
-        status: CourrierStatus.TRANSMIS,
+        status: CourrierStatus.AFFECTE,
         ownerId: 'u-ct-resp',
         projectId: 'p-1',
         contractId: 'ct-1',
@@ -1553,12 +1960,12 @@ describe('MailService', () => {
 
       const res = await service.validateDispatch('c-1', 'u-validator');
 
-      expect(res.status).toBe(CourrierStatus.TRANSMIS);
+      expect(res.status).toBe(CourrierStatus.AFFECTE);
       expect(database.courrier.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'c-1', status: CourrierStatus.EN_ATTENTE_TRANSMISSION },
           data: expect.objectContaining({
-            status: CourrierStatus.TRANSMIS,
+            status: CourrierStatus.AFFECTE,
             ownerId: 'u-ct-resp',
             projectId: 'p-1',
             contractId: 'ct-1',
@@ -1576,12 +1983,8 @@ describe('MailService', () => {
           }),
         }),
       );
-      expect(notifications.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          recipientIds: ['u-ct-resp'],
-          type: 'COURRIER_TRANSMITTED',
-        }),
-      );
+      // Its responsible is told once it is transmitted.
+      expect(notifications.create).not.toHaveBeenCalled();
     });
 
     it('validates dispatch and marks dossier in progress when target is a dossier', async () => {

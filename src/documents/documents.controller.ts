@@ -17,8 +17,11 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ATTACHMENT_RULE,
+  attachmentUploadOptions,
+} from '../common/utils/attachment-upload';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
-import { memoryStorage } from 'multer';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { JwtPayloadWithRefreshToken } from '../auth/types/jwt-payload.type';
@@ -27,8 +30,6 @@ import { SetOwnerDto } from '../common/dto/set-owner.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents.query.dto';
 import { DocumentsService } from './documents.service';
-
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 @ApiTags('documents')
 @ApiBearerAuth()
@@ -44,7 +45,11 @@ export class DocumentsController {
       type: 'object',
       required: ['file'],
       properties: {
-        file: { type: 'string', format: 'binary' },
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: ATTACHMENT_RULE,
+        },
         name: {
           type: 'string',
           maxLength: 200,
@@ -58,12 +63,7 @@ export class DocumentsController {
       },
     },
   })
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: memoryStorage(),
-      limits: { fileSize: MAX_UPLOAD_BYTES },
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file', attachmentUploadOptions()))
   upload(
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: UploadDocumentDto,

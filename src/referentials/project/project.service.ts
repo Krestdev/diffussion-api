@@ -57,6 +57,7 @@ export const COURRIER_DONE: CourrierStatus[] = [
   CourrierStatus.ARCHIVE,
   CourrierStatus.ANNULE,
   CourrierStatus.ENVOYE,
+  CourrierStatus.DECHARGE,
 ];
 
 /**

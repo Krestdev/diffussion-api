@@ -12,10 +12,40 @@ export function awaitingValidationBy(
 ): Prisma.CourrierWhereInput {
   return {
     status: CourrierStatus.EN_ATTENTE_VALIDATION,
+    // Its dossier's responsible, else its contract's, else its site's;
+    // without a dossier: its contract's (else that contract's project's),
+    // its project's, else its registrant's site's.
     OR: [
       { dossier: { responsibleId: userId } },
-      { dossier: { responsibleId: null, site: { responsibleId: userId } } },
-      { dossierId: null, createdBy: { site: { responsibleId: userId } } },
+      {
+        dossier: {
+          responsibleId: null,
+          contract: { responsibleId: userId },
+        },
+      },
+      {
+        dossier: {
+          responsibleId: null,
+          OR: [{ contractId: null }, { contract: { responsibleId: null } }],
+          site: { responsibleId: userId },
+        },
+      },
+      { dossierId: null, contract: { responsibleId: userId } },
+      {
+        dossierId: null,
+        contract: { responsibleId: null, project: { responsibleId: userId } },
+      },
+      {
+        dossierId: null,
+        contractId: null,
+        project: { responsibleId: userId },
+      },
+      {
+        dossierId: null,
+        contractId: null,
+        OR: [{ projectId: null }, { project: { responsibleId: null } }],
+        createdBy: { site: { responsibleId: userId } },
+      },
     ],
   };
 }

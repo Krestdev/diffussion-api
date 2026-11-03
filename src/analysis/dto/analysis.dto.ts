@@ -1,10 +1,17 @@
-import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+import {
+  ApiProperty,
+  ApiPropertyOptional,
+  OmitType,
+  PartialType,
+} from '@nestjs/swagger';
 import {
   IsArray,
   IsBoolean,
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
@@ -13,8 +20,58 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { AnalysisOpinion } from '../../../generated/prisma/enums';
+import {
+  AnalysisOpinion,
+  AnalysisSheetStatus,
+} from '../../../generated/prisma/enums';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { Trim } from '../../common/transforms/trim.transform';
+
+export class CreateAnalysisItemDto {
+  @ApiPropertyOptional({
+    description:
+      'The received document this element evaluates (one of its courrier’s documents)',
+  })
+  @IsOptional()
+  @IsUUID()
+  documentId?: string;
+
+  @ApiProperty({ example: 'Plan de ferraillage' })
+  @IsString()
+  @MaxLength(200)
+  label: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @ApiPropertyOptional({ example: 'NF EN 1992-1-1' })
+  @IsOptional()
+  @IsString()
+  norms?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  observation?: string;
+
+  @ApiPropertyOptional({
+    enum: AnalysisOpinion,
+    description: "The expert's avis on this element",
+  })
+  @IsOptional()
+  @IsEnum(AnalysisOpinion)
+  opinion?: AnalysisOpinion;
+
+  @ApiPropertyOptional({
+    description: 'Position in the fiche; appended at the end when omitted',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  order?: number;
+}
 
 export class CreateAnalysisSheetDto {
   @ApiProperty({
@@ -23,12 +80,13 @@ export class CreateAnalysisSheetDto {
   @IsUUID()
   courrierId: string;
 
-  @ApiProperty({
+  @ApiPropertyOptional({
     description:
-      'Instruction this analysis answers — the fiche is deposited as one of its livrables',
+      'Instruction this analysis answers — the fiche is then deposited as one of its livrables. Omitted: a fiche opened from the effet alone.',
   })
+  @IsOptional()
   @IsUUID()
-  instructionId: string;
+  instructionId?: string;
 
   @ApiPropertyOptional({ description: 'Projet / Marché' })
   @IsOptional()
@@ -38,11 +96,91 @@ export class CreateAnalysisSheetDto {
   @ApiPropertyOptional({
     default: true,
     description:
-      'Create one element per document attached to the courrier, each pre-filled with the default criteria grid',
+      'Without `items`: create one element per document attached to the courrier, each pre-filled with the default criteria grid',
   })
   @IsOptional()
   @IsBoolean()
   seedItemsFromCourrier?: boolean;
+
+  @ApiPropertyOptional({
+    type: [CreateAnalysisItemDto],
+    description:
+      'The elements to create with the fiche (instead of seeding them from the courrier)',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateAnalysisItemDto)
+  items?: CreateAnalysisItemDto[];
+
+  @ApiPropertyOptional({ description: 'Objet de la remise', maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  title?: string;
+
+  @ApiPropertyOptional({ maxLength: 100 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  mode?: string;
+
+  @ApiPropertyOptional({ maxLength: 100 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  projectReference?: string;
+
+  @ApiPropertyOptional({ description: "Maître d'ouvrage", maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  owner?: string;
+
+  @ApiPropertyOptional({ description: 'Allotissement', maxLength: 255 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  allotment?: string;
+
+  @ApiPropertyOptional({ maxLength: 150 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  authorFunction?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Who produced the fiche (active user) — the creator when omitted. For a fiche answering an instruction, an executant of it.',
+  })
+  @IsOptional()
+  @IsUUID()
+  authorId?: string;
+
+  @ApiPropertyOptional({
+    enum: AnalysisOpinion,
+    description:
+      "The fiche's overall avis, chosen by its author (a fiche answering an instruction gets it through /decide)",
+  })
+  @IsOptional()
+  @IsEnum(AnalysisOpinion)
+  overallOpinion?: AnalysisOpinion;
+
+  @ApiPropertyOptional({ description: 'Who validates the fiche (active user)' })
+  @IsOptional()
+  @IsUUID()
+  validatorId?: string;
+
+  @ApiPropertyOptional({ maxLength: 150 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(150)
+  validatorFunction?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  comments?: string;
 
   @ApiPropertyOptional({ example: 'BL-2026-0042' })
   @IsOptional()
@@ -77,43 +215,30 @@ export class CreateAnalysisSheetDto {
   docsReferences?: string[];
 }
 
+// The statuses PATCH may move a fiche between; signing and archiving have
+// their own routes.
+export const EDITABLE_SHEET_STATUSES = [
+  AnalysisSheetStatus.BROUILLON,
+  AnalysisSheetStatus.ENREGISTREE,
+] as const;
+
 // The delivery and the instruction are fixed once the fiche exists.
 export class UpdateAnalysisSheetDto extends PartialType(
-  CreateAnalysisSheetDto,
+  OmitType(CreateAnalysisSheetDto, ['items'] as const),
 ) {
   @ApiPropertyOptional({ readOnly: true })
   @IsOptional()
   @IsUUID()
   declare courrierId?: string;
-}
-
-export class CreateAnalysisItemDto {
-  @ApiProperty({ description: 'The received document this element evaluates' })
-  @IsUUID()
-  documentId: string;
-
-  @ApiProperty({ example: 'Plan de ferraillage' })
-  @IsString()
-  @MaxLength(200)
-  label: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  description?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  observation?: string;
 
   @ApiPropertyOptional({
-    description: 'Position in the fiche; appended at the end when omitted',
+    enum: EDITABLE_SHEET_STATUSES,
+    description:
+      'BROUILLON ⇄ ENREGISTREE. SIGNEE and ARCHIVEE go through /sign and /archive.',
   })
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  order?: number;
+  @IsIn(EDITABLE_SHEET_STATUSES)
+  status?: (typeof EDITABLE_SHEET_STATUSES)[number];
 }
 
 export class UpdateAnalysisItemDto {
@@ -127,6 +252,11 @@ export class UpdateAnalysisItemDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  norms?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -158,7 +288,10 @@ export class SetCriterionDto {
   @IsString()
   observation?: string;
 
-  @ApiPropertyOptional({ description: 'Criterion template it came from' })
+  @ApiPropertyOptional({
+    description:
+      'Criterion template it came from — required for every criterion when allowCustomCriteria is off',
+  })
   @IsOptional()
   @IsUUID()
   templateId?: string;
@@ -190,11 +323,39 @@ export class DecideAnalysisSheetDto {
   motif?: string;
 }
 
+// Sent as multipart, with `file`: the signed fiche, as a PDF.
+export class SignAnalysisSheetDto {
+  @ApiProperty({ maxLength: 255 })
+  @Trim()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  signatoryName: string;
+
+  @ApiProperty({ example: '2026-11-02' })
+  @IsDateString({ strict: true })
+  signedAt: string;
+}
+
+export class NewAnalysisVersionDto {
+  @ApiPropertyOptional({ description: 'Why a new version is opened' })
+  @IsOptional()
+  @Trim()
+  @IsString()
+  @MaxLength(1000)
+  motif?: string;
+}
+
 export class FindAnalysisSheetsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()
   dossierId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  contractId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -210,6 +371,11 @@ export class FindAnalysisSheetsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(AnalysisOpinion)
   overallOpinion?: AnalysisOpinion;
+
+  @ApiPropertyOptional({ enum: AnalysisSheetStatus })
+  @IsOptional()
+  @IsEnum(AnalysisSheetStatus)
+  status?: AnalysisSheetStatus;
 }
 
 export class CreateCriterionTemplateDto {
@@ -232,8 +398,26 @@ export class CreateCriterionTemplateDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      'Put on every new element; otherwise offered, to be added by hand',
+  })
+  @IsOptional()
+  @IsBoolean()
+  appliedByDefault?: boolean;
 }
 
 export class UpdateCriterionTemplateDto extends PartialType(
   CreateCriterionTemplateDto,
 ) {}
+
+export class UpdateAnalysisSettingsDto {
+  @ApiProperty({
+    description:
+      'Whether an element may carry criteria outside the catalogue (PUT /analysis-sheets/items/:id/criteria)',
+  })
+  @IsBoolean()
+  allowCustomCriteria: boolean;
+}

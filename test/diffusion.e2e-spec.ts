@@ -164,6 +164,7 @@ describe('Diffusion, end to end', () => {
       'DOSSIER_READ',
       'COURRIER_READ',
       'COURRIER_WRITE_SORTANT',
+      'COURRIER_SEND',
       'INSTRUCTION_CREATE',
       'INSTRUCTION_ASSIGN',
       'INSTRUCTION_UPDATE',
@@ -483,6 +484,238 @@ describe('Diffusion, end to end', () => {
         .expect(200);
       expect(res.body.children).toHaveLength(1);
       expect(res.body.children[0].subject).toBe('Rapport géotechnique');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe("4b. Parcours d'un effet sortant", () => {
+    it('is drafted from its subject, then given its text and its dossier', async () => {
+      const draft = await as('chefA')
+        .post('/courriers/sortants', { subject: 'Réponse au maître d’ouvrage' })
+        .expect(201);
+      expect(draft.body.status).toBe('BROUILLON');
+      expect(draft.body.createdBy).toEqual({ id: id.chefA, name: 'chefA' });
+      id.sortant = draft.body.id;
+
+      await as('chefA')
+        .patch(`/courriers/${id.sortant}`, {
+          body: 'Monsieur,\nNous accusons réception de votre demande.',
+          dossierId: id.dossier,
+        })
+        .expect(200);
+      const res = await as('chefA').get(`/courriers/${id.sortant}`).expect(200);
+      expect(res.body.body).toContain('accusons réception');
+      // Its dossier's responsible approves it.
+      expect(res.body.approver).toEqual({ id: id.chefA, name: 'chefA' });
+    });
+
+    it('has no PDF before its approval', async () => {
+      await as('chefA').get(`/courriers/${id.sortant}/pdf`).expect(400);
+    });
+
+    it('gets its outgoing reference once approved', async () => {
+      const submitted = await as('chefA')
+        .post(`/courriers/${id.sortant}/submit-for-validation`)
+        .expect(201);
+      expect(submitted.body.submittedAt).toEqual(expect.any(String));
+
+      const res = await as('chefA')
+        .post(`/courriers/${id.sortant}/validate`)
+        .expect(201);
+      expect(res.body.status).toBe('VALIDE');
+      expect(res.body.reference).toBe(`SOR-${new Date().getFullYear()}-000001`);
+      expect(res.body.approvedAt).toEqual(expect.any(String));
+      expect(res.body.approvedBy).toEqual({ id: id.chefA, name: 'chefA' });
+    });
+
+    it('downloads its PDF', async () => {
+      const res = await as('chefA')
+        .get(`/courriers/${id.sortant}/pdf`)
+        .responseType('blob')
+        .expect(200);
+      expect(res.headers['content-type']).toContain('application/pdf');
+      expect(res.headers['content-disposition']).toContain(
+        `SOR-${new Date().getFullYear()}-000001.pdf`,
+      );
+      expect((res.body as Buffer).subarray(0, 5).toString()).toBe('%PDF-');
+    });
+
+    it('is cancelled only with a reason of 10 characters', async () => {
+      const other = await as('chefA')
+        .post('/courriers/sortants', { subject: 'Relance fournisseur' })
+        .expect(201);
+      await as('chefA').post(`/courriers/${other.body.id}/cancel`).expect(400);
+      await as('chefA')
+        .post(`/courriers/${other.body.id}/cancel`, { reason: '  Erreur  ' })
+        .expect(400);
+      const res = await as('chefA')
+        .post(`/courriers/${other.body.id}/cancel`, {
+          reason: 'Le fournisseur a déjà livré',
+        })
+        .expect(201);
+      expect(res.body.status).toBe('ANNULE');
+      expect(res.body.cancellationReason).toBe('Le fournisseur a déjà livré');
+    });
+
+    it('counts every tab, whatever the tab shown', async () => {
+      const res = await as('chefA')
+        .get('/courriers/sortants?group=drafts')
+        .expect(200);
+      expect(res.body.metrics.byTab).toEqual({
+        all: 2,
+        drafts: 0,
+        submitted: 0,
+        corrections: 0,
+        authorized: 1,
+        cancelled: 1,
+        archived: 0,
+      });
+    });
+
+    it('exports the list as CSV', async () => {
+      const res = await as('chefA')
+        .get('/courriers/sortants/export?group=authorized')
+        .expect(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.text).toContain(`SOR-${new Date().getFullYear()}-000001`);
+      expect(res.text).not.toContain('Relance fournisseur');
+    });
+
+    const multipart = (url: string) =>
+      request(app.getHttpServer())
+        .post(url)
+        .set('Authorization', `Bearer ${token.chefA}`);
+    const year = new Date().getFullYear();
+
+    it('is archived only once discharged', async () => {
+      await as('chefA')
+        .post(`/courriers/${id.sortant}/archive`, { reason: 'Trop tôt' })
+        .expect(400);
+    });
+
+    it('is signed with its signed scan, its signatory and its date', async () => {
+      // Not sent before its signature.
+      const canal = await db.canal.create({ data: { name: 'Porteur' } });
+      id.canalPorteur = canal.id;
+      await as('chefA')
+        .post(`/courriers/${id.sortant}/send`, {
+          canalId: id.canalPorteur,
+          recipient: 'M. Diallo',
+          transmittedAt: '2026-11-03',
+        })
+        .expect(400);
+      // Only the accepted attachment types.
+      await multipart(`/courriers/${id.sortant}/sign`)
+        .field('signatoryId', id.chefA)
+        .field('signedAt', '2026-11-02')
+        .attach('file', Buffer.from('signé'), 'signe.txt')
+        .expect(400);
+
+      const res = await multipart(`/courriers/${id.sortant}/sign`)
+        .field('signatoryId', id.chefA)
+        .field('signedAt', '2026-11-02')
+        .attach('file', Buffer.from('%PDF-1.4'), 'signe.pdf')
+        .expect(201);
+      expect(res.body.status).toBe('SIGNE');
+      expect(res.body.signedAt).toBe('2026-11-02T00:00:00.000Z');
+      expect(res.body.signedBy).toEqual({ id: id.chefA, name: 'chefA' });
+      expect(res.body.signedDocument.originalName).toBe('signe.pdf');
+    });
+
+    it('is sent under its bordereau de transmission', async () => {
+      const res = await as('chefA')
+        .post(`/courriers/${id.sortant}/send`, {
+          canalId: id.canalPorteur,
+          recipient: 'M. Diallo',
+          transmittedAt: '2026-11-03',
+        })
+        .expect(201);
+      expect(res.body.status).toBe('ENVOYE');
+      expect(res.body.bordereauNumber).toBe(`BT-${year}-000001`);
+      expect(res.body.transmissionMode).toBe('Porteur');
+      expect(res.body.transmissionRecipient).toBe('M. Diallo');
+      expect(res.body.transmittedAt).toBe('2026-11-03T00:00:00.000Z');
+      expect(res.body.transmittedBy).toEqual({ id: id.chefA, name: 'chefA' });
+    });
+
+    it('downloads its bordereau', async () => {
+      const res = await as('chefA')
+        .get(`/courriers/${id.sortant}/bordereau`)
+        .responseType('blob')
+        .expect(200);
+      expect(res.headers['content-type']).toContain('application/pdf');
+      expect(res.headers['content-disposition']).toContain(
+        `BT-${year}-000001.pdf`,
+      );
+      expect((res.body as Buffer).subarray(0, 5).toString()).toBe('%PDF-');
+    });
+
+    it('is discharged with the bordereau signed by its recipient', async () => {
+      await multipart(`/courriers/${id.sortant}/discharge`)
+        .field('receivedBy', 'M. Diallo')
+        .field('dischargedAt', '2026-11-04')
+        .expect(400);
+
+      const res = await multipart(`/courriers/${id.sortant}/discharge`)
+        .field('receivedBy', 'M. Diallo')
+        .field('dischargedAt', '2026-11-04')
+        .attach('file', Buffer.from('%PDF-1.4'), 'decharge.pdf')
+        .expect(201);
+      expect(res.body.status).toBe('DECHARGE');
+      expect(res.body.dischargeReceivedBy).toBe('M. Diallo');
+      expect(res.body.dischargedAt).toBe('2026-11-04T00:00:00.000Z');
+      expect(res.body.dischargeDocument.originalName).toBe('decharge.pdf');
+
+      const tabs = await as('chefA').get('/courriers/sortants').expect(200);
+      expect(tabs.body.metrics.byTab.authorized).toBe(1);
+    });
+
+    it('is archived with its reason, then restored as it was', async () => {
+      const archived = await as('chefA')
+        .post(`/courriers/${id.sortant}/archive`, { reason: 'Affaire soldée' })
+        .expect(201);
+      expect(archived.body.status).toBe('ARCHIVE');
+      expect(archived.body.archiveReason).toBe('Affaire soldée');
+
+      const restored = await as('chefA')
+        .post(`/courriers/${id.sortant}/unarchive`)
+        .expect(201);
+      expect(restored.body.status).toBe('DECHARGE');
+    });
+
+    it('journals each step', async () => {
+      const actions = await eventually(
+        async () => {
+          const res = await as('chefA')
+            .get(`/courriers/${id.sortant}/historique?take=50`)
+            .expect(200);
+          return res.body.data as any[];
+        },
+        (rows: any[]) => rows.some((r) => r.action === 'COURRIER_DESARCHIVE'),
+      );
+      const codes = actions.map((r) => r.action);
+      expect(codes).toEqual(
+        expect.arrayContaining([
+          'COURRIER_BROUILLON_CREE',
+          'COURRIER_EN_ATTENTE_VALIDATION',
+          'COURRIER_VALIDE',
+          'COURRIER_SIGNE',
+          'COURRIER_ENVOYE',
+          'COURRIER_DECHARGE',
+          'COURRIER_ARCHIVE',
+          'COURRIER_DESARCHIVE',
+        ]),
+      );
+      const approval = actions.find((r) => r.action === 'COURRIER_VALIDE');
+      expect(approval.metadata.reference).toBe(
+        `SOR-${new Date().getFullYear()}-000001`,
+      );
+      const sent = actions.find((r) => r.action === 'COURRIER_ENVOYE');
+      expect(sent.metadata.reference).toBe(
+        `BT-${new Date().getFullYear()}-000001`,
+      );
+      const discharged = actions.find((r) => r.action === 'COURRIER_DECHARGE');
+      expect(discharged.metadata.receivedBy).toBe('M. Diallo');
     });
   });
 
@@ -930,6 +1163,265 @@ describe('Diffusion, end to end', () => {
         id: id.contract,
         title: 'Marché des quais',
       });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe("7d. Fiches d'analyse", () => {
+    it('is opened from an effet entrant alone, with its elements', async () => {
+      await as('super')
+        .post('/analysis-criteria', { label: 'Forme', order: 1 })
+        .expect(201);
+      await as('super')
+        .post('/analysis-criteria', {
+          label: 'Exploitabilité',
+          order: 2,
+          appliedByDefault: false,
+        })
+        .expect(201);
+
+      const res = await as('super')
+        .post('/analysis-sheets', {
+          courrierId: id.effet,
+          title: 'Remise des plans de ferraillage',
+          owner: 'Port Autonome',
+          validatorId: id.chefA,
+          validatorFunction: 'Chef de projet',
+          items: [
+            { label: 'Plan R+1', norms: 'NF EN 1992-1-1', opinion: 'AF' },
+          ],
+        })
+        .expect(201);
+      expect(res.body.status).toBe('BROUILLON');
+      expect(res.body.version).toBe('1.0');
+      expect(res.body.livrable).toBeNull();
+      expect(res.body.validator).toMatchObject({ id: id.chefA });
+      expect(res.body.items[0]).toMatchObject({
+        documentId: null,
+        norms: 'NF EN 1992-1-1',
+        opinion: 'AF',
+      });
+      // Only the criteria applied by default.
+      expect(res.body.items[0].criteria.map((c: any) => c.label)).toEqual([
+        'Forme',
+      ]);
+      expect(res.body.versions).toEqual([
+        expect.objectContaining({ version: '1.0', status: 'BROUILLON' }),
+      ]);
+      id.sheet = res.body.id;
+    });
+
+    it('takes the header fields through PATCH, and is recorded', async () => {
+      const res = await as('super')
+        .patch(`/analysis-sheets/${id.sheet}`, {
+          mode: 'Porteur',
+          allotment: 'Lot 2',
+          comments: 'RAS',
+          validatorId: id.super,
+          authorId: id.chefA,
+          overallOpinion: 'AFR',
+          status: 'ENREGISTREE',
+        })
+        .expect(200);
+      expect(res.body).toMatchObject({
+        mode: 'Porteur',
+        allotment: 'Lot 2',
+        status: 'ENREGISTREE',
+        overallOpinion: 'AFR',
+        validatorId: id.super,
+        validator: { id: id.super },
+        authorId: id.chefA,
+        author: { id: id.chefA, name: 'chefA' },
+      });
+      const read = await as('super')
+        .get(`/analysis-sheets/${id.sheet}`)
+        .expect(200);
+      expect(read.body.validator).toEqual(
+        expect.objectContaining({ id: id.super, email: expect.any(String) }),
+      );
+    });
+
+    it('downloads its PDF', async () => {
+      const res = await as('super')
+        .get(`/analysis-sheets/${id.sheet}/pdf`)
+        .responseType('blob')
+        .expect(200);
+      expect((res.body as Buffer).subarray(0, 5).toString()).toBe('%PDF-');
+    });
+
+    it('is signed with a PDF, then locked', async () => {
+      const sign = () =>
+        request(app.getHttpServer())
+          .post(`/analysis-sheets/${id.sheet}/sign`)
+          .set('Authorization', `Bearer ${token.super}`)
+          .field('signatoryName', 'M. Sow')
+          .field('signedAt', '2026-11-02');
+      await sign().attach('file', Buffer.from('fake'), 'fiche.png').expect(400);
+      const res = await sign()
+        .attach('file', Buffer.from('%PDF-1.4'), 'fiche.pdf')
+        .expect(201);
+      expect(res.body.status).toBe('SIGNEE');
+      expect(res.body.signatoryName).toBe('M. Sow');
+      expect(res.body.signedDocument.originalName).toBe('fiche.pdf');
+
+      await as('super')
+        .patch(`/analysis-sheets/${id.sheet}`, { comments: 'Trop tard' })
+        .expect(400);
+      await as('super').delete(`/analysis-sheets/${id.sheet}`).expect(400);
+    });
+
+    it('gets a new version, its elements copied', async () => {
+      const res = await as('super')
+        .post(`/analysis-sheets/${id.sheet}/new-version`, {
+          motif: 'Plan révisé',
+        })
+        .expect(201);
+      expect(res.body).toMatchObject({
+        status: 'BROUILLON',
+        version: '1.1',
+        parentSheetId: id.sheet,
+        title: 'Remise des plans de ferraillage',
+      });
+      expect(res.body.items[0]).toMatchObject({
+        label: 'Plan R+1',
+        opinion: 'AF',
+      });
+      expect(res.body.versions.map((v: any) => v.version)).toEqual([
+        '1.0',
+        '1.1',
+      ]);
+      expect(res.body.versions[1].motif).toBe('Plan révisé');
+      // Only from the latest version.
+      await as('super')
+        .post(`/analysis-sheets/${id.sheet}/new-version`)
+        .expect(409);
+      id.sheetV2 = res.body.id;
+    });
+
+    it('lists its fiches with their counts per status', async () => {
+      const res = await as('super')
+        .get(`/analysis-sheets?status=SIGNEE&courrierId=${id.effet}`)
+        .expect(200);
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0]).toMatchObject({
+        courrierId: id.effet,
+        status: 'SIGNEE',
+        version: '1.0',
+        title: 'Remise des plans de ferraillage',
+      });
+      expect(res.body.metrics.byStatus).toEqual({
+        BROUILLON: 1,
+        ENREGISTREE: 0,
+        SIGNEE: 1,
+        ARCHIVEE: 0,
+      });
+    });
+
+    it('archives and restores a fiche; deletes a draft', async () => {
+      const archived = await as('super')
+        .post(`/analysis-sheets/${id.sheet}/archive`, { reason: 'Remplacée' })
+        .expect(201);
+      expect(archived.body).toMatchObject({
+        status: 'ARCHIVEE',
+        archiveReason: 'Remplacée',
+      });
+      const restored = await as('super')
+        .post(`/analysis-sheets/${id.sheet}/unarchive`)
+        .expect(201);
+      expect(restored.body.status).toBe('SIGNEE');
+
+      await as('super').delete(`/analysis-sheets/${id.sheetV2}`).expect(204);
+    });
+
+    it('is opened on an effet dispatched to a contract, without a dossier', async () => {
+      const effet = await as('agentA')
+        .post('/courriers', { direction: 'ENTRANT', subject: 'Note de calcul' })
+        .expect(201);
+      // Neither a dossier nor a contract yet.
+      await as('super')
+        .post('/analysis-sheets', { courrierId: effet.body.id, items: [] })
+        .expect(400);
+
+      await db.courrier.update({
+        where: { id: effet.body.id },
+        data: { contractId: id.contract },
+      });
+      const res = await as('super')
+        .post('/analysis-sheets', {
+          courrierId: effet.body.id,
+          items: [{ label: 'Note de calcul', opinion: 'AF' }],
+        })
+        .expect(201);
+      expect(res.body.dossierId).toBeNull();
+      expect(res.body.contract).toMatchObject({ id: id.contract });
+
+      const list = await as('super')
+        .get(`/analysis-sheets?contractId=${id.contract}`)
+        .expect(200);
+      expect(list.body.data.map((s: any) => s.id)).toContain(res.body.id);
+      await as('super').get(`/analysis-sheets/${res.body.id}/pdf`).expect(200);
+    });
+
+    it('lists the effets a fiche can be opened on', async () => {
+      const transmitted = await as('agentA')
+        .post('/courriers', {
+          direction: 'ENTRANT',
+          subject: 'Plans de coffrage',
+          dossierId: id.dossier,
+          transmit: true,
+        })
+        .expect(201);
+      expect(transmitted.body.status).toBe('TRANSMIS');
+
+      const dispatched = await as('super')
+        .get('/courriers/entrants?tab=dispatched&take=100')
+        .expect(200);
+      const ids = dispatched.body.data.map((c: any) => c.id);
+      expect(ids).toContain(transmitted.body.id);
+      // Not yet dispatched, or validated: not listed.
+      expect(ids).not.toContain(id.effet);
+      for (const c of dispatched.body.data) {
+        expect(['AFFECTE', 'TRANSMIS', 'EN_TRAITEMENT']).toContain(c.status);
+      }
+      expect(dispatched.body.metrics.byTab.dispatched).toBe(
+        dispatched.body.total,
+      );
+
+      // Once it has its fiche in progress, it leaves the list.
+      await as('super')
+        .post('/analysis-sheets', {
+          courrierId: transmitted.body.id,
+          items: [{ label: 'Plan P1' }],
+        })
+        .expect(201);
+      const free = await as('super')
+        .get('/courriers/entrants?tab=dispatched&withoutLiveSheet=true')
+        .expect(200);
+      expect(free.body.data.map((c: any) => c.id)).not.toContain(
+        transmitted.body.id,
+      );
+    });
+
+    it('can forbid criteria outside the catalogue', async () => {
+      const settings = await as('super')
+        .patch('/analysis-criteria/settings', { allowCustomCriteria: false })
+        .expect(200);
+      expect(settings.body.allowCustomCriteria).toBe(false);
+      const next = await as('super')
+        .post(`/analysis-sheets/${id.sheet}/new-version`)
+        .expect(201);
+      await as('super')
+        .put(`/analysis-sheets/items/${next.body.items[0].id}/criteria`, {
+          criteria: [{ label: 'Esthétique', opinion: 'AF' }],
+        })
+        .expect(400);
+      await as('super')
+        .patch('/analysis-criteria/settings', { allowCustomCriteria: true })
+        .expect(200);
+      const read = await as('super')
+        .get('/analysis-criteria/settings')
+        .expect(200);
+      expect(read.body.allowCustomCriteria).toBe(true);
     });
   });
 

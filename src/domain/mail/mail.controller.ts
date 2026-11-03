@@ -14,14 +14,18 @@ import {
   Put,
   Query,
   Res,
+  UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { Response } from 'express';
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
-import { memoryStorage } from 'multer';
+import {
+  ATTACHMENT_RULE,
+  attachmentUploadOptions,
+} from '../../common/utils/attachment-upload';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
@@ -35,6 +39,12 @@ import {
 import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { SetOwnerDto } from '../../common/dto/set-owner.dto';
+import { ArchiveReasonDto } from '../../common/dto/archive-reason.dto';
+import { CancelMailDto } from './dto/cancel-mail.dto';
+import { CloseMailDto } from './dto/close-mail.dto';
+import { DischargeMailDto } from './dto/discharge-mail.dto';
+import { SendMailDto } from './dto/send-mail.dto';
+import { SignMailDto } from './dto/sign-mail.dto';
 import { CreateMailDto } from './dto/create-mail.dto';
 import { CreateOutgoingMailDto } from './dto/create-outgoing-mail.dto';
 import { FindIncomingMailsQueryDto } from './dto/find-incoming-mails.query.dto';
@@ -45,8 +55,6 @@ import { UpdateMailDto } from './dto/update-mail.dto';
 import { DispatchMailDto } from './dto/dispatch-mail.dto';
 import { AssignSupervisorDto } from './dto/assign-supervisor.dto';
 import { MailService } from './mail.service';
-
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 @ApiTags('courriers')
 @ApiBearerAuth()
@@ -81,7 +89,7 @@ export class MailController {
         files: {
           type: 'array',
           items: { type: 'string', format: 'binary' },
-          description: 'Document files to attach to this courrier',
+          description: `Document files to attach to this courrier (${ATTACHMENT_RULE})`,
         },
         documents: {
           type: 'string',
@@ -91,12 +99,7 @@ export class MailController {
       },
     },
   })
-  @UseInterceptors(
-    FilesInterceptor('files', 10, {
-      storage: memoryStorage(),
-      limits: { fileSize: MAX_UPLOAD_BYTES },
-    }),
-  )
+  @UseInterceptors(FilesInterceptor('files', 10, attachmentUploadOptions()))
   create(
     @Body() dto: CreateMailDto,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
@@ -163,9 +166,55 @@ export class MailController {
     res.end(csv);
   }
 
+  // Same filters as GET /courriers/sortants, every page.
+  @Get('sortants/export')
+  @RequirePermission(PermissionCode.CourrierRead)
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  async exportOutgoing(
+    @Query() query: FindOutgoingMailsQueryDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @Res() res: Response,
+  ) {
+    const csv = await this.mailService.exportOutgoing(query, user.sub);
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="effets-sortants.csv"',
+    );
+    res.end(csv);
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.mailService.findOne(id);
+    return this.mailService.findOneDetailed(id);
+  }
+
+  // The PDF of an authorized sortant (VALIDE, SIGNE, ENVOYE, DECHARGE, or
+  // archived from one of them), with its SOR reference.
+  @Get(':id/pdf')
+  @RequirePermission(PermissionCode.CourrierRead)
+  @Header('Content-Type', 'application/pdf')
+  async pdf(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @Res() res: Response,
+  ) {
+    const { pdf, filename } = await this.mailService.outgoingPdf(id, user.sub);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.end(pdf);
+  }
+
+  // The bordereau de transmission (model S·12) of a sent sortant.
+  @Get(':id/bordereau')
+  @RequirePermission(PermissionCode.CourrierRead)
+  @Header('Content-Type', 'application/pdf')
+  async bordereau(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @Res() res: Response,
+  ) {
+    const { pdf, filename } = await this.mailService.bordereauPdf(id, user.sub);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.end(pdf);
   }
 
   @Get(':id/historique')
@@ -267,27 +316,68 @@ export class MailController {
     return this.mailService.requestCorrections(id, dto.motif, user.sub);
   }
 
+  // VALIDE -> SIGNE: the signed scan, its signatory, its date.
+  @Post(':id/sign')
+  @RequirePermission(PermissionCode.CourrierSend)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file', 'signatoryId', 'signedAt'],
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: `The signed scan (${ATTACHMENT_RULE})`,
+        },
+        signatoryId: { type: 'string', format: 'uuid' },
+        signedAt: { type: 'string', format: 'date', example: '2026-11-02' },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', attachmentUploadOptions()))
+  sign(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SignMailDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.sign(id, dto, file, user.sub);
+  }
+
+  // SIGNE -> ENVOYE, under a new bordereau BT-AAAA-NNNNNN.
   @Post(':id/send')
   @RequirePermission(PermissionCode.CourrierSend)
-  send(@Param('id', ParseUUIDPipe) id: string) {
-    return this.mailService.send(id);
+  send(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SendMailDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.send(id, dto, user.sub);
   }
 
+  // A sortant needs its reason ({ reason }, 10 characters at least).
   @Post(':id/cancel')
-  cancel(@Param('id', ParseUUIDPipe) id: string) {
-    return this.mailService.cancel(id);
+  cancel(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CancelMailDto) {
+    return this.mailService.cancel(id, dto?.reason);
   }
 
+  // Its open instructions are cancelled with it. Optional { note }.
   @Post(':id/close')
   @RequirePermission(PermissionCode.CourrierRead)
-  close(@Param('id', ParseUUIDPipe) id: string) {
-    return this.mailService.close(id);
+  close(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CloseMailDto) {
+    return this.mailService.close(id, dto);
   }
 
+  // An entrant once CLOTURE; a sortant once DECHARGE or ANNULE. Optional
+  // { reason }.
   @Post(':id/archive')
   @RequirePermission(PermissionCode.CourrierRead)
-  archive(@Param('id', ParseUUIDPipe) id: string) {
-    return this.mailService.archive(id);
+  archive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ArchiveReasonDto,
+  ) {
+    return this.mailService.archive(id, dto?.reason);
   }
 
   @Post(':id/unarchive')
@@ -304,12 +394,37 @@ export class MailController {
     return this.mailService.markReturned(id);
   }
 
+  // A sent sortant: ENVOYE -> DECHARGE, multipart with the discharged
+  // bordereau (`file`), `receivedBy` and `dischargedAt`. An entrant: the
+  // décharge handed at reception, no body.
   @Post(':id/discharge')
+  @ApiConsumes('multipart/form-data', 'application/json')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: `The discharged bordereau (${ATTACHMENT_RULE})`,
+        },
+        receivedBy: { type: 'string', maxLength: 255 },
+        dischargedAt: {
+          type: 'string',
+          format: 'date',
+          example: '2026-11-02',
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file', attachmentUploadOptions()))
   discharge(
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: DischargeMailDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
-    return this.mailService.discharge(id, user.sub);
+    return this.mailService.discharge(id, user.sub, dto, file);
   }
 
   // Authorization (creator / site responsible / platform admin) is enforced

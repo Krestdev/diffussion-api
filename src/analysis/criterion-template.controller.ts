@@ -19,6 +19,7 @@ import { RequirePermission } from '../auth/rbac/require-permission.decorator';
 import { CriterionTemplateService } from './criterion-template.service';
 import {
   CreateCriterionTemplateDto,
+  UpdateAnalysisSettingsDto,
   UpdateCriterionTemplateDto,
 } from './dto/analysis.dto';
 
@@ -41,6 +42,19 @@ export class CriterionTemplateController {
   @RequirePermission(PermissionCode.AnalysisRead)
   findAll() {
     return this.templates.findAll();
+  }
+
+  // Declared before ':id' so "settings" isn't parsed as an id.
+  @Get('settings')
+  @RequirePermission(PermissionCode.AnalysisRead)
+  getSettings() {
+    return this.templates.getSettings();
+  }
+
+  @Patch('settings')
+  @RequirePermission(PermissionCode.AdminManageAnalysisCriteria)
+  updateSettings(@Body() dto: UpdateAnalysisSettingsDto) {
+    return this.templates.updateSettings(dto);
   }
 
   @Get(':id')

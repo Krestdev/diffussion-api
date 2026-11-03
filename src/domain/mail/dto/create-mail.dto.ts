@@ -73,6 +73,15 @@ export class CreateMailDto {
   @MaxLength(255)
   subject: string;
 
+  @ApiPropertyOptional({
+    description: "A sortant's text (long text), as written by its author",
+    maxLength: 50000,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(50000)
+  body?: string;
+
   @ApiPropertyOptional({ description: 'Correspondent id' })
   @IsOptional()
   @EmptyToUndefined()

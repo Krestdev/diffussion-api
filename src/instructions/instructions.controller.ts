@@ -14,6 +14,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
+import { ATTACHMENT_MAX_BYTES } from '../common/utils/attachment-upload';
 import { memoryStorage } from 'multer';
 import { InstructionsService } from './instructions.service';
 import { LivrableHistoryInterceptor } from './livrable-history.interceptor';
@@ -286,7 +287,7 @@ export class InstructionsController {
   @UseInterceptors(
     AnyFilesInterceptor({
       storage: memoryStorage(),
-      limits: { fileSize: 25 * 1024 * 1024 },
+      limits: { fileSize: ATTACHMENT_MAX_BYTES },
     }),
   )
   deposerLivrables(

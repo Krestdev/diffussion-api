@@ -1,5 +1,13 @@
+import { COURRIER_STATUS_DOC } from './courrier-status.doc';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { Transform } from 'class-transformer';
+import {
+  IsBoolean,
+  IsDateString,
+  IsEnum,
+  IsOptional,
+  IsUUID,
+} from 'class-validator';
 import { CourrierStatus } from 'generated/prisma/enums';
 import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 
@@ -8,16 +16,21 @@ import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
  * - all: all incoming courriers
  * - toDispatch: RECU, ENREGISTRE (À dispatcher)
  * - dispatchPending: EN_ATTENTE_TRANSMISSION (Dispatching à valider)
+ * - affected: AFFECTE (dispatched, not yet transmitted)
  * - assigned: TRANSMIS (Affectés)
  * - inTreatment: EN_TRAITEMENT (En traitement)
  * - closed: CLOTURE (Clôturés)
  * - archived: ARCHIVE (Archivés)
  * - others: every other status (Autres) — so that the tabs together hold
  *   every effet of "all".
+ * - dispatched: AFFECTE, TRANSMIS, EN_TRAITEMENT whose dossier (or contract)
+ *   is still open — the effets a fiche d'analyse can be opened on. It
+ *   overlaps affected/assigned/inTreatment: not part of the partition above.
  */
 const NAMED_TABS = {
   toDispatch: [CourrierStatus.RECU, CourrierStatus.ENREGISTRE],
   dispatchPending: [CourrierStatus.EN_ATTENTE_TRANSMISSION],
+  affected: [CourrierStatus.AFFECTE],
   assigned: [CourrierStatus.TRANSMIS],
   inTreatment: [CourrierStatus.EN_TRAITEMENT],
   closed: [CourrierStatus.CLOTURE],
@@ -27,12 +40,20 @@ const NAMED_TABS = {
 const NAMED_STATUSES: readonly CourrierStatus[] =
   Object.values(NAMED_TABS).flat();
 
+// Dispatching validated, not yet closed.
+export const DISPATCHED_STATUSES = [
+  CourrierStatus.AFFECTE,
+  CourrierStatus.TRANSMIS,
+  CourrierStatus.EN_TRAITEMENT,
+] as const;
+
 export const INCOMING_STATUS_TABS = {
   all: [],
   ...NAMED_TABS,
   others: Object.values(CourrierStatus).filter(
     (status) => !NAMED_STATUSES.includes(status),
   ),
+  dispatched: DISPATCHED_STATUSES,
 } as const satisfies Record<string, readonly CourrierStatus[]>;
 
 export type IncomingStatusTab = keyof typeof INCOMING_STATUS_TABS;
@@ -56,6 +77,9 @@ export function resolveIncomingTabStatuses(
     tab === 'dispatchingAValider'
   ) {
     return INCOMING_STATUS_TABS.dispatchPending;
+  }
+  if (tab === 'affected' || tab === 'affecte') {
+    return INCOMING_STATUS_TABS.affected;
   }
   if (
     tab === 'assigned' ||
@@ -105,12 +129,15 @@ export enum IncomingMailSort {
 export class FindIncomingMailsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     description:
-      'Tab: all · toDispatch (RECU, ENREGISTRE) · dispatchPending (EN_ATTENTE_TRANSMISSION) · assigned (TRANSMIS) · inTreatment (EN_TRAITEMENT) · closed (CLOTURE) · archived (ARCHIVE) · others (every other status: EN_ATTENTE_VALIDATION, A_CORRIGER, VALIDE, ANNULE...)',
+      'Tab: all · toDispatch (RECU, ENREGISTRE) · dispatchPending (EN_ATTENTE_TRANSMISSION) · affected (AFFECTE) · assigned (TRANSMIS) · inTreatment (EN_TRAITEMENT) · closed (CLOTURE) · archived (ARCHIVE) · others (every other status: EN_ATTENTE_VALIDATION, A_CORRIGER, VALIDE, ANNULE...) · dispatched (AFFECTE, TRANSMIS, EN_TRAITEMENT, whose dossier — or contract — is still open: the effets a fiche d’analyse can be opened on)',
   })
   @IsOptional()
   tab?: string;
 
-  @ApiPropertyOptional({ enum: CourrierStatus })
+  @ApiPropertyOptional({
+    enum: CourrierStatus,
+    description: COURRIER_STATUS_DOC,
+  })
   @IsOptional()
   @IsEnum(CourrierStatus)
   status?: CourrierStatus;
@@ -172,6 +199,17 @@ export class FindIncomingMailsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsDateString()
   receivedTo?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'true: only the effets with no fiche d’analyse in progress (the list of POST /analysis-sheets)',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' ? true : value === 'false' ? false : value,
+  )
+  @IsBoolean()
+  withoutLiveSheet?: boolean;
 
   @ApiPropertyOptional({
     enum: IncomingMailSort,
