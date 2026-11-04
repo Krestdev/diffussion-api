@@ -55,10 +55,12 @@ describe('DashboardService', () => {
     const stats = await service.getStats('u1', {});
 
     expect(stats).toEqual({
+      scope: 'mine',
       tasks: { todo: 4, completed: 9, overdue: 1 },
       approvals: { awaitingMyDecision: 2 },
       courriers: null,
       trend: null,
+      incoming: null,
     });
     expect(database.courrier.findMany).not.toHaveBeenCalled();
   });

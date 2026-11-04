@@ -1482,4 +1482,139 @@ describe('Diffusion, end to end', () => {
       expect(await assignedCount('exec1')).toBe(exec1Before);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  describe('9. Accueils', () => {
+    it('keeps the platform settings, changed by a platform administrator', async () => {
+      await as('chefA')
+        .patch('/settings', { maxActiveInstructionsPerAgent: 3 })
+        .expect(403);
+      const res = await as('super')
+        .patch('/settings', { maxActiveInstructionsPerAgent: 3 })
+        .expect(200);
+      expect(res.body.maxActiveInstructionsPerAgent).toBe(3);
+      const read = await as('exec1').get('/settings').expect(200);
+      expect(read.body.maxActiveInstructionsPerAgent).toBe(3);
+    });
+
+    it('reminds the executants of a task, once an hour', async () => {
+      const task = await as('chefA')
+        .post('/instructions', {
+          dossierId: id.dossier,
+          title: 'Relire la note de calcul',
+          executantIds: [id.exec1],
+          superviseurId: id.chefA,
+        })
+        .expect(201);
+      await as('exec1')
+        .post(`/instructions/${task.body.id}/remind`)
+        .expect(403);
+      const res = await as('chefA')
+        .post(`/instructions/${task.body.id}/remind`)
+        .expect(201);
+      expect(res.body.executantIds).toEqual([id.exec1]);
+      await as('chefA')
+        .post(`/instructions/${task.body.id}/remind`)
+        .expect(409);
+
+      const types = await eventually(
+        async () => {
+          const inbox = await as('exec1').get('/notifications/me').expect(200);
+          return inbox.body.map((n: any) => n.notification.type);
+        },
+        (t: string[]) => t.includes('TASK_REMINDER'),
+      );
+      expect(types).toContain('TASK_REMINDER');
+    });
+
+    it("counts each agent's instructions in progress, against the capacity", async () => {
+      const res = await as('super').get('/instructions/workload').expect(200);
+      expect(res.body.capacity).toBe(3);
+      const exec1 = res.body.data.find((row: any) => row.user.id === id.exec1);
+      expect(exec1.inProgress).toBeGreaterThan(0);
+      expect(exec1).toMatchObject({ capacity: 3 });
+      expect(typeof exec1.overCapacity).toBe('boolean');
+    });
+
+    it('tells who is a designated responsible, of what', async () => {
+      const chef = await as('chefA').get('/auth/me').expect(200);
+      expect(chef.body.isDesignatedResponsible).toBe(true);
+      expect(chef.body.responsibleOf.dossiers.map((d: any) => d.id)).toContain(
+        id.dossier,
+      );
+      const exec = await as('exec1').get('/auth/me').expect(200);
+      expect(exec.body.isDesignatedResponsible).toBe(false);
+    });
+
+    it('names the actor and the object of each journal entry', async () => {
+      const res = await as('super')
+        .get('/activity-logs?entityType=Instruction&take=50')
+        .expect(200);
+      const reminded = res.body.data.find(
+        (log: any) => log.action === 'INSTRUCTION_RELANCEE',
+      );
+      expect(reminded).toBeDefined();
+      expect(reminded.actorName).toBe('chefA');
+      expect(reminded.entityReference).toMatch(/^T-/);
+    });
+
+    it('gives each user their own history, without AUDIT_READ', async () => {
+      await as('exec1').get('/activity-logs').expect(403);
+      const res = await as('exec1')
+        .get('/activity-logs/me?take=50')
+        .expect(200);
+      // chefA reminded exec1 of a task exec1 is on.
+      const reminded = res.body.data.find(
+        (log: any) => log.action === 'INSTRUCTION_RELANCEE',
+      );
+      expect(reminded).toMatchObject({
+        actorName: 'chefA',
+        entityType: 'Instruction',
+      });
+      expect(reminded.entityReference).toMatch(/^T-/);
+      // Only business events, on an object.
+      for (const log of res.body.data) {
+        expect(log.entityType).toEqual(expect.any(String));
+      }
+      // Nothing of objects exec1 has no part in: chefA's sortant.
+      expect(res.body.data.map((log: any) => log.entityId)).not.toContain(
+        id.sortant,
+      );
+
+      const tasks = await as('exec1')
+        .get('/activity-logs/me?entityType=Instruction&take=5')
+        .expect(200);
+      expect(tasks.body.take).toBe(5);
+      for (const log of tasks.body.data) {
+        expect(log.entityType).toBe('Instruction');
+      }
+    });
+
+    it('adds the week and month comparisons to the dashboard', async () => {
+      const res = await as('chefA')
+        .get('/dashboard/stats?tz=Africa/Douala')
+        .expect(200);
+      expect(res.body.scope).toBe('mine');
+      expect(res.body.incoming).toMatchObject({
+        dispatched: {
+          thisWeek: expect.any(Number),
+          lastWeek: expect.any(Number),
+        },
+        inProgress: {
+          current: expect.any(Number),
+          lastWeek: expect.any(Number),
+        },
+        treatmentDelayDays: expect.any(Object),
+      });
+
+      await as('chefA').get('/dashboard/stats?scope=global').expect(403);
+      const global = await as('super')
+        .get('/dashboard/stats?scope=global')
+        .expect(200);
+      expect(global.body.scope).toBe('global');
+      expect(global.body.courriers.received).toBeGreaterThanOrEqual(
+        res.body.courriers.received,
+      );
+    });
+  });
 });

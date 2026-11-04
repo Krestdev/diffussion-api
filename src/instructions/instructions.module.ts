@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ActivityModule } from '../activity/activity.module';
+import { SettingsModule } from '../administration/settings/settings.module';
 import { InstructionLatenessService } from './instruction-lateness.service';
 import { InstructionsService } from './instructions.service';
 import { InstructionsController } from './instructions.controller';
 
 @Module({
-  imports: [NotificationsModule, ActivityModule],
+  imports: [NotificationsModule, ActivityModule, SettingsModule],
   controllers: [InstructionsController],
   providers: [InstructionsService, InstructionLatenessService],
   // Livrable decisions (DeliverableController.reject) live with the rest of

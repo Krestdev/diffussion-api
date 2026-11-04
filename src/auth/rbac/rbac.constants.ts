@@ -60,6 +60,9 @@ export enum PermissionCode {
 
   // Audit (RG-AUD-*)
   AuditRead = 'AUDIT_READ',
+
+  // Direction: the dashboard across every site (Supervision générale).
+  DashboardGlobalRead = 'DASHBOARD_GLOBAL_READ',
 }
 
 /**
@@ -112,6 +115,8 @@ export const PERMISSION_LABELS: Record<PermissionCode, string> = {
   [PermissionCode.AnalysisDecide]: "Prononcer l'avis d'une fiche d'analyse",
   [PermissionCode.AdminManageAnalysisCriteria]: "Gérer les critères d'analyse",
   [PermissionCode.AuditRead]: "Consulter le journal d'audit",
+  [PermissionCode.DashboardGlobalRead]:
+    'Consulter le tableau de bord de tous les sites (Direction)',
 };
 
 export const PERMISSION_METADATA_KEY = 'rbac:permission';
@@ -126,4 +131,5 @@ export const PLATFORM_PERMISSIONS: ReadonlySet<PermissionCode> = new Set([
   PermissionCode.AdminManageCategories,
   PermissionCode.AdminManageReferentials,
   PermissionCode.AdminManageAnalysisCriteria,
+  PermissionCode.DashboardGlobalRead,
 ]);

@@ -43,6 +43,7 @@ import { CloseInstructionDto } from './dto/close-instruction.dto';
 import { CreateInstructionsDto } from './dto/create-instruction.dto';
 import { FindInstructionsQueryDto } from './dto/find-instructions.query.dto';
 import { FindMyTasksQueryDto } from './dto/find-my-tasks.query.dto';
+import { FindWorkloadQueryDto } from './dto/find-workload.query.dto';
 import { DeclineSubscriptionDto } from './dto/decline-subscription.dto';
 import { RefuseInstructionDto } from './dto/refuse-instruction.dto';
 import { SetAgentDueDateDto } from './dto/set-agent-due-date.dto';
@@ -89,9 +90,30 @@ export class InstructionsController {
     return this.instructionsService.findMyTasks(query, user.sub);
   }
 
+  // Instructions in progress per agent, with their capacity. Declared
+  // before ':id'. Scoped in the service to the sites where the caller may
+  // assign tasks.
+  @Get('workload')
+  workload(
+    @Query() query: FindWorkloadQueryDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.instructionsService.workload(query, user.sub);
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.instructionsService.findOne(id);
+  }
+
+  // Notifies its executants again — its superviseur, its creator or a
+  // platform administrator; once an hour at most (409 otherwise).
+  @Post(':id/remind')
+  remind(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.instructionsService.remind(id, user.sub);
   }
 
   @Patch(':id')

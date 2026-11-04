@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable } from '@nestjs/common';
 import {
   CourrierDirection,
   CourrierStatus,
@@ -17,6 +17,84 @@ import {
 } from './dto/dashboard-stats.query.dto';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+// An entrant no longer in progress.
+const INCOMING_DONE: CourrierStatus[] = [
+  CourrierStatus.CLOTURE,
+  CourrierStatus.ARCHIVE,
+  CourrierStatus.ANNULE,
+];
+
+// The offset (ms) of `timeZone` from UTC at the instant `at`.
+function zoneOffset(at: number, timeZone: string): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+      .formatToParts(at)
+      .map((part) => [part.type, part.value]),
+  );
+  const asUtc = Date.UTC(
+    +parts.year,
+    +parts.month - 1,
+    +parts.day,
+    +parts.hour,
+    +parts.minute,
+    +parts.second,
+  );
+  return asUtc - Math.floor(at / 1000) * 1000;
+}
+
+// The instant of local midnight, in `timeZone`, of the calendar day
+// (year, month 0-11, day — overflow allowed, e.g. day 0 or month -1).
+function zonedMidnight(
+  year: number,
+  month: number,
+  day: number,
+  timeZone: string,
+): Date {
+  const guess = Date.UTC(year, month, day);
+  const first = guess - zoneOffset(guess, timeZone);
+  return new Date(guess - zoneOffset(first, timeZone));
+}
+
+// Today's calendar date in `timeZone`, and its weekday (0 = Monday).
+function localToday(now: number, timeZone: string) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      weekday: 'short',
+    })
+      .formatToParts(now)
+      .map((part) => [part.type, part.value]),
+  );
+  const weekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(
+    parts.weekday,
+  );
+  return {
+    year: +parts.year,
+    month: +parts.month - 1,
+    day: +parts.day,
+    weekday,
+  };
+}
+
+// Mean of the delays, in days, rounded to one decimal; null when none.
+function averageDays(delaysMs: number[]): number | null {
+  if (delaysMs.length === 0) return null;
+  const mean = delaysMs.reduce((sum, d) => sum + d, 0) / delaysMs.length;
+  return Math.round((mean / DAY_MS) * 10) / 10;
+}
 
 // "À faire" = assigned to me and still actionable on my side. A task that
 // is EN_ATTENTE_VALIDATION is waiting on someone else, so it's excluded.
@@ -47,17 +125,155 @@ export class DashboardService {
   async getStats(userId: string, query: DashboardStatsQueryDto) {
     const days = query.days ?? 7;
     const timeZone = query.tz ?? 'UTC';
-    const permissions = await this.rbac.getPermissionCodes(userId);
-    const canReadCourriers = permissions.includes(PermissionCode.CourrierRead);
+    const global = query.scope === 'global';
+    if (
+      global &&
+      !(await this.rbac.hasGlobalPermission(
+        userId,
+        PermissionCode.DashboardGlobalRead,
+      ))
+    ) {
+      throw new ForbiddenException(
+        'The dashboard of every site requires DASHBOARD_GLOBAL_READ',
+      );
+    }
+    const permissions = global
+      ? []
+      : await this.rbac.getPermissionCodes(userId);
+    const canReadCourriers =
+      global || permissions.includes(PermissionCode.CourrierRead);
+    const incoming = canReadCourriers
+      ? await this.incomingScope(userId, global)
+      : null;
 
-    const [tasks, approvals, courriers, trend] = await Promise.all([
+    const [tasks, approvals, courriers, trend, activity] = await Promise.all([
       this.getTasks(userId),
       this.getApprovals(userId),
-      canReadCourriers ? this.getCourriers(userId) : null,
-      canReadCourriers ? this.getTrend(userId, days, timeZone) : null,
+      incoming ? this.getCourriers(incoming) : null,
+      incoming ? this.getTrend(incoming, days, timeZone) : null,
+      incoming ? this.getIncomingActivity(incoming, timeZone) : null,
     ]);
 
-    return { tasks, approvals, courriers, trend };
+    return {
+      scope: global ? 'global' : 'mine',
+      tasks,
+      approvals,
+      courriers,
+      trend,
+      // Dispatching, effets in progress and treatment delay, compared with
+      // the previous week / month (weeks start on Monday, in `tz`).
+      incoming: activity,
+    };
+  }
+
+  // The entrants counted: every one (global), or those in the dossiers the
+  // caller sees.
+  private async incomingScope(
+    userId: string,
+    global: boolean,
+  ): Promise<Prisma.CourrierWhereInput> {
+    return global
+      ? { direction: CourrierDirection.ENTRANT }
+      : {
+          direction: CourrierDirection.ENTRANT,
+          dossier: await this.courrierDossiers(userId),
+        };
+  }
+
+  private async getIncomingActivity(
+    incoming: Prisma.CourrierWhereInput,
+    timeZone: string,
+  ) {
+    const now = new Date();
+    const today = localToday(now.getTime(), timeZone);
+    const weekStart = zonedMidnight(
+      today.year,
+      today.month,
+      today.day - today.weekday,
+      timeZone,
+    );
+    const lastWeekStart = zonedMidnight(
+      today.year,
+      today.month,
+      today.day - today.weekday - 7,
+      timeZone,
+    );
+    const monthStart = zonedMidnight(today.year, today.month, 1, timeZone);
+    const lastMonthStart = zonedMidnight(
+      today.year,
+      today.month - 1,
+      1,
+      timeZone,
+    );
+
+    // Received before `at` and not yet closed, archived or cancelled then.
+    const inProgressAt = (at: Date): Prisma.CourrierWhereInput => ({
+      ...incoming,
+      AND: [
+        {
+          OR: [
+            { receivedAt: { lt: at } },
+            { receivedAt: null, createdAt: { lt: at } },
+          ],
+        },
+        { OR: [{ closedAt: null }, { closedAt: { gte: at } }] },
+        { OR: [{ archivedAt: null }, { archivedAt: { gte: at } }] },
+        { OR: [{ cancelledAt: null }, { cancelledAt: { gte: at } }] },
+      ],
+    });
+
+    const [
+      dispatchedThisWeek,
+      dispatchedLastWeek,
+      inProgressNow,
+      inProgressLastWeek,
+      closed,
+    ] = await Promise.all([
+      this.database.courrier.count({
+        where: {
+          ...incoming,
+          dispatchValidatedAt: { gte: weekStart, lt: now },
+        },
+      }),
+      this.database.courrier.count({
+        where: {
+          ...incoming,
+          dispatchValidatedAt: { gte: lastWeekStart, lt: weekStart },
+        },
+      }),
+      this.database.courrier.count({
+        where: { ...incoming, status: { notIn: INCOMING_DONE } },
+      }),
+      this.database.courrier.count({ where: inProgressAt(weekStart) }),
+      this.database.courrier.findMany({
+        where: { ...incoming, closedAt: { gte: lastMonthStart, lt: now } },
+        select: { receivedAt: true, createdAt: true, closedAt: true },
+      }),
+    ]);
+
+    const delays = (from: Date, to: Date) =>
+      closed
+        .filter((row) => row.closedAt! >= from && row.closedAt! < to)
+        .map(
+          (row) =>
+            row.closedAt!.getTime() -
+            (row.receivedAt ?? row.createdAt).getTime(),
+        );
+
+    return {
+      timeZone,
+      weekStart,
+      dispatched: {
+        thisWeek: dispatchedThisWeek,
+        lastWeek: dispatchedLastWeek,
+      },
+      inProgress: { current: inProgressNow, lastWeek: inProgressLastWeek },
+      // From reception to closure, of the entrants closed in the month.
+      treatmentDelayDays: {
+        thisMonth: averageDays(delays(monthStart, now)),
+        lastMonth: averageDays(delays(lastMonthStart, monthStart)),
+      },
+    };
   }
 
   private async getTasks(userId: string) {
@@ -97,11 +313,7 @@ export class DashboardService {
     return { AND: [visibleDossierWhere(userId), sites] };
   }
 
-  private async getCourriers(userId: string) {
-    const incoming: Prisma.CourrierWhereInput = {
-      direction: CourrierDirection.ENTRANT,
-      dossier: await this.courrierDossiers(userId),
-    };
+  private async getCourriers(incoming: Prisma.CourrierWhereInput) {
     const [received, archived] = await this.database.$transaction([
       this.database.courrier.count({ where: incoming }),
       this.database.courrier.count({
@@ -117,7 +329,11 @@ export class DashboardService {
    * `receivedAt` date, falling back to `createdAt` when that wasn't
    * recorded. Days are cut in `timeZone`.
    */
-  private async getTrend(userId: string, days: TrendPeriod, timeZone: string) {
+  private async getTrend(
+    incoming: Prisma.CourrierWhereInput,
+    days: TrendPeriod,
+    timeZone: string,
+  ) {
     const dayKey = new Intl.DateTimeFormat('en-CA', {
       timeZone,
       year: 'numeric',
@@ -136,8 +352,7 @@ export class DashboardService {
     const since = new Date(now - (days + 1) * DAY_MS);
     const rows = await this.database.courrier.findMany({
       where: {
-        direction: CourrierDirection.ENTRANT,
-        dossier: await this.courrierDossiers(userId),
+        ...incoming,
         OR: [
           { receivedAt: { gte: since } },
           { receivedAt: null, createdAt: { gte: since } },

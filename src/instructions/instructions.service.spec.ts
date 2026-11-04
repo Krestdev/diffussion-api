@@ -12,6 +12,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { ActivityService } from '../activity/activity.service';
 import { StorageService } from '../storage/storage.service';
 import { RbacService } from '../auth/rbac/rbac.service';
+import { SettingsService } from '../administration/settings/settings.service';
 import {
   InstructionStatus,
   LivrableStatus,
@@ -114,6 +115,14 @@ describe('InstructionsService', () => {
         { provide: ActivityService, useValue: activity },
         { provide: StorageService, useValue: storage },
         { provide: RbacService, useValue: rbac },
+        {
+          provide: SettingsService,
+          useValue: {
+            get: jest
+              .fn()
+              .mockResolvedValue({ maxActiveInstructionsPerAgent: null }),
+          },
+        },
       ],
     }).compile();
 

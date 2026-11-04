@@ -18,6 +18,7 @@ export const NOTIFICATION_TYPES = {
   TASK_COMPLETED: 'Une tâche est terminée',
   TASK_OVERDUE_AGENT: "La date limite d'exécution d'une tâche est dépassée",
   TASK_OVERDUE: "La date limite d'une tâche est dépassée",
+  TASK_REMINDER: 'Une tâche fait l’objet d’une relance',
 } as const;
 
 export type NotificationType = keyof typeof NOTIFICATION_TYPES;

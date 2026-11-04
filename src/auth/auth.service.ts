@@ -14,7 +14,13 @@ import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { MailerService } from '../mail/mailer.service';
 import { AuthTokens, JwtPayload } from './types/jwt-payload.type';
-import { UserStatus } from 'generated/prisma/enums';
+import {
+  ContractStatus,
+  DossierStatus,
+  ProjectStatus,
+  SiteStatus,
+  UserStatus,
+} from 'generated/prisma/enums';
 
 const SALT_ROUNDS = 10;
 const RESET_TOKEN_TTL_MINUTES = Number(
@@ -226,6 +232,46 @@ export class AuthService {
       // What applies at each site (global + bySite[siteId]), delegations
       // included: what an action on a given resource is checked against.
       sitePermissions: await this.rbac.permissionsBySite(userUuid),
+      ...(await this.designations(userUuid)),
+    };
+  }
+
+  // What the user is the designated responsible of — only what is still
+  // live (a closed or archived dossier, an archived contract or project, an
+  // inactive site no longer counts).
+  private async designations(userId: string) {
+    const [sites, projects, contracts, dossiers] = await Promise.all([
+      this.database.site.findMany({
+        where: { responsibleId: userId, status: SiteStatus.ACTIVE },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.database.project.findMany({
+        where: {
+          responsibleId: userId,
+          status: { not: ProjectStatus.ARCHIVED },
+        },
+        select: { id: true, name: true, reference: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.database.contract.findMany({
+        where: { responsibleId: userId, status: ContractStatus.ACTIVE },
+        select: { id: true, number: true, reference: true, title: true },
+        orderBy: { number: 'asc' },
+      }),
+      this.database.dossier.findMany({
+        where: {
+          responsibleId: userId,
+          status: { notIn: [DossierStatus.CLOSED, DossierStatus.ARCHIVED] },
+        },
+        select: { id: true, number: true, title: true },
+        orderBy: { number: 'asc' },
+      }),
+    ]);
+    return {
+      isDesignatedResponsible:
+        sites.length + projects.length + contracts.length + dossiers.length > 0,
+      responsibleOf: { sites, projects, contracts, dossiers },
     };
   }
 

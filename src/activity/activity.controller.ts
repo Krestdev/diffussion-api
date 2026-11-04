@@ -9,6 +9,7 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ActivityService } from './activity.service';
 import { FindActivityLogsQueryDto } from './dto/find-activity-logs.query.dto';
+import { FindMyActivityQueryDto } from './dto/find-my-activity.query.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
@@ -40,6 +41,17 @@ export class ActivityController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.activityService.findAll(query, await this.auditScope(user));
+  }
+
+  // The caller's own history, readable by every signed-in user: their
+  // actions, and what was done on their effets, instructions and fiches.
+  // Declared before ':id'.
+  @Get('me')
+  findMine(
+    @Query() query: FindMyActivityQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.activityService.findMine(query, user.sub);
   }
 
   @Get(':id')

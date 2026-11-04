@@ -3,6 +3,8 @@ import { Type } from 'class-transformer';
 import { IsIn, IsOptional, IsTimeZone } from 'class-validator';
 
 export const TREND_PERIODS = [7, 30] as const;
+export const DASHBOARD_SCOPES = ['mine', 'global'] as const;
+export type DashboardScope = (typeof DASHBOARD_SCOPES)[number];
 export type TrendPeriod = (typeof TREND_PERIODS)[number];
 
 export class DashboardStatsQueryDto {
@@ -25,4 +27,14 @@ export class DashboardStatsQueryDto {
   @IsOptional()
   @IsTimeZone()
   tz?: string;
+
+  @ApiPropertyOptional({
+    enum: DASHBOARD_SCOPES,
+    default: 'mine',
+    description:
+      'mine: what the caller sees. global: every site (Supervision générale) — requires DASHBOARD_GLOBAL_READ, held globally',
+  })
+  @IsOptional()
+  @IsIn(DASHBOARD_SCOPES)
+  scope?: DashboardScope;
 }

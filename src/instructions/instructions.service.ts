@@ -15,6 +15,7 @@ import {
   Prisma,
   SubscriptionDecision,
   UserInstructionRole,
+  UserStatus,
   ValidationDecision,
 } from '../../generated/prisma/client';
 import { DEFAULT_TAKE } from '../common/dto/pagination.query.dto';
@@ -31,6 +32,8 @@ import {
 } from '../common/utils/dossier-lifecycle';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SettingsService } from '../administration/settings/settings.service';
+import { FindWorkloadQueryDto } from './dto/find-workload.query.dto';
 import { ActivityService } from '../activity/activity.service';
 import { AssignInstructionDto } from './dto/assign-instruction.dto';
 import { CreateInstructionsDto } from './dto/create-instruction.dto';
@@ -202,6 +205,26 @@ function assertDeadlines(dueDate: Date | null, agentDueDate: Date | null) {
   }
 }
 
+// An agent's instructions in progress: assigned to them as executant and
+// not settled yet.
+const ACTIVE_INSTRUCTION_STATUSES: InstructionStatus[] = [
+  InstructionStatus.AFFECTEE,
+  InstructionStatus.ACCEPTEE,
+  InstructionStatus.EN_COURS,
+  InstructionStatus.EN_ATTENTE_VALIDATION,
+  InstructionStatus.A_CORRIGER,
+];
+
+// The executants owe something: not subscribed yet, at work, or correcting.
+const REMINDABLE_STATUSES: InstructionStatus[] = [
+  InstructionStatus.AFFECTEE,
+  InstructionStatus.EN_COURS,
+  InstructionStatus.A_CORRIGER,
+];
+
+// At most one reminder per task in this window.
+const REMIND_INTERVAL_MS = 60 * 60 * 1000;
+
 @Injectable()
 export class InstructionsService {
   constructor(
@@ -210,7 +233,123 @@ export class InstructionsService {
     private readonly activity: ActivityService,
     private readonly storage: StorageService,
     private readonly rbac: RbacService,
+    private readonly settings: SettingsService,
   ) {}
+
+  /**
+   * Reminds the executants of a task: by its superviseur, else its creator,
+   * or a platform administrator. Once an hour at most.
+   */
+  async remind(id: string, userId: string) {
+    const instruction = await this.requireStatus(id, REMINDABLE_STATUSES);
+    const superviseurs = instruction.assignees
+      .filter((assignee) => assignee.role === UserInstructionRole.SUPERVISEUR)
+      .map((assignee) => assignee.user.id);
+    const allowed =
+      superviseurs.includes(userId) ||
+      instruction.createdById === userId ||
+      (await this.rbac.hasGlobalPermission(
+        userId,
+        PermissionCode.AdminManageUsers,
+      ));
+    if (!allowed) {
+      throw new ForbiddenException(
+        "Only this task's superviseur, its creator or a platform administrator can remind its executants",
+      );
+    }
+    const executants = instruction.assignees
+      .filter((assignee) => assignee.role === UserInstructionRole.EXECUTANT)
+      .map((assignee) => assignee.user.id);
+    if (executants.length === 0) {
+      throw new BadRequestException('This task has no executant to remind');
+    }
+
+    const now = new Date();
+    const { count } = await this.database.instruction.updateMany({
+      where: {
+        id,
+        OR: [
+          { lastRemindedAt: null },
+          {
+            lastRemindedAt: {
+              lt: new Date(now.getTime() - REMIND_INTERVAL_MS),
+            },
+          },
+        ],
+      },
+      data: { lastRemindedAt: now },
+    });
+    if (count === 0) {
+      throw new ConflictException(
+        'Its executants were reminded less than an hour ago',
+      );
+    }
+    this.notifyInstruction(
+      instruction,
+      executants,
+      {
+        type: 'TASK_REMINDER',
+        message: `Relance : la tâche « ${instruction.title} » attend votre action.`,
+      },
+      userId,
+    );
+    void this.activity
+      .tryRecord({
+        action: 'INSTRUCTION_RELANCEE',
+        entityType: 'Instruction',
+        entityId: id,
+        metadata: { executantIds: executants },
+      })
+      .catch(() => undefined);
+    return { id, remindedAt: now, executantIds: executants };
+  }
+
+  /**
+   * Instructions in progress per agent, on the sites where the caller may
+   * assign tasks, with the capacity set in the settings.
+   */
+  async workload(query: FindWorkloadQueryDto, userId: string) {
+    const sites = await this.rbac.siteFilter(
+      userId,
+      PermissionCode.InstructionAssign,
+      (siteId): Prisma.UserWhereInput => ({ siteId }),
+    );
+    const [agents, counts, settings] = await Promise.all([
+      this.database.user.findMany({
+        where: {
+          AND: [sites, query.siteId ? { siteId: query.siteId } : {}],
+          status: UserStatus.ACTIVE,
+        },
+        select: { id: true, name: true, email: true, siteId: true },
+        orderBy: { name: 'asc' },
+      }),
+      this.database.userInstructions.groupBy({
+        by: ['userId'],
+        where: {
+          role: UserInstructionRole.EXECUTANT,
+          instruction: { status: { in: ACTIVE_INSTRUCTION_STATUSES } },
+        },
+        _count: { _all: true },
+      }),
+      this.settings.get(),
+    ]);
+    const inProgress = new Map(
+      counts.map((row) => [row.userId, row._count._all]),
+    );
+    const capacity = settings.maxActiveInstructionsPerAgent;
+    const data = agents
+      .map((agent) => {
+        const active = inProgress.get(agent.id) ?? 0;
+        return {
+          user: agent,
+          inProgress: active,
+          capacity,
+          overCapacity: capacity !== null && active >= capacity,
+        };
+      })
+      .sort((a, b) => b.inProgress - a.inProgress);
+    return { data, capacity };
+  }
 
   /**
    * Who may prepare, edit or remove a task's livrables: the executant who

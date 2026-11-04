@@ -892,6 +892,8 @@ model Instruction {
   /// Overdue alerts already sent, so each is sent once; cleared when the
   /// deadline moves.
   agentOverdueNotifiedAt DateTime?
+  /// Last reminder sent to its executants (POST /instructions/:id/remind).
+  lastRemindedAt         DateTime?
   overdueNotifiedAt      DateTime?
   status                 InstructionStatus   @default(A_AFFECTER)
   /// Summary of the corrections last requested on its livrables. The
@@ -1435,6 +1437,17 @@ model AnalysisCriterionTemplate {
   criteria AnalysisItemCriterion[]
 
   @@map("analysis_criterion_template")
+}
+
+/// The platform's settings: a single row (id 1).
+model AppSettings {
+  id                            Int      @id @default(1)
+  /// Most instructions in progress an agent should carry at once (null: no
+  /// limit). An indicator for whoever assigns tasks.
+  maxActiveInstructionsPerAgent Int?
+  updatedAt                     DateTime @updatedAt
+
+  @@map("app_settings")
 }
 
 /// Settings of the fiches d'analyse: a single row (id 1).
