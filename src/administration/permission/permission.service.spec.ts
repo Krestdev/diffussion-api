@@ -8,11 +8,11 @@ import { PermissionService } from './permission.service';
 describe('PermissionService', () => {
   let service: PermissionService;
   let database: { permission: Record<string, jest.Mock> };
-  let rbac: { administeredSites: jest.Mock };
+  let rbac: { managedSites: jest.Mock };
 
   beforeEach(async () => {
     database = { permission: { findMany: jest.fn().mockResolvedValue([]) } };
-    rbac = { administeredSites: jest.fn() };
+    rbac = { managedSites: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -26,7 +26,7 @@ describe('PermissionService', () => {
   });
 
   it('lists every permission to a platform administrator', async () => {
-    rbac.administeredSites.mockResolvedValue('ALL');
+    rbac.managedSites.mockResolvedValue('ALL');
 
     await service.findAll('super-admin');
 
@@ -37,7 +37,7 @@ describe('PermissionService', () => {
   });
 
   it("hides the platform permissions from a site's responsible", async () => {
-    rbac.administeredSites.mockResolvedValue(['s-1']);
+    rbac.managedSites.mockResolvedValue(['s-1']);
 
     await service.findAll('resp-s1');
 
@@ -48,7 +48,7 @@ describe('PermissionService', () => {
   });
 
   it('refuses someone who administers nothing', async () => {
-    rbac.administeredSites.mockResolvedValue([]);
+    rbac.managedSites.mockResolvedValue([]);
 
     await expect(service.findAll('nobody')).rejects.toBeInstanceOf(
       ForbiddenException,

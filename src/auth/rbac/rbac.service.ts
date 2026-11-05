@@ -180,6 +180,24 @@ export class RbacService {
     return sites.map((site) => site.id);
   }
 
+  /**
+   * Like administeredSites, plus the sites where the user holds
+   * `permission` through a site role or a delegation — for the permissions
+   * a site role may carry to manage that site's own data
+   * (ADMIN_MANAGE_REFERENTIALS, ADMIN_MANAGE_ROLES). Never a global object:
+   * those need 'ALL'.
+   */
+  async managedSites(
+    userUuid: string,
+    permission: PermissionCode,
+  ): Promise<SiteScopeList> {
+    const administered = await this.administeredSites(userUuid, permission);
+    if (administered === 'ALL') return 'ALL';
+    const held = await this.sitesWithPermission(userUuid, permission);
+    if (held === 'ALL') return 'ALL';
+    return [...new Set([...administered, ...held])];
+  }
+
   /** Held through a global grant — what platform-wide administration needs. */
   async hasGlobalPermission(
     userUuid: string,

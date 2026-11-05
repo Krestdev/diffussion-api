@@ -7,6 +7,16 @@ import { Prisma } from '../../../generated/prisma/client';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import {
+  assertAdministers,
+  assertInScope,
+  RbacService,
+} from '../../auth/rbac/rbac.service';
+import {
+  assertSiteExists,
+  siteReferentialsWhere,
+} from '../../common/utils/site-referentials';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCorrespondentDto } from './dto/create-correspondent.dto';
 import { FindCorrespondantsQueryDto } from './dto/find-correspondents.query.dto';
@@ -14,12 +24,19 @@ import { UpdateCorrespondantDto } from './dto/update-correspondent.dto';
 
 const includeType = {
   type: true,
+  site: { select: { id: true, code: true, name: true } },
 } satisfies Prisma.CorrespondentInclude;
 
+/**
+ * A correspondent belongs to one site: only that site's effets use it. Made
+ * and managed by whoever holds ADMIN_MANAGE_REFERENTIALS at that site (or
+ * globally); everyone else sees their own site's.
+ */
 @Injectable()
 export class CorrespondantService {
   constructor(
     private readonly database: DatabaseService,
+    private readonly rbac: RbacService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
   ) {}
@@ -29,7 +46,9 @@ export class CorrespondantService {
     entityType: 'correspondent',
     operation: 'CREATE',
   })
-  async create(dto: CreateCorrespondentDto) {
+  async create(dto: CreateCorrespondentDto, actingUserId: string) {
+    await this.assertManages(dto.siteId, actingUserId);
+    await assertSiteExists(this.database, dto.siteId);
     if (dto.typeId) await this.assertTypeExists(dto.typeId);
     return createWithUniqueReference('CP', (code) =>
       this.database.correspondent.create({
@@ -39,11 +58,17 @@ export class CorrespondantService {
     );
   }
 
-  async findAll(query: FindCorrespondantsQueryDto) {
+  async findAll(query: FindCorrespondantsQueryDto, userId: string) {
     const contains = query.search
       ? { contains: query.search, mode: 'insensitive' as const }
       : undefined;
     const where: Prisma.CorrespondentWhereInput = {
+      ...(await siteReferentialsWhere(
+        this.rbac,
+        this.database,
+        userId,
+        query.siteId,
+      )),
       typeId: query.typeId,
       city: query.city
         ? { contains: query.city, mode: 'insensitive' }
@@ -72,9 +97,14 @@ export class CorrespondantService {
     return { data, total, skip: query.skip ?? 0, take: query.take ?? 20 };
   }
 
-  async findOne(uuid: string) {
-    const correspondent = await this.database.correspondent.findUnique({
-      where: { id: uuid },
+  async findOne(uuid: string, userId?: string) {
+    const correspondent = await this.database.correspondent.findFirst({
+      where: {
+        id: uuid,
+        ...(userId
+          ? await siteReferentialsWhere(this.rbac, this.database, userId)
+          : {}),
+      },
       include: includeType,
     });
     if (!correspondent) {
@@ -88,8 +118,13 @@ export class CorrespondantService {
     entityType: 'correspondent',
     operation: 'UPDATE',
   })
-  async update(uuid: string, dto: UpdateCorrespondantDto) {
-    await this.findOne(uuid);
+  async update(
+    uuid: string,
+    dto: UpdateCorrespondantDto,
+    actingUserId: string,
+  ) {
+    const existing = await this.findOne(uuid);
+    await this.assertManages(existing.siteId, actingUserId);
     if (dto.typeId) await this.assertTypeExists(dto.typeId);
     return this.database.correspondent.update({
       where: { id: uuid },
@@ -103,8 +138,9 @@ export class CorrespondantService {
     entityType: 'correspondent',
     operation: 'DELETE',
   })
-  async remove(uuid: string) {
-    await this.findOne(uuid);
+  async remove(uuid: string, actingUserId: string) {
+    const existing = await this.findOne(uuid);
+    await this.assertManages(existing.siteId, actingUserId);
     try {
       await this.database.correspondent.delete({ where: { id: uuid } });
     } catch (error) {
@@ -118,6 +154,15 @@ export class CorrespondantService {
       }
       throw error;
     }
+  }
+
+  private async assertManages(siteId: string, userId: string) {
+    const scope = await this.rbac.managedSites(
+      userId,
+      PermissionCode.AdminManageReferentials,
+    );
+    assertAdministers(scope);
+    assertInScope(scope, siteId);
   }
 
   private async assertTypeExists(typeId: string) {

@@ -384,6 +384,14 @@ export class CreateCriterionTemplateDto {
   @MaxLength(150)
   label: string;
 
+  @ApiPropertyOptional({
+    description:
+      "The site whose fiches it serves. Left out: a common criterion (platform administrator), or the caller's site when they manage only one",
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -409,11 +417,40 @@ export class CreateCriterionTemplateDto {
   appliedByDefault?: boolean;
 }
 
+// Its site never changes.
 export class UpdateCriterionTemplateDto extends PartialType(
-  CreateCriterionTemplateDto,
+  OmitType(CreateCriterionTemplateDto, ['siteId'] as const),
 ) {}
 
+export class FindCriteriaQueryDto {
+  @ApiPropertyOptional({
+    description:
+      "The common criteria plus this site's — what a fiche of that site offers. Left out: the common ones plus the caller's site's (every site's for a platform administrator)",
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
+}
+
+export class AnalysisSettingsQueryDto {
+  @ApiPropertyOptional({
+    description:
+      "This site's settings (its own, else the common ones). Left out: the common ones",
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
+}
+
 export class UpdateAnalysisSettingsDto {
+  @ApiPropertyOptional({
+    description:
+      'Set the settings of this site only. Left out: the common ones (platform administrator)',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
+
   @ApiProperty({
     description:
       'Whether an element may carry criteria outside the catalogue (PUT /analysis-sheets/items/:id/criteria)',

@@ -63,6 +63,29 @@ export enum PermissionCode {
 
   // Direction: the dashboard across every site (Supervision générale).
   DashboardGlobalRead = 'DASHBOARD_GLOBAL_READ',
+
+  // The role matrix of the mock-up (Diffusion V2.1). Listed for the role
+  // screens; not every route checks them yet (see the mapping in the
+  // administration notes).
+  ContractRead = 'CONTRACT_READ',
+  ContractCreate = 'CONTRACT_CREATE',
+  ContractUpdate = 'CONTRACT_UPDATE',
+  ContractArchive = 'CONTRACT_ARCHIVE',
+  CorrespondentRead = 'CORRESPONDENT_READ',
+  CorrespondentCreate = 'CORRESPONDENT_CREATE',
+  CorrespondentUpdate = 'CORRESPONDENT_UPDATE',
+  CorrespondentArchive = 'CORRESPONDENT_ARCHIVE',
+  CourrierUpdate = 'COURRIER_UPDATE',
+  CourrierArchive = 'COURRIER_ARCHIVE',
+  CourrierApprove = 'COURRIER_APPROVE',
+  CourrierClose = 'COURRIER_CLOSE',
+  CourrierReadAll = 'COURRIER_READ_ALL',
+  AnalysisArchive = 'ANALYSIS_ARCHIVE',
+  UsersRead = 'USERS_READ',
+  RolesRead = 'ROLES_READ',
+  RolesCreate = 'ROLES_CREATE',
+  RolesArchive = 'ROLES_ARCHIVE',
+  SettingsRead = 'SETTINGS_READ',
 }
 
 /**
@@ -117,6 +140,26 @@ export const PERMISSION_LABELS: Record<PermissionCode, string> = {
   [PermissionCode.AuditRead]: "Consulter le journal d'audit",
   [PermissionCode.DashboardGlobalRead]:
     'Consulter le tableau de bord de tous les sites (Direction)',
+  [PermissionCode.ContractRead]: 'Consulter les contrats',
+  [PermissionCode.ContractCreate]: 'Créer un contrat',
+  [PermissionCode.ContractUpdate]: 'Modifier un contrat',
+  [PermissionCode.ContractArchive]: 'Archiver un contrat',
+  [PermissionCode.CorrespondentRead]: 'Consulter les correspondants',
+  [PermissionCode.CorrespondentCreate]: 'Créer un correspondant',
+  [PermissionCode.CorrespondentUpdate]: 'Modifier un correspondant',
+  [PermissionCode.CorrespondentArchive]: 'Archiver un correspondant',
+  [PermissionCode.CourrierUpdate]: 'Modifier un effet entrant',
+  [PermissionCode.CourrierArchive]: 'Archiver un effet',
+  [PermissionCode.CourrierApprove]: 'Approuver un effet sortant',
+  [PermissionCode.CourrierClose]: 'Clôturer tout effet entrant',
+  [PermissionCode.CourrierReadAll]:
+    "Consulter tous les effets (hors liste d'autorisés)",
+  [PermissionCode.AnalysisArchive]: "Archiver une fiche d'analyse",
+  [PermissionCode.UsersRead]: 'Consulter les utilisateurs',
+  [PermissionCode.RolesRead]: 'Consulter les rôles',
+  [PermissionCode.RolesCreate]: 'Créer un rôle',
+  [PermissionCode.RolesArchive]: 'Archiver un rôle',
+  [PermissionCode.SettingsRead]: 'Consulter les paramètres',
 };
 
 export const PERMISSION_METADATA_KEY = 'rbac:permission';
@@ -126,10 +169,14 @@ export const PERMISSION_METADATA_KEY = 'rbac:permission';
  * every site, so these only count when held through a global grant — a
  * site administrator holding them at their site can't use them.
  */
+// ADMIN_MANAGE_REFERENTIALS and ADMIN_MANAGE_ROLES are no longer here: held
+// at a site, they cover that site's referentials (canaux, correspondents,
+// projects, contracts, effet types) and roles — see
+// RbacService.managedSites. The shared catalogues they also guard (natures,
+// correspondent types, the permission catalogue) are @PlatformOnly routes.
+// ADMIN_MANAGE_ANALYSIS_CRITERIA neither: held at a site, it covers that
+// site's own criteria and settings (the common catalogue needs it globally).
 export const PLATFORM_PERMISSIONS: ReadonlySet<PermissionCode> = new Set([
-  PermissionCode.AdminManageRoles,
   PermissionCode.AdminManageCategories,
-  PermissionCode.AdminManageReferentials,
-  PermissionCode.AdminManageAnalysisCriteria,
   PermissionCode.DashboardGlobalRead,
 ]);

@@ -173,7 +173,8 @@ async function seedEffetTypes() {
   console.log(`✓ ${EFFET_TYPES.length} effet types ensured`);
 }
 
-async function seedReferentials() {
+// Canaux belong to a site: the default ones go to the default site.
+async function seedReferentials(siteId: string) {
   const correspondentTypes = [
     'Administration publique',
     'Entreprise',
@@ -203,7 +204,11 @@ async function seedReferentials() {
   );
   await Promise.all(
     canaux.map((name) =>
-      prisma.canal.upsert({ where: { name }, update: {}, create: { name } }),
+      prisma.canal.upsert({
+        where: { siteId_name: { siteId, name } },
+        update: {},
+        create: { name, siteId },
+      }),
     ),
   );
   await Promise.all(
@@ -244,11 +249,19 @@ const DEFAULT_ANALYSIS_CRITERIA = [
 async function seedAnalysisCriteria() {
   await Promise.all(
     DEFAULT_ANALYSIS_CRITERIA.map((label, index) =>
-      prisma.analysisCriterionTemplate.upsert({
-        where: { label },
-        update: { order: index + 1 },
-        create: { label, order: index + 1 },
-      }),
+      // Common criteria (no site): a nullable key can't be upserted on.
+      prisma.analysisCriterionTemplate
+        .findFirst({ where: { label, siteId: null }, select: { id: true } })
+        .then((found) =>
+          found
+            ? prisma.analysisCriterionTemplate.update({
+                where: { id: found.id },
+                data: { order: index + 1 },
+              })
+            : prisma.analysisCriterionTemplate.create({
+                data: { label, order: index + 1 },
+              }),
+        ),
     ),
   );
   console.log(
@@ -259,9 +272,9 @@ async function seedAnalysisCriteria() {
 async function main() {
   const permissionCodes = await seedPermissions();
   const role = await seedAdminRole(permissionCodes);
-  await seedSite();
+  const site = await seedSite();
   const admin = await seedAdminUser(role.id);
-  await seedReferentials();
+  await seedReferentials(site.id);
   await seedEffetTypes();
   await seedAnalysisCriteria();
   await grantAdminFullAccess(admin.id);

@@ -595,8 +595,10 @@ describe('Diffusion, end to end', () => {
 
     it('is signed with its signed scan, its signatory and its date', async () => {
       // Not sent before its signature.
-      const canal = await db.canal.create({ data: { name: 'Porteur' } });
-      id.canalPorteur = canal.id;
+      const canal = await as('super')
+        .post('/canaux', { name: 'Porteur', siteId: id.siteA })
+        .expect(201);
+      id.canalPorteur = canal.body.id;
       await as('chefA')
         .post(`/courriers/${id.sortant}/send`, {
           canalId: id.canalPorteur,
@@ -620,6 +622,56 @@ describe('Diffusion, end to end', () => {
       expect(res.body.signedAt).toBe('2026-11-02T00:00:00.000Z');
       expect(res.body.signedBy).toEqual({ id: id.chefA, name: 'chefA' });
       expect(res.body.signedDocument.originalName).toBe('signe.pdf');
+    });
+
+    it("is only sent through its own site's canal", async () => {
+      const other = await as('super')
+        .post('/canaux', { name: 'Porteur', siteId: id.siteB })
+        .expect(201);
+      await as('chefA')
+        .post(`/courriers/${id.sortant}/send`, {
+          canalId: other.body.id,
+          recipient: 'M. Diallo',
+          transmittedAt: '2026-11-03',
+        })
+        .expect(400);
+
+      // Each site sees its own canaux and correspondents only.
+      const mine = await as('chefA').get('/canaux').expect(200);
+      expect(mine.body.map((c: any) => c.id)).toContain(id.canalPorteur);
+      expect(mine.body.map((c: any) => c.id)).not.toContain(other.body.id);
+      await as('chefA').get(`/canaux/${other.body.id}`).expect(404);
+      const all = await as('super')
+        .get(`/canaux?siteId=${id.siteB}`)
+        .expect(200);
+      expect(all.body.map((c: any) => c.id)).toEqual([other.body.id]);
+      // A name is unique within a site only.
+      await as('super')
+        .post('/canaux', { name: 'Porteur', siteId: id.siteB })
+        .expect(409);
+      // Only a platform administrator makes them.
+      await as('respA')
+        .post('/canaux', { name: 'Coursier', siteId: id.siteA })
+        .expect(403);
+
+      const sender = await as('super')
+        .post('/correspondents', {
+          name: 'Mairie de Yaoundé',
+          siteId: id.siteB,
+        })
+        .expect(201);
+      expect(sender.body.site).toMatchObject({ id: id.siteB });
+      const seen = await as('chefA').get('/correspondents').expect(200);
+      expect(seen.body.data.map((c: any) => c.id)).not.toContain(
+        sender.body.id,
+      );
+      await as('agentA')
+        .post('/courriers', {
+          direction: 'ENTRANT',
+          subject: 'Lettre de Yaoundé',
+          correspondentId: sender.body.id,
+        })
+        .expect(400);
     });
 
     it('is sent under its bordereau de transmission', async () => {
@@ -874,16 +926,20 @@ describe('Diffusion, end to end', () => {
 
   // ---------------------------------------------------------------------------
   describe('7. Contrats', () => {
-    it('only a platform administrator creates a contract', async () => {
+    it("only its site's responsible or a platform administrator creates a contract", async () => {
       const project = await db.project.create({
-        data: { name: 'Port de Kribi' },
+        data: { name: 'Port de Kribi', siteId: id.siteA },
       });
       id.project = project.id;
       id.otherProject = (
-        await db.project.create({ data: { name: 'Route Douala' } })
+        await db.project.create({
+          data: { name: 'Route Douala', siteId: id.siteA },
+        })
       ).id;
       const body = { title: 'Marché des quais', projectId: id.project };
       await as('chefA').post('/contracts', body).expect(403);
+      // The responsible of another site neither.
+      await as('respB').post('/contracts', body).expect(403);
       const res = await as('super').post('/contracts', body).expect(201);
       expect(res.body.number).toMatch(/^CT-/);
       id.contract = res.body.id;
@@ -967,6 +1023,35 @@ describe('Diffusion, end to end', () => {
 
   // ---------------------------------------------------------------------------
   describe('7b. Projets', () => {
+    it('belong to a site: managed by its responsible, seen by its users only', async () => {
+      const own = await as('respA')
+        .post('/projects', { name: 'Digue de Bonabéri' })
+        .expect(201);
+      expect(own.body.site).toMatchObject({ id: id.siteA });
+      // Not on another site.
+      await as('respA')
+        .post('/projects', { name: 'Pont de Mbalmayo', siteId: id.siteB })
+        .expect(403);
+      await as('chefA').post('/projects', { name: 'Hors droits' }).expect(403);
+
+      const seenA = await as('chefA').get('/projects?take=100').expect(200);
+      expect(seenA.body.data.map((p: any) => p.id)).toContain(own.body.id);
+      const seenB = await as('respB').get('/projects?take=100').expect(200);
+      expect(seenB.body.data.map((p: any) => p.id)).not.toContain(own.body.id);
+      await as('respB').get(`/projects/${own.body.id}`).expect(404);
+
+      // A dossier of another site cannot belong to it.
+      await as('respB')
+        .post('/dossiers', {
+          title: 'Hors site',
+          siteId: id.siteB,
+          responsibleId: id.respB,
+          projectId: own.body.id,
+        })
+        .expect(400);
+      await as('respA').delete(`/projects/${own.body.id}`).expect(204);
+    });
+
     it('lists projects with their responsible, counts and metrics', async () => {
       const updated = await as('super')
         .patch(`/projects/${id.otherProject}`, {
@@ -1360,6 +1445,46 @@ describe('Diffusion, end to end', () => {
         .expect(200);
       expect(list.body.data.map((s: any) => s.id)).toContain(res.body.id);
       await as('super').get(`/analysis-sheets/${res.body.id}/pdf`).expect(200);
+    });
+
+    it('dispatching transmits at once and tells its responsible', async () => {
+      const effet = await as('agentA')
+        .post('/courriers', { direction: 'ENTRANT', subject: 'Avis technique' })
+        .expect(201);
+      const { projectId } = await db.contract.findUniqueOrThrow({
+        where: { id: id.contract },
+      });
+      const res = await as('super')
+        .post(`/courriers/${effet.body.id}/dispatch`, {
+          projectId,
+          contractId: id.contract,
+        })
+        .expect(201);
+      expect(res.body.status).toBe('TRANSMIS');
+      expect(res.body.transmittedAt).toBeTruthy();
+      expect(res.body.transmittedBy).toMatchObject({ id: id.super });
+      if (res.body.ownerId && res.body.ownerId !== id.super) {
+        // Notifications are written after the response (fire-and-forget).
+        const notice = await eventually(
+          () =>
+            db.notification.findFirst({
+              where: {
+                courrierId: effet.body.id,
+                type: 'COURRIER_TRANSMITTED',
+              },
+            }),
+          (n) => n !== null,
+        );
+        expect(notice).not.toBeNull();
+      }
+      // No instruction yet: its dispatching can still be corrected.
+      const again = await as('super')
+        .post(`/courriers/${effet.body.id}/dispatch`, {
+          projectId,
+          contractId: id.contract,
+        })
+        .expect(201);
+      expect(again.body.status).toBe('TRANSMIS');
     });
 
     it('lists the effets a fiche can be opened on', async () => {

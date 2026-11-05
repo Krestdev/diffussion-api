@@ -3,6 +3,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { MailerService } from '../../mail/mailer.service';
 import { UsersService } from './users.service';
 
 const NEW_USER = {
@@ -20,7 +21,11 @@ describe('UsersService', () => {
     userRole: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
-  let rbac: { administeredSites: jest.Mock; withAdminCoverage: jest.Mock };
+  let rbac: {
+    administeredSites: jest.Mock;
+    withAdminCoverage: jest.Mock;
+    hasGlobalPermission: jest.Mock;
+  };
 
   const created = () =>
     database.user.create.mock.calls[0][0] as {
@@ -67,6 +72,7 @@ describe('UsersService', () => {
     rbac = {
       // The responsible of site s-1 unless a test says otherwise.
       administeredSites: jest.fn().mockResolvedValue(['s-1']),
+      hasGlobalPermission: jest.fn().mockResolvedValue(false),
       withAdminCoverage: jest.fn((change: (tx: unknown) => unknown) =>
         change(database),
       ),
@@ -76,6 +82,10 @@ describe('UsersService', () => {
       providers: [
         UsersService,
         { provide: DatabaseService, useValue: database },
+        {
+          provide: MailerService,
+          useValue: { sendInvitation: jest.fn() },
+        },
         {
           provide: RealtimeGateway,
           useValue: { emitToUsers: jest.fn(), broadcast: jest.fn() },
@@ -246,6 +256,59 @@ describe('UsersService', () => {
         service.update('u-2', { siteId: 's-2' }, 'super-admin'),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(database.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('directory (the people pickers)', () => {
+    const findArgs = () =>
+      database.user.findMany.mock.calls[0][0] as {
+        where: Record<string, unknown>;
+      };
+
+    beforeEach(() => {
+      database.user.findMany.mockResolvedValue([]);
+      // A chef de projet of site s-1: administers nothing.
+      rbac.administeredSites.mockResolvedValue([]);
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+    });
+
+    it("gives anyone their own site's active people", async () => {
+      await service.directory({}, 'u-chef');
+
+      expect(findArgs().where).toMatchObject({
+        status: 'ACTIVE',
+        siteId: 's-1',
+      });
+    });
+
+    it("gives nothing of another site's", async () => {
+      const res = await service.directory({ siteId: 's-2' }, 'u-chef');
+
+      expect(res).toEqual([]);
+      expect(database.user.findMany).not.toHaveBeenCalled();
+    });
+
+    it('filters on a permission held at the site or globally', async () => {
+      await service.directory(
+        { permission: 'ANALYSIS_DECIDE' as never },
+        'u-chef',
+      );
+
+      expect(JSON.stringify(findArgs().where)).toContain('ANALYSIS_DECIDE');
+    });
+
+    it('resolves ids whatever their site', async () => {
+      await service.directory({ ids: ['u-9'] }, 'u-chef');
+
+      expect(findArgs().where).toEqual({ id: { in: ['u-9'] } });
+    });
+
+    it('lets a platform administrator pick any site', async () => {
+      rbac.hasGlobalPermission.mockResolvedValue(true);
+
+      await service.directory({ siteId: 's-2' }, 'super-admin');
+
+      expect(findArgs().where).toMatchObject({ siteId: 's-2' });
     });
   });
 });

@@ -19,7 +19,15 @@ import {
 } from '../../common/dto/pagination.query.dto';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import {
+  assertAdministers,
+  assertInScope,
+  RbacService,
+} from '../../auth/rbac/rbac.service';
+import {
+  assertSiteExists,
+  ownSiteFilter,
+} from '../../common/utils/site-referentials';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import {
   assertActiveUsers,
@@ -36,6 +44,7 @@ import { FindProjectsQueryDto } from './dto/find-projects.query.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 
 const projectInclude = {
+  site: { select: { id: true, code: true, name: true } },
   maitreOuvrage: { select: { id: true, name: true } },
   responsible: { select: { id: true, name: true } },
   _count: { select: { contracts: true, dossiers: true } },
@@ -61,8 +70,10 @@ export const COURRIER_DONE: CourrierStatus[] = [
 ];
 
 /**
- * Projects. Each may list the users allowed to open it (ProjectAccess, see
- * visibleProjectWhere); platform administrators see them all.
+ * Projects. Each belongs to one site: seen by that site's users only, and
+ * managed by that site's responsible or a platform administrator (who sees
+ * every site's). Within its site, it may list the users allowed to open it
+ * (ProjectAccess, see visibleProjectWhere).
  */
 @Injectable()
 export class ProjectService {
@@ -78,16 +89,41 @@ export class ProjectService {
     entityType: 'project',
     operation: 'CREATE',
   })
-  async create(dto: CreateProjectDto) {
-    const { startDate, endDate, maitreOuvrageName, ...data } = dto;
-    await this.assertLinks(data);
+  async create(dto: CreateProjectDto, actingUserId: string) {
+    const {
+      startDate,
+      endDate,
+      maitreOuvrageName,
+      siteId: requestedSiteId,
+      ...data
+    } = dto;
+    const scope = await this.rbac.managedSites(
+      actingUserId,
+      PermissionCode.AdminManageReferentials,
+    );
+    assertAdministers(scope);
+    let siteId = requestedSiteId;
+    if (!siteId) {
+      if (scope === 'ALL' || scope.length !== 1) {
+        throw new BadRequestException('siteId is required');
+      }
+      siteId = scope[0];
+    }
+    assertInScope(scope, siteId);
+    await assertSiteExists(this.database, siteId);
+    await this.assertLinks(data, undefined, siteId);
     const dates = toDates(startDate, endDate);
     assertDateOrder(dates.startDate, dates.endDate);
     return this.database.project.create({
       data: {
         ...data,
         ...dates,
-        maitreOuvrageId: await this.maitreOuvrageId(data, maitreOuvrageName),
+        siteId,
+        maitreOuvrageId: await this.maitreOuvrageId(
+          data,
+          maitreOuvrageName,
+          siteId,
+        ),
       },
       include: projectInclude,
     });
@@ -102,7 +138,12 @@ export class ProjectService {
     const contains = query.search
       ? { contains: query.search, mode: 'insensitive' as const }
       : undefined;
+    const site = await ownSiteFilter(this.rbac, this.database, userId);
+    // Platform administrators: every site's, or the one asked for.
+    const siteScope: Prisma.ProjectWhereInput =
+      site ?? (query.siteId ? { siteId: query.siteId } : {});
     const where: Prisma.ProjectWhereInput = {
+      ...siteScope,
       status: query.status,
       OR: contains && [{ name: contains }, { reference: contains }],
       AND: [await this.visibleTo(userId)],
@@ -121,7 +162,7 @@ export class ProjectService {
         }),
         this.database.project.count({ where }),
       ]),
-      this.metrics(),
+      this.metrics(siteScope),
     ]);
 
     return { data, total, skip, take, metrics };
@@ -157,11 +198,12 @@ export class ProjectService {
     entityType: 'project',
     operation: 'UPDATE',
   })
-  async update(id: string, dto: UpdateProjectDto) {
+  async update(id: string, dto: UpdateProjectDto, actingUserId: string) {
     const project = await this.findOne(id);
+    await this.assertManages(project.siteId, actingUserId);
     const { startDate, endDate, status, reason, maitreOuvrageName, ...data } =
       dto;
-    await this.assertLinks(data, project);
+    await this.assertLinks(data, project, project.siteId);
     const dates = toDates(startDate, endDate);
     assertDateOrder(
       dates.startDate !== undefined ? dates.startDate : project.startDate,
@@ -179,7 +221,11 @@ export class ProjectService {
       data: {
         ...data,
         ...dates,
-        maitreOuvrageId: await this.maitreOuvrageId(data, maitreOuvrageName),
+        maitreOuvrageId: await this.maitreOuvrageId(
+          data,
+          maitreOuvrageName,
+          project.siteId,
+        ),
         ...(statusChanged ? statusChange(project.status, status, reason) : {}),
       },
       include: projectInclude,
@@ -191,8 +237,9 @@ export class ProjectService {
     entityType: 'project',
     operation: 'DELETE',
   })
-  async remove(id: string) {
-    await this.findOne(id);
+  async remove(id: string, actingUserId: string) {
+    const project = await this.findOne(id);
+    await this.assertManages(project.siteId, actingUserId);
     try {
       await this.database.project.delete({ where: { id } });
     } catch (error) {
@@ -271,8 +318,22 @@ export class ProjectService {
     );
   }
 
+  // Its own site's projects (open to them) — all of them for a platform
+  // administrator.
   private async visibleTo(userId: string): Promise<Prisma.ProjectWhereInput> {
-    return (await this.isAdmin(userId)) ? {} : visibleProjectWhere(userId);
+    const site = await ownSiteFilter(this.rbac, this.database, userId);
+    return site ? { ...site, ...visibleProjectWhere(userId) } : {};
+  }
+
+  // A project is managed by its site's responsible, whoever holds
+  // ADMIN_MANAGE_REFERENTIALS at its site, or a platform administrator.
+  private async assertManages(siteId: string, userId: string) {
+    const scope = await this.rbac.managedSites(
+      userId,
+      PermissionCode.AdminManageReferentials,
+    );
+    assertAdministers(scope);
+    assertInScope(scope, siteId);
   }
 
   // A project the user may not open is reported as not found.
@@ -285,7 +346,7 @@ export class ProjectService {
     }
   }
 
-  private async metrics() {
+  private async metrics(siteScope: Prisma.ProjectWhereInput) {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     // Weeks start on Monday.
@@ -295,7 +356,7 @@ export class ProjectService {
       now.getDate() - ((now.getDay() + 6) % 7),
     );
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const inProject = { projectId: { not: null } };
+    const inProject = { project: siteScope };
 
     const [
       byStatusRows,
@@ -306,9 +367,13 @@ export class ProjectService {
       dossiersCreatedThisWeek,
       withoutResponsible,
     ] = await Promise.all([
-      this.database.project.groupBy({ by: ['status'], _count: true }),
+      this.database.project.groupBy({
+        by: ['status'],
+        where: siteScope,
+        _count: true,
+      }),
       this.database.project.count({
-        where: { createdAt: { gte: startOfMonth } },
+        where: { ...siteScope, createdAt: { gte: startOfMonth } },
       }),
       this.database.contract.count({ where: inProject }),
       this.database.contract.count({
@@ -319,7 +384,11 @@ export class ProjectService {
         where: { ...inProject, createdAt: { gte: startOfWeek } },
       }),
       this.database.project.count({
-        where: { status: ProjectStatus.ACTIVE, responsibleId: null },
+        where: {
+          ...siteScope,
+          status: ProjectStatus.ACTIVE,
+          responsibleId: null,
+        },
       }),
     ]);
 
@@ -405,11 +474,13 @@ export class ProjectService {
     };
   }
 
-  // The maître d'ouvrage given by name: found or created. `undefined` keeps
-  // the one given by id, or the current one.
+  // The maître d'ouvrage given by name: found or created — on the
+  // project's site. `undefined` keeps the one given by id, or the current
+  // one.
   private async maitreOuvrageId(
     data: { maitreOuvrageId?: string },
     name: string | undefined,
+    siteId: string,
   ) {
     if (name === undefined) return data.maitreOuvrageId;
     if (data.maitreOuvrageId) {
@@ -417,20 +488,28 @@ export class ProjectService {
         'Give the maître d’ouvrage by id or by name, not both',
       );
     }
-    return findOrCreateCorrespondent(this.database, name);
+    return findOrCreateCorrespondent(this.database, name, siteId);
   }
 
   // The maître d'ouvrage must be an active correspondent and the
   // responsible an active user — checked only when they change.
   private async assertLinks(
     dto: { maitreOuvrageId?: string; responsibleId?: string },
-    current?: { maitreOuvrageId: string | null; responsibleId: string | null },
+    current:
+      | { maitreOuvrageId: string | null; responsibleId: string | null }
+      | undefined,
+    siteId: string,
   ) {
+    // The maître d'ouvrage is a correspondent of the project's site.
     if (
       dto.maitreOuvrageId &&
       dto.maitreOuvrageId !== current?.maitreOuvrageId
     ) {
-      await assertCorrespondentActive(this.database, dto.maitreOuvrageId);
+      await assertCorrespondentActive(
+        this.database,
+        dto.maitreOuvrageId,
+        siteId,
+      );
     }
     if (dto.responsibleId && dto.responsibleId !== current?.responsibleId) {
       const user = await this.database.user.findUnique({

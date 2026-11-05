@@ -24,6 +24,10 @@ import {
   markDossierInProgress,
 } from '../../common/utils/dossier-lifecycle';
 import { assertCorrespondentActive } from '../../common/utils/referential-guards';
+import {
+  assertCanalOfSite,
+  assertProjectOfSite,
+} from '../../common/utils/site-referentials';
 import { DatabaseService } from '../../database/database.service';
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
 import { awaitingValidationBy } from '../../common/utils/courrier-validation';
@@ -68,7 +72,8 @@ const mailInclude = {
   proposedBy: { select: { id: true, name: true, email: true } },
   dispatchValidatedBy: { select: { id: true, name: true, email: true } },
   // Who wrote it and who approved it, readable by whoever sees the effet.
-  createdBy: { select: { id: true, name: true } },
+  // Its registrant's site is the effet's site until it has a dossier.
+  createdBy: { select: { id: true, name: true, siteId: true } },
   approvedBy: { select: { id: true, name: true } },
   // An entrant handed over / a sortant sent; a sortant's signature and
   // discharge, with their scans.
@@ -89,6 +94,7 @@ const mailInclude = {
       number: true,
       title: true,
       priority: true,
+      siteId: true,
       contract: { select: { id: true, reference: true, title: true } },
     },
   },
@@ -169,8 +175,18 @@ export function formatCourrier<T extends Record<string, any>>(courrier: T) {
         : null
       : undefined;
 
+  // The effet's site: its dossier's, else its registrant's (see
+  // siteOfEffet) — the site its supervisor and agents are picked from.
+  const siteId =
+    courrier.dossier !== undefined || courrier.createdBy !== undefined
+      ? ((courrier.dossier?.siteId as string | undefined) ??
+        (courrier.createdBy?.siteId as string | null | undefined) ??
+        null)
+      : undefined;
+
   return {
     ...courrier,
+    ...(siteId !== undefined ? { siteId } : {}),
     ...(supervisor !== undefined ? { supervisor } : {}),
     ...(courrier.supervisorDueDate !== undefined ||
     courrier.dueDate !== undefined
@@ -348,15 +364,23 @@ export class MailService {
     } else {
       await this.assertRegistrantHasSite(createdById);
     }
+    const siteId = await this.siteOfEffet(dto.dossierId ?? null, createdById);
     if (dto.correspondentId) {
-      await assertCorrespondentActive(this.database, dto.correspondentId);
+      await assertCorrespondentActive(
+        this.database,
+        dto.correspondentId,
+        siteId,
+      );
+    }
+    if (dto.canalId) {
+      await assertCanalOfSite(this.database, dto.canalId, siteId);
     }
     if (dto.respondsToId) {
       await this.assertRespondsToValid(dto.respondsToId);
     }
     const typeId = await this.checkEffetFields(dto, {
       direction: dto.direction,
-      siteId: await this.siteOfEffet(dto.dossierId ?? null, createdById),
+      siteId,
     });
     const { receivedAt, documents: documentMetas, transmit, ...data } = dto;
     const dossierLinks = await this.projectOfDossier(dto.dossierId);
@@ -774,11 +798,25 @@ export class MailService {
     if (dossierChanged) {
       await assertDossierOpenForActivity(this.database, dto.dossierId!);
     }
+    const siteId = await this.siteOfEffet(
+      dto.dossierId ?? courrier.dossierId,
+      courrier.createdById,
+    );
+    // Its canal and correspondent stay those of its site — checked when
+    // they change, or when it moves to another dossier.
+    const correspondentId =
+      dto.correspondentId !== undefined
+        ? dto.correspondentId
+        : courrier.correspondentId;
     if (
-      dto.correspondentId &&
-      dto.correspondentId !== courrier.correspondentId
+      correspondentId &&
+      (correspondentId !== courrier.correspondentId || dossierChanged)
     ) {
-      await assertCorrespondentActive(this.database, dto.correspondentId);
+      await assertCorrespondentActive(this.database, correspondentId, siteId);
+    }
+    const canalId = dto.canalId !== undefined ? dto.canalId : courrier.canalId;
+    if (canalId && (canalId !== courrier.canalId || dossierChanged)) {
+      await assertCanalOfSite(this.database, canalId, siteId);
     }
     if (dto.respondsToId && dto.respondsToId !== courrier.respondsToId) {
       await this.assertRespondsToValid(dto.respondsToId, id);
@@ -787,10 +825,7 @@ export class MailService {
       dto,
       {
         direction: courrier.direction,
-        siteId: await this.siteOfEffet(
-          dto.dossierId ?? courrier.dossierId,
-          courrier.createdById,
-        ),
+        siteId,
       },
       courrier,
     );
@@ -835,6 +870,7 @@ export class MailService {
     await this.database.courrier.delete({ where: { id } });
   }
 
+  // Legacy — the front no longer calls it: dispatching transmits at once.
   // Entrant: AFFECTE (or registered with its dossier) -> TRANSMIS
   // (10.2.4.7 — handed to its designated responsible for treatment), so its
   // dossier or contract must be known by then. Its dispatching can't be
@@ -848,15 +884,7 @@ export class MailService {
     const updated = await this.setStatus(courrier.id, CourrierStatus.TRANSMIS, {
       data: { transmittedAt: new Date(), transmittedById: actingUserId },
     });
-    this.notify(
-      courrier,
-      [courrier.ownerId ?? (await this.validatorOf(courrier))],
-      actingUserId,
-      {
-        type: 'COURRIER_TRANSMITTED',
-        message: `« ${courrier.subject} » vous a été transmis.`,
-      },
-    );
+    await this.notifyTransmitted(courrier, actingUserId);
     return formatCourrier(updated);
   }
 
@@ -893,12 +921,12 @@ export class MailService {
    * Dispatch an incoming courrier:
    * Body: { projectId, contractId } OR { projectId, dossierId } (exactly one of contractId or dossierId).
    * - contract/dossier must belong to the project.
-   * - With dispatch permission: status -> AFFECTE, ownerId = designated responsible
-   *   (told once it is transmitted, see transmit).
+   * - With dispatch permission: status -> TRANSMIS at once (transmittedAt/By set),
+   *   ownerId = designated responsible, who is notified.
    * - Without dispatch permission: status -> EN_ATTENTE_TRANSMISSION, proposal is stored.
-   * - Allowed from RECU or ENREGISTRE. Also allowed from EN_ATTENTE_TRANSMISSION or AFFECTE
-   *   for users with permission, as long as no instruction exists (reassignment). Once
-   *   TRANSMIS, 409 Conflict.
+   * - Allowed from RECU or ENREGISTRE. Also allowed from EN_ATTENTE_TRANSMISSION, AFFECTE
+   *   or TRANSMIS for users with permission, as long as no instruction exists
+   *   (reassignment). Otherwise 409 Conflict.
    */
   async dispatch(id: string, dto: DispatchMailDto, userId: string) {
     const hasContract = Boolean(dto.contractId);
@@ -982,21 +1010,30 @@ export class MailService {
       throw new NotFoundException(`Courrier ${id} non trouvé`);
     }
 
+    // Only to a project of the effet's site.
+    await assertProjectOfSite(
+      this.database,
+      dto.projectId,
+      await this.siteOfEffet(courrier.dossierId, courrier.createdById),
+    );
     const hasPermission = await this.canDispatch(userId, courrier);
     const status = courrier.status;
 
     const isInitial =
       status === CourrierStatus.RECU || status === CourrierStatus.ENREGISTRE;
+    // A dispatched effet is transmitted at once (no AFFECTE step any more):
+    // its dispatching can still be corrected until a first instruction.
     const isReassignable =
       status === CourrierStatus.EN_ATTENTE_TRANSMISSION ||
-      status === CourrierStatus.AFFECTE;
+      status === CourrierStatus.AFFECTE ||
+      status === CourrierStatus.TRANSMIS;
 
     if (isInitial) {
       // Allowed for users with or without permission
     } else if (isReassignable) {
       if (!hasPermission) {
         throw new ConflictException(
-          "Seul un utilisateur avec la permission de dispatch peut changer l'affectation d'un effet en attente de validation ou déjà affecté",
+          "Seul un utilisateur avec la permission de dispatch peut changer l'affectation d'un effet en attente de validation ou déjà transmis",
         );
       }
       if (courrier.instructions.length > 0) {
@@ -1006,9 +1043,7 @@ export class MailService {
       }
     } else {
       throw new ConflictException(
-        status === CourrierStatus.TRANSMIS
-          ? "L'effet a déjà été transmis : son dispatching n'est plus modifiable"
-          : `Impossible de dispatcher l'effet depuis le statut ${status}`,
+        `Impossible de dispatcher l'effet depuis le statut ${status}`,
       );
     }
 
@@ -1017,7 +1052,9 @@ export class MailService {
       const updated = await this.database.courrier.update({
         where: { id },
         data: {
-          status: CourrierStatus.AFFECTE,
+          status: CourrierStatus.TRANSMIS,
+          transmittedAt: now,
+          transmittedById: userId,
           ownerId: designatedResponsibleId,
           projectId: dto.projectId,
           contractId: resolvedContractId,
@@ -1040,6 +1077,7 @@ export class MailService {
       this.recordCourrierEvent(id, 'COURRIER_DISPATCHE', {
         projectId: dto.projectId,
       });
+      await this.notifyTransmitted(updated, userId);
       return formatCourrier(updated);
     } else {
       const updated = await this.database.courrier.update({
@@ -1133,7 +1171,7 @@ export class MailService {
   }
 
   /**
-   * Validates a proposed dispatching for an incoming courrier (EN_ATTENTE_TRANSMISSION -> AFFECTE).
+   * Validates a proposed dispatching for an incoming courrier (EN_ATTENTE_TRANSMISSION -> TRANSMIS).
    * Reserved to users authorized to validate dispatching. Sets ownerId to the designated responsible of the target.
    */
   async validateDispatch(id: string, userId: string) {
@@ -1186,10 +1224,13 @@ export class MailService {
         }
       }
 
+      const now = new Date();
       const { count } = await tx.courrier.updateMany({
         where: { id, status: CourrierStatus.EN_ATTENTE_TRANSMISSION },
         data: {
-          status: CourrierStatus.AFFECTE,
+          status: CourrierStatus.TRANSMIS,
+          transmittedAt: now,
+          transmittedById: userId,
           projectId,
           contractId,
           dossierId,
@@ -1198,7 +1239,7 @@ export class MailService {
           proposedContractId: null,
           proposedDossierId: null,
           dispatchValidatedById: userId,
-          dispatchValidatedAt: new Date(),
+          dispatchValidatedAt: now,
         },
       });
       if (count === 0) {
@@ -1227,11 +1268,33 @@ export class MailService {
     });
 
     this.recordCourrierEvent(id, 'COURRIER_DISPATCH_VALIDE');
+    await this.notifyTransmitted(updated, userId);
     return formatCourrier(updated);
   }
 
+  // Tells the designated responsible (else the validator of its dossier or
+  // contract) that a dispatched effet was handed to them.
+  private async notifyTransmitted(
+    courrier: Parameters<MailService['validatorOf']>[0] & {
+      id: string;
+      ownerId: string | null;
+      subject: string;
+    },
+    actingUserId: string,
+  ) {
+    this.notify(
+      courrier,
+      [courrier.ownerId ?? (await this.validatorOf(courrier))],
+      actingUserId,
+      {
+        type: 'COURRIER_TRANSMITTED',
+        message: `« ${courrier.subject} » vous a été transmis.`,
+      },
+    );
+  }
+
   // EN_ATTENTE_VALIDATION -> VALIDE; a pending dispatching
-  // (EN_ATTENTE_TRANSMISSION) -> AFFECTE, see validateDispatch.
+  // (EN_ATTENTE_TRANSMISSION) -> TRANSMIS, see validateDispatch.
   async validate(id: string, userId: string) {
     const courrier = await this.database.courrier.findUnique({
       where: { id },
@@ -1382,6 +1445,54 @@ export class MailService {
   }
 
   // The responsible of the effet's site, if it has one.
+  /**
+   * Closing or archiving an effet (and taking it out of the archives) is
+   * for those answering for it: its designated responsible, its supervisor
+   * (a sortant: also its author), its site's responsible, a platform user
+   * administrator — or whoever holds `permission` (COURRIER_CLOSE,
+   * COURRIER_ARCHIVE) at its site. Merely seeing it is not enough: closing
+   * an entrant cancels its open tasks.
+   */
+  private async assertMayConclude(
+    courrier: {
+      direction: CourrierDirection;
+      ownerId?: string | null;
+      supervisorId?: string | null;
+      dossierId?: string | null;
+      createdById?: string | null;
+    },
+    userId: string,
+    permission: PermissionCode,
+  ) {
+    if (courrier.ownerId === userId || courrier.supervisorId === userId) {
+      return;
+    }
+    if (
+      courrier.direction === CourrierDirection.SORTANT &&
+      courrier.createdById === userId
+    ) {
+      return;
+    }
+    if ((await this.siteResponsibleOf(courrier)) === userId) return;
+    const siteId = await this.siteOfEffet(
+      courrier.dossierId ?? null,
+      courrier.createdById ?? null,
+    );
+    const sites = await this.rbac.sitesWithPermission(userId, permission);
+    if (sites === 'ALL' || (siteId && sites.includes(siteId))) return;
+    if (
+      await this.rbac.hasGlobalPermission(
+        userId,
+        PermissionCode.AdminManageUsers,
+      )
+    ) {
+      return;
+    }
+    throw new ForbiddenException(
+      `Only its designated responsible, its supervisor, its site's responsible, an administrator or a holder of ${permission} can do this`,
+    );
+  }
+
   private async siteResponsibleOf(courrier: {
     dossierId?: string | null;
     createdById?: string | null;
@@ -1641,14 +1752,12 @@ export class MailService {
   // Sortant: SIGNE -> ENVOYE, under the year's next bordereau de
   // transmission (BT-AAAA-NNNNNN).
   async send(id: string, dto: SendMailDto, userId: string) {
-    await this.requireSortant(id, SENDABLE_STATUSES);
-    const canal = await this.database.canal.findUnique({
-      where: { id: dto.canalId },
-      select: { name: true },
-    });
-    if (!canal) {
-      throw new BadRequestException(`Canal ${dto.canalId} not found`);
-    }
+    const sortant = await this.requireSortant(id, SENDABLE_STATUSES);
+    const canal = await assertCanalOfSite(
+      this.database,
+      dto.canalId,
+      await this.siteOfEffet(sortant.dossierId, sortant.createdById),
+    );
     const transmittedAt = new Date(dto.transmittedAt);
     const updated = await this.database.$transaction(async (tx) => {
       const { count } = await tx.courrier.updateMany({
@@ -1756,10 +1865,17 @@ export class MailService {
 
   // Entrant: mark a received courrier as fully treated (10.2.4.8), with an
   // optional note. Its instructions still open are cancelled with it.
-  async close(id: string, dto: CloseMailDto = {}) {
+  async close(id: string, dto: CloseMailDto = {}, userId?: string) {
     const courrier = await this.requireStatus(id, ENTRANT_CLOSABLE_STATUSES);
     if (courrier.direction !== CourrierDirection.ENTRANT) {
       throw new BadRequestException('Only an incoming courrier can be closed');
+    }
+    if (userId) {
+      await this.assertMayConclude(
+        courrier,
+        userId,
+        PermissionCode.CourrierClose,
+      );
     }
     const note = dto.note || null;
     const [{ count: cancelledInstructions }, updated] =
@@ -1794,8 +1910,15 @@ export class MailService {
   // An entrant once treated (mirroring Dossier's close-before-archive
   // rule), a sortant once authorized or cancelled — with an optional
   // reason. The status it leaves is kept for unarchive().
-  async archive(id: string, reason?: string) {
+  async archive(id: string, reason?: string, userId?: string) {
     const courrier = await this.findOne(id);
+    if (userId) {
+      await this.assertMayConclude(
+        courrier,
+        userId,
+        PermissionCode.CourrierArchive,
+      );
+    }
     const allowed = ARCHIVABLE_STATUSES[courrier.direction];
     if (!allowed.includes(courrier.status)) {
       throw new BadRequestException(
@@ -1816,8 +1939,15 @@ export class MailService {
 
   // Inverse of archive(): back to the status it was archived from (an
   // entrant archived before that was recorded: CLOTURE).
-  async unarchive(id: string) {
+  async unarchive(id: string, userId?: string) {
     const courrier = await this.requireStatus(id, [CourrierStatus.ARCHIVE]);
+    if (userId) {
+      await this.assertMayConclude(
+        courrier,
+        userId,
+        PermissionCode.CourrierArchive,
+      );
+    }
     const status =
       courrier.archivedFromStatus ??
       (courrier.direction === CourrierDirection.SORTANT

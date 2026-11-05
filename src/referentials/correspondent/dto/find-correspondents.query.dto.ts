@@ -20,6 +20,14 @@ export class FindCorrespondantsQueryDto extends PaginationQueryDto {
   @IsString()
   city?: string;
 
+  @ApiPropertyOptional({
+    description:
+      "Only the correspondents of this site (a platform administrator; anyone else only ever sees their own site's)",
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
+
   @ApiPropertyOptional({ enum: CorrespondentStatus })
   @IsOptional()
   @IsEnum(CorrespondentStatus)

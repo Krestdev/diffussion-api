@@ -13,6 +13,14 @@ export class CreateProjectDto {
   @MaxLength(200)
   name: string;
 
+  @ApiPropertyOptional({
+    description:
+      "The site it belongs to. A site's responsible may leave it out (their own site); a platform administrator names it",
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
+
   @ApiPropertyOptional({ example: 'PRJ-2026-07', description: 'Réf Projet' })
   @IsOptional()
   @IsString()

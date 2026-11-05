@@ -17,6 +17,11 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
 import { CreateUserDto } from './dto/create-user.dto';
+import {
+  CreateInvitationDto,
+  FindInvitationsQueryDto,
+} from './dto/invitation.dto';
+import { FindDirectoryQueryDto } from './dto/find-directory.query.dto';
 import { FindUsersQueryDto } from './dto/find-users.query.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UsersService } from './users.service';
@@ -39,6 +44,39 @@ export class UsersController {
   @Get()
   findAll(@Query() query: FindUsersQueryDto, @CurrentUser() user: JwtPayload) {
     return this.usersService.findAll(query, user.sub);
+  }
+
+  // The people pickers, for every signed-in user (unlike GET /users, the
+  // administration list). Declared before ':id'.
+  @Get('directory')
+  directory(
+    @Query() query: FindDirectoryQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.usersService.directory(query, user.sub);
+  }
+
+  // Invitations (A·12) — declared before ':id'.
+  @Post('invitations')
+  invite(@Body() dto: CreateInvitationDto, @CurrentUser() user: JwtPayload) {
+    return this.usersService.invite(dto, user.sub);
+  }
+
+  @Get('invitations')
+  findInvitations(
+    @Query() query: FindInvitationsQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.usersService.findInvitations(query, user.sub);
+  }
+
+  @Delete('invitations/:invitationId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  revokeInvitation(
+    @Param('invitationId', ParseUUIDPipe) invitationId: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.usersService.revokeInvitation(invitationId, user.sub);
   }
 
   @Get(':id')

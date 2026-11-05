@@ -80,7 +80,7 @@ export class PermissionService {
   private async grantableBy(
     actingUserId: string,
   ): Promise<Prisma.PermissionWhereInput> {
-    const scope = await this.rbac.administeredSites(
+    const scope = await this.rbac.managedSites(
       actingUserId,
       PermissionCode.AdminManageRoles,
     );

@@ -16,8 +16,6 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
@@ -34,10 +32,11 @@ import { UpdateProjectDto } from './dto/update-project.dto';
 export class ProjectController {
   constructor(private readonly projectService: ProjectService) {}
 
+  // A site's responsible (their site's) or a platform administrator —
+  // checked in the service.
   @Post()
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  create(@Body() dto: CreateProjectDto) {
-    return this.projectService.create(dto);
+  create(@Body() dto: CreateProjectDto, @CurrentUser() user: JwtPayload) {
+    return this.projectService.create(dto, user.sub);
   }
 
   @Get()
@@ -86,18 +85,20 @@ export class ProjectController {
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AdminManageReferentials)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateProjectDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.projectService.update(id, dto);
+    return this.projectService.update(id, dto, user.sub);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.projectService.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.projectService.remove(id, user.sub);
   }
 }

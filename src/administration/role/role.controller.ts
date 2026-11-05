@@ -1,10 +1,7 @@
 import {
   Body,
   Controller,
-  Delete,
   Get,
-  HttpCode,
-  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -16,6 +13,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { ArchiveRoleDto } from './dto/archive-role.dto';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { FindRolesQueryDto } from './dto/find-roles.query.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
@@ -57,12 +55,21 @@ export class RoleController {
     return this.roleService.update(id, dto, user.sub);
   }
 
-  @Delete(':id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  remove(
+  // Never deleted: archived, then restorable from the Archives.
+  @Post(':id/archive')
+  archive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ArchiveRoleDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.roleService.archive(id, dto, user.sub);
+  }
+
+  @Post(':id/restore')
+  restore(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.roleService.remove(id, user.sub);
+    return this.roleService.restore(id, user.sub);
   }
 }

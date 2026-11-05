@@ -132,6 +132,7 @@ describe('MailService', () => {
       hasPermission: jest.fn().mockResolvedValue(false),
       hasGlobalPermission: jest.fn().mockResolvedValue(false),
       hasPermissionAtSite: jest.fn().mockResolvedValue(false),
+      sitesWithPermission: jest.fn().mockResolvedValue([]),
       // Global grant by default: no site restriction.
       siteFilter: jest.fn().mockResolvedValue({}),
     };
@@ -1236,6 +1237,69 @@ describe('MailService', () => {
           }),
         );
       });
+
+      describe('who may close it', () => {
+        const open = (over: Record<string, unknown> = {}) => ({
+          ...courrier(CourrierStatus.EN_TRAITEMENT, CourrierDirection.ENTRANT),
+          dossierId: null,
+          createdById: 'u-agent',
+          ownerId: 'u-owner',
+          supervisorId: 'u-sup',
+          ...over,
+        });
+
+        beforeEach(() => {
+          database.instruction.updateMany.mockResolvedValue({ count: 0 });
+          // The registrant's site, then its responsible.
+          database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+          database.site.findUnique.mockResolvedValue({
+            responsibleId: 'u-site',
+          });
+        });
+
+        it('refuses an executant who merely sees it', async () => {
+          database.courrier.findUnique.mockResolvedValue(open());
+
+          await expect(
+            service.close('c-1', {}, 'u-executant'),
+          ).rejects.toBeInstanceOf(ForbiddenException);
+          expect(database.courrier.update).not.toHaveBeenCalled();
+        });
+
+        it.each([
+          ['its designated responsible', 'u-owner'],
+          ['its supervisor', 'u-sup'],
+          ["its site's responsible", 'u-site'],
+        ])('lets %s close it', async (_label, userId) => {
+          database.courrier.findUnique.mockResolvedValue(open());
+
+          await service.close('c-1', {}, userId);
+
+          expect(database.courrier.update).toHaveBeenCalled();
+        });
+
+        it('lets a holder of COURRIER_CLOSE at its site close it', async () => {
+          database.courrier.findUnique.mockResolvedValue(open());
+          rbac.sitesWithPermission.mockResolvedValue(['s-1']);
+
+          await service.close('c-1', {}, 'u-chef-courrier');
+
+          expect(rbac.sitesWithPermission).toHaveBeenCalledWith(
+            'u-chef-courrier',
+            'COURRIER_CLOSE',
+          );
+          expect(database.courrier.update).toHaveBeenCalled();
+        });
+
+        it('refuses COURRIER_CLOSE held at another site', async () => {
+          database.courrier.findUnique.mockResolvedValue(open());
+          rbac.sitesWithPermission.mockResolvedValue(['s-2']);
+
+          await expect(
+            service.close('c-1', {}, 'u-other-site'),
+          ).rejects.toBeInstanceOf(ForbiddenException);
+        });
+      });
     });
 
     describe('submitForValidation', () => {
@@ -1530,6 +1594,7 @@ describe('MailService', () => {
 
     it('rejects if contract does not belong to project', async () => {
       database.project.findUnique.mockResolvedValue({
+        siteId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -1548,8 +1613,9 @@ describe('MailService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('dispatches with permission to AFFECTE and sets owner to contract responsible', async () => {
+    it('dispatches with permission straight to TRANSMIS and tells the contract responsible', async () => {
       database.project.findUnique.mockResolvedValue({
+        siteId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -1563,8 +1629,12 @@ describe('MailService', () => {
       );
       database.courrier.update.mockResolvedValue({
         id: 'c-1',
-        status: CourrierStatus.AFFECTE,
+        subject: 'Effet',
+        status: CourrierStatus.TRANSMIS,
         ownerId: 'u-ct-resp',
+        dossierId: null,
+        contractId: 'ct-1',
+        createdById: 'u-creator',
       });
       // Dispatcher at the effet's site (its registrant's, s-1).
       database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
@@ -1576,13 +1646,19 @@ describe('MailService', () => {
         'u-dispatcher',
       );
 
-      expect(res.status).toBe(CourrierStatus.AFFECTE);
-      // Its responsible is told once it is transmitted, not before.
-      expect(notifications.create).not.toHaveBeenCalled();
+      expect(res.status).toBe(CourrierStatus.TRANSMIS);
+      expect(notifications.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'COURRIER_TRANSMITTED',
+          recipientIds: ['u-ct-resp'],
+        }),
+      );
       expect(database.courrier.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            status: CourrierStatus.AFFECTE,
+            status: CourrierStatus.TRANSMIS,
+            transmittedAt: expect.any(Date),
+            transmittedById: 'u-dispatcher',
             ownerId: 'u-ct-resp',
             projectId: 'p-1',
             contractId: 'ct-1',
@@ -1593,6 +1669,7 @@ describe('MailService', () => {
 
     it('stores proposal in EN_ATTENTE_TRANSMISSION when user lacks dispatch permission', async () => {
       database.project.findUnique.mockResolvedValue({
+        siteId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -1633,8 +1710,9 @@ describe('MailService', () => {
       );
     });
 
-    it('allows changing assignment on AFFECTE when caller has permission and no instructions exist', async () => {
+    it('allows changing assignment on TRANSMIS when caller has permission and no instructions exist', async () => {
       database.project.findUnique.mockResolvedValue({
+        siteId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -1644,11 +1722,11 @@ describe('MailService', () => {
         responsibleId: 'u-new-owner',
       });
       database.courrier.findUnique.mockResolvedValue(
-        mockCourrier(CourrierStatus.AFFECTE, []),
+        mockCourrier(CourrierStatus.TRANSMIS, []),
       );
       database.courrier.update.mockResolvedValue({
         id: 'c-1',
-        status: CourrierStatus.AFFECTE,
+        status: CourrierStatus.TRANSMIS,
         ownerId: 'u-new-owner',
       });
       // Dispatcher at the effet's site (its registrant's, s-1).
@@ -1666,6 +1744,7 @@ describe('MailService', () => {
 
     it('rejects changing assignment on TRANSMIS with 409 if instructions exist', async () => {
       database.project.findUnique.mockResolvedValue({
+        siteId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -1692,6 +1771,7 @@ describe('MailService', () => {
 
     it('rejects changing assignment on TRANSMIS with 409 if caller lacks permission', async () => {
       database.project.findUnique.mockResolvedValue({
+        siteId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -1833,7 +1913,10 @@ describe('MailService', () => {
     });
 
     it('a dispatcher of another site only proposes', async () => {
-      database.project.findUnique.mockResolvedValue({ id: 'p-1' });
+      database.project.findUnique.mockResolvedValue({
+        id: 'p-1',
+        siteId: 's-1',
+      });
       database.contract.findUnique.mockResolvedValue({
         id: 'ct-1',
         projectId: 'p-1',
@@ -1949,8 +2032,11 @@ describe('MailService', () => {
       });
       database.courrier.findUniqueOrThrow.mockResolvedValue({
         id: 'c-1',
-        status: CourrierStatus.AFFECTE,
+        subject: 'Effet à valider',
+        status: CourrierStatus.TRANSMIS,
         ownerId: 'u-ct-resp',
+        dossierId: null,
+        createdById: 'u-creator',
         projectId: 'p-1',
         contractId: 'ct-1',
         proposedProjectId: null,
@@ -1960,12 +2046,20 @@ describe('MailService', () => {
 
       const res = await service.validateDispatch('c-1', 'u-validator');
 
-      expect(res.status).toBe(CourrierStatus.AFFECTE);
+      expect(res.status).toBe(CourrierStatus.TRANSMIS);
+      expect(notifications.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'COURRIER_TRANSMITTED',
+          recipientIds: ['u-ct-resp'],
+        }),
+      );
       expect(database.courrier.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'c-1', status: CourrierStatus.EN_ATTENTE_TRANSMISSION },
           data: expect.objectContaining({
-            status: CourrierStatus.AFFECTE,
+            status: CourrierStatus.TRANSMIS,
+            transmittedAt: expect.any(Date),
+            transmittedById: 'u-validator',
             ownerId: 'u-ct-resp',
             projectId: 'p-1',
             contractId: 'ct-1',
@@ -1983,8 +2077,6 @@ describe('MailService', () => {
           }),
         }),
       );
-      // Its responsible is told once it is transmitted.
-      expect(notifications.create).not.toHaveBeenCalled();
     });
 
     it('validates dispatch and marks dossier in progress when target is a dossier', async () => {

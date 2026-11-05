@@ -28,7 +28,9 @@ describe('ContractService', () => {
         count: jest.fn().mockResolvedValue(1),
         delete: jest.fn(),
       },
-      project: { findUnique: jest.fn().mockResolvedValue({ id: 'p-1' }) },
+      project: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'p-1', siteId: 's-1' }),
+      },
       dossier: {
         updateMany: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
@@ -48,7 +50,10 @@ describe('ContractService', () => {
         },
         {
           provide: RbacService,
-          useValue: { hasGlobalPermission: jest.fn().mockResolvedValue(false) },
+          useValue: {
+            hasGlobalPermission: jest.fn().mockResolvedValue(false),
+            managedSites: jest.fn().mockResolvedValue('ALL'),
+          },
         },
       ],
     }).compile();
@@ -70,7 +75,7 @@ describe('ContractService', () => {
   });
 
   it('creates a contract under an existing project', async () => {
-    await service.create({ title: 'Marché A', projectId: 'p-1' });
+    await service.create({ title: 'Marché A', projectId: 'p-1' }, 'u-admin');
 
     expect(database.contract.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -83,24 +88,27 @@ describe('ContractService', () => {
     database.project.findUnique.mockResolvedValue(null);
 
     await expect(
-      service.create({ title: 'Marché A', projectId: 'p-x' }),
+      service.create({ title: 'Marché A', projectId: 'p-x' }, 'u-admin'),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('refuses a contract that ends before it starts', async () => {
     await expect(
-      service.create({
-        title: 'Marché A',
-        startDate: '2026-12-01',
-        endDate: '2026-11-01',
-      }),
+      service.create(
+        {
+          title: 'Marché A',
+          startDate: '2026-12-01',
+          endDate: '2026-11-01',
+        },
+        'u-admin',
+      ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('moves its dossiers when the contract changes project', async () => {
     database.contract.findUnique.mockResolvedValue(existing());
 
-    await service.update('c-1', { projectId: 'p-2' });
+    await service.update('c-1', { projectId: 'p-2' }, 'u-admin');
 
     expect(database.dossier.updateMany).toHaveBeenCalledWith({
       where: { contractId: 'c-1' },
@@ -111,7 +119,7 @@ describe('ContractService', () => {
   it('leaves the dossiers alone when the project is unchanged', async () => {
     database.contract.findUnique.mockResolvedValue(existing());
 
-    await service.update('c-1', { title: 'Renamed' });
+    await service.update('c-1', { title: 'Renamed' }, 'u-admin');
 
     expect(database.dossier.updateMany).not.toHaveBeenCalled();
   });
@@ -121,7 +129,7 @@ describe('ContractService', () => {
       existing({ _count: { dossiers: 2, accesses: 0 } }),
     );
 
-    await expect(service.remove('c-1')).rejects.toBeInstanceOf(
+    await expect(service.remove('c-1', 'u-admin')).rejects.toBeInstanceOf(
       ConflictException,
     );
     expect(database.contract.delete).not.toHaveBeenCalled();
@@ -131,7 +139,7 @@ describe('ContractService', () => {
     database.contract.findUnique.mockResolvedValue(existing());
     database.document.count.mockResolvedValue(1);
 
-    await expect(service.remove('c-1')).rejects.toBeInstanceOf(
+    await expect(service.remove('c-1', 'u-admin')).rejects.toBeInstanceOf(
       ConflictException,
     );
   });
@@ -142,14 +150,14 @@ describe('ContractService', () => {
     );
 
     await expect(
-      service.update('c-1', { title: 'Renamed' }),
+      service.update('c-1', { title: 'Renamed' }, 'u-admin'),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
   it('keeps the reason when archiving', async () => {
     database.contract.findUnique.mockResolvedValue(existing());
 
-    await service.archive('c-1', 'Marché soldé');
+    await service.archive('c-1', 'u-admin', 'Marché soldé');
 
     expect(database.contract.update).toHaveBeenCalledWith({
       where: { id: 'c-1' },

@@ -16,7 +16,10 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import {
+  PlatformOnly,
+  RequirePermission,
+} from '../../auth/rbac/require-permission.decorator';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { CorrespondentTypeService } from './correspondent-type.service';
 import { CreateCorrespondentTypeDto } from './dto/create-correspondent-type.dto';
@@ -33,6 +36,7 @@ export class CorrespondentTypeController {
 
   @Post()
   @RequirePermission(PermissionCode.AdminManageReferentials)
+  @PlatformOnly()
   create(@Body() dto: CreateCorrespondentTypeDto) {
     return this.correspondentTypeService.create(dto);
   }
@@ -49,6 +53,7 @@ export class CorrespondentTypeController {
 
   @Patch(':id')
   @RequirePermission(PermissionCode.AdminManageReferentials)
+  @PlatformOnly()
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCorrespondentTypeDto,
@@ -59,6 +64,7 @@ export class CorrespondentTypeController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermission(PermissionCode.AdminManageReferentials)
+  @PlatformOnly()
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.correspondentTypeService.remove(id);
   }

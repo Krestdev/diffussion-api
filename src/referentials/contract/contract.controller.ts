@@ -17,8 +17,6 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { SetReferentialAccessDto } from '../project/dto/set-access.dto';
@@ -38,10 +36,11 @@ import { UpdateContractDto } from './dto/update-contract.dto';
 export class ContractController {
   constructor(private readonly contractService: ContractService) {}
 
+  // The responsible of its project's site, or a platform administrator —
+  // checked in the service (also for the routes below).
   @Post()
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  create(@Body() dto: CreateContractDto) {
-    return this.contractService.create(dto);
+  create(@Body() dto: CreateContractDto, @CurrentUser() user: JwtPayload) {
+    return this.contractService.create(dto, user.sub);
   }
 
   @Get()
@@ -68,34 +67,38 @@ export class ContractController {
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AdminManageReferentials)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateContractDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.contractService.update(id, dto);
+    return this.contractService.update(id, dto, user.sub);
   }
 
   @Post(':id/archive')
-  @RequirePermission(PermissionCode.AdminManageReferentials)
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.contractService.archive(id, dto.reason);
+    return this.contractService.archive(id, user.sub, dto.reason);
   }
 
   @Post(':id/unarchive')
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  unarchive(@Param('id', ParseUUIDPipe) id: string) {
-    return this.contractService.unarchive(id);
+  unarchive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.contractService.unarchive(id, user.sub);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.contractService.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.contractService.remove(id, user.sub);
   }
 
   @Get(':id/access')

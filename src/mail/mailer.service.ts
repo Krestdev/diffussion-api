@@ -16,9 +16,18 @@ export interface PasswordResetMail {
  * A real implementation only has to extend this class and implement the
  * methods — nothing else in the app changes.
  */
+export interface InvitationMail {
+  to: string;
+  name: string;
+  invitedBy: string | null;
+  acceptLink: string;
+  expiresAt: Date;
+}
+
 @Injectable()
 export abstract class MailerService {
   abstract sendPasswordReset(mail: PasswordResetMail): Promise<void>;
+  abstract sendInvitation(mail: InvitationMail): Promise<void>;
 }
 
 /**
@@ -33,6 +42,13 @@ export class LogMailerService extends MailerService {
   sendPasswordReset(mail: PasswordResetMail): Promise<void> {
     this.logger.warn(
       `[no mailer configured] Password reset for ${mail.to} — link valid until ${mail.expiresAt.toISOString()}: ${mail.resetLink}`,
+    );
+    return Promise.resolve();
+  }
+
+  sendInvitation(mail: InvitationMail): Promise<void> {
+    this.logger.warn(
+      `[no mailer configured] Invitation for ${mail.to} (${mail.name}) — link valid until ${mail.expiresAt.toISOString()}: ${mail.acceptLink}`,
     );
     return Promise.resolve();
   }

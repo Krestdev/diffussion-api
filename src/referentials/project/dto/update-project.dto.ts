@@ -1,9 +1,12 @@
-import { ApiPropertyOptional, PartialType } from '@nestjs/swagger';
+import { ApiPropertyOptional, OmitType, PartialType } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ProjectStatus } from '../../../../generated/prisma/client';
 import { CreateProjectDto } from './create-project.dto';
 
-export class UpdateProjectDto extends PartialType(CreateProjectDto) {
+// Its site never changes.
+export class UpdateProjectDto extends PartialType(
+  OmitType(CreateProjectDto, ['siteId'] as const),
+) {
   @ApiPropertyOptional({
     enum: ProjectStatus,
     description:

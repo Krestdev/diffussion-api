@@ -3,11 +3,13 @@ import {
   ArrayUnique,
   IsArray,
   IsEmail,
+  IsEnum,
   IsOptional,
   IsString,
   IsUUID,
   MinLength,
 } from 'class-validator';
+import { AccessProfile } from '../../../../generated/prisma/client';
 import { NormalizeEmail } from '../../../common/transforms/normalize-email.transform';
 
 export class CreateUserDto {
@@ -56,4 +58,14 @@ export class CreateUserDto {
   @ArrayUnique()
   @IsUUID('4', { each: true })
   roleIds?: string[];
+
+  @ApiPropertyOptional({
+    enum: AccessProfile,
+    default: AccessProfile.USER,
+    description:
+      'How the administration screens present the account (A·2). SUPER_ADMIN is set by a platform administrator only. The rights still come from the roles.',
+  })
+  @IsOptional()
+  @IsEnum(AccessProfile)
+  accessProfile?: AccessProfile;
 }

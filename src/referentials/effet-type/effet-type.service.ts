@@ -137,7 +137,7 @@ export class EffetTypeService {
   // 'ALL' for a platform administrator, else the site they are the
   // responsible of; anyone else is refused.
   private async adminScope(actingUserId: string): Promise<SiteScopeList> {
-    const scope = await this.rbac.administeredSites(
+    const scope = await this.rbac.managedSites(
       actingUserId,
       PermissionCode.AdminManageReferentials,
     );

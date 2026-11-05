@@ -66,6 +66,14 @@ enum UserStatus {
   SUSPENDED
 }
 
+/// How the administration screens present an account (A·2). A label kept
+/// with the account; the rights themselves still come from its roles.
+enum AccessProfile {
+  SUPER_ADMIN
+  COMPANY_ADMIN
+  USER
+}
+
 model User {
   id           String  @id @default(uuid())
   name         String
@@ -79,10 +87,15 @@ model User {
   function           String?
   phone              String? @db.VarChar(30)
 
-  status      UserStatus @default(ACTIVE)
-  isVerified  Boolean    @default(false)
-  isConnected Boolean    @default(false)
-  lastLogin   DateTime?
+  status          UserStatus    @default(ACTIVE)
+  accessProfile   AccessProfile @default(USER)
+  /// When and by whom the account was last suspended (A·13); cleared when
+  /// it is reactivated.
+  deactivatedAt   DateTime?
+  deactivatedById String?
+  isVerified      Boolean       @default(false)
+  isConnected     Boolean       @default(false)
+  lastLogin       DateTime?
 
   /// The one site the user belongs to (RG-ORG-001, revised: one site per
   /// user). Null for platform users (super-admins), whose roles are global.
@@ -92,7 +105,12 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Restrict: a site can't be deleted while users still belong to it.
-  site Site? @relation("SiteUsers", fields: [siteId], references: [id], onDelete: Restrict)
+  site               Site?        @relation("SiteUsers", fields: [siteId], references: [id], onDelete: Restrict)
+  deactivatedBy      User?        @relation("UserDeactivatedBy", fields: [deactivatedById], references: [id], onDelete: SetNull)
+  deactivatedUsers   User[]       @relation("UserDeactivatedBy")
+  archivedRoles      Role[]       @relation("RoleArchivedBy")
+  invitationsSent    Invitation[] @relation("InvitationInvitedBy")
+  invitationAccepted Invitation?  @relation("InvitationUser")
 
   userRoles               UserRole[]
   userInstructions        UserInstructions[]
@@ -152,13 +170,19 @@ model Site {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  responsible User?        @relation("SiteManager", fields: [responsibleId], references: [id])
-  users       User[]       @relation("SiteUsers")
-  roles       Role[]
-  effetTypes  EffetType[]
-  userRoles   UserRole[]
-  dossiers    Dossier[]
-  delegations Delegation[]
+  responsible      User?                       @relation("SiteManager", fields: [responsibleId], references: [id])
+  users            User[]                      @relation("SiteUsers")
+  roles            Role[]
+  effetTypes       EffetType[]
+  canals           Canal[]
+  projects         Project[]
+  analysisCriteria AnalysisCriterionTemplate[]
+  analysisSettings AnalysisSiteSettings?
+  correspondents   Correspondent[]
+  userRoles        UserRole[]
+  dossiers         Dossier[]
+  delegations      Delegation[]
+  invitations      Invitation[]
 
   @@map("site")
 }
@@ -169,15 +193,21 @@ model Site {
 /// every site. Otherwise a role of that site only, made and managed by the
 /// site's responsible, and held by that site's users only.
 model Role {
-  id          String   @id @default(uuid())
-  code        String   @unique @db.VarChar(30)
-  name        String   @db.VarChar(50)
-  description String?
-  siteId      String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id           String    @id @default(uuid())
+  code         String    @unique @db.VarChar(30)
+  name         String    @db.VarChar(50)
+  description  String?
+  siteId       String?
+  /// Archived (A·9): held by nobody any more, never offered, restorable.
+  /// A role is never deleted.
+  archivedAt   DateTime?
+  archivedById String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   site            Site?            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  archivedBy      User?            @relation("RoleArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+  invitations     Invitation[]
   userRoles       UserRole[]
   rolePermissions RolePermission[]
   delegations     Delegation[]
@@ -324,14 +354,18 @@ model CourrierNature {
 }
 
 /// Communication channel referential (6.4), used by Courrier.
+/// Belongs to one site: only that site's effets use it (unique per site).
 model Canal {
   id        String   @id @default(uuid())
-  name      String   @unique @db.VarChar(100)
+  name      String   @db.VarChar(100)
+  siteId    String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  site      Site       @relation(fields: [siteId], references: [id], onDelete: Restrict)
   courriers Courrier[]
 
+  @@unique([siteId, name])
   @@map("canal")
 }
 
@@ -364,14 +398,18 @@ model Correspondent {
   phone       String?             @db.VarChar(30)
   mainContact String?             @db.VarChar(150)
   status      CorrespondentStatus @default(ACTIVE)
+  /// Belongs to one site: only that site's effets use it.
+  siteId      String
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
+  site            Site               @relation(fields: [siteId], references: [id], onDelete: Restrict)
   type            CorrespondentType? @relation(fields: [typeId], references: [id])
   courriers       Courrier[]
   maitreOuvrageOf Project[]          @relation("ProjectMaitreOuvrage")
   clientOf        Contract[]         @relation("ContractClient")
 
+  @@index([siteId])
   @@map("correspondent")
 }
 
@@ -470,6 +508,10 @@ model Project {
   maitreOuvrageId String?
   /// Who answers for the project.
   responsibleId   String?
+  /// The site it belongs to: managed by that site's responsible (or a
+  /// platform administrator), seen by that site's users only. Its dossiers
+  /// and effets are on that site; its contracts follow it.
+  siteId          String
   /// ACTIVE -> CLOSED -> ARCHIVED; closedAt / archivedAt record when.
   status          ProjectStatus @default(ACTIVE)
   startDate       DateTime?
@@ -482,6 +524,7 @@ model Project {
   updatedAt       DateTime      @updatedAt
 
   maitreOuvrage  Correspondent?  @relation("ProjectMaitreOuvrage", fields: [maitreOuvrageId], references: [id])
+  site           Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
   responsible    User?           @relation("ProjectResponsible", fields: [responsibleId], references: [id], onDelete: SetNull)
   dossiers       Dossier[]
   contracts      Contract[]
@@ -492,6 +535,7 @@ model Project {
 
   @@index([status])
   @@index([responsibleId])
+  @@index([siteId])
   @@map("project")
 }
 
@@ -1422,9 +1466,14 @@ model AnalysisItemCriterion {
 /// Admin-managed default grid ("document de critères d'analyse"): Forme,
 /// Fonctionnalité, Constitution, Conformité aux cahiers des charges,
 /// Exploitabilité, Autres conformités.
+/// A criterion of the catalogue: common to every site (no site, managed by
+/// a platform administrator), or of one site (managed by whoever holds
+/// ADMIN_MANAGE_ANALYSIS_CRITERIA there). A fiche offers the common ones plus
+/// its site's.
 model AnalysisCriterionTemplate {
   id               String  @id @default(uuid())
-  label            String  @unique @db.VarChar(150)
+  label            String  @db.VarChar(150)
+  siteId           String?
   description      String?
   order            Int     @default(0)
   isActive         Boolean @default(true)
@@ -1434,8 +1483,12 @@ model AnalysisCriterionTemplate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  site     Site?                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
   criteria AnalysisItemCriterion[]
 
+  /// A label is unique among the common criteria and within each site (NULLS
+  /// NOT DISTINCT, see the migration).
+  @@unique([siteId, label])
   @@map("analysis_criterion_template")
 }
 
@@ -1458,4 +1511,45 @@ model AnalysisSettings {
   updatedAt           DateTime @updatedAt
 
   @@map("analysis_settings")
+}
+
+/// A site's own settings for its fiches, over the common ones
+/// (AnalysisSettings) — absent: the common ones apply.
+model AnalysisSiteSettings {
+  siteId              String   @id
+  allowCustomCriteria Boolean
+  updatedAt           DateTime @updatedAt
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@map("analysis_site_settings")
+}
+
+/// An invitation to join (A·12): the account is created when the invitee
+/// accepts it with their password (POST /auth/invitations/accept). Pending:
+/// neither accepted nor revoked, and not expired.
+model Invitation {
+  id          String    @id @default(uuid())
+  email       String    @db.VarChar(150)
+  name        String
+  siteId      String?
+  /// The role it will hold, at its site (or globally without a site).
+  roleId      String?
+  invitedById String?
+  tokenHash   String    @unique
+  sentAt      DateTime  @default(now())
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  /// The account created on acceptance.
+  userId      String?   @unique
+
+  site      Site? @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  role      Role? @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  invitedBy User? @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
+  user      User? @relation("InvitationUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([siteId])
+  @@index([email])
+  @@map("invitation")
 }

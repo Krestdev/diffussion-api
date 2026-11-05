@@ -18,6 +18,7 @@ import {
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
+import { ArchiveRoleDto } from './dto/archive-role.dto';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { FindRolesQueryDto } from './dto/find-roles.query.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
@@ -25,6 +26,7 @@ import { UpdateRoleDto } from './dto/update-role.dto';
 const roleInclude = {
   rolePermissions: { include: { permission: true } },
   site: { select: { id: true, name: true } },
+  archivedBy: { select: { id: true, name: true } },
   // One UserRole row per site the role is held at: count distinct users.
   userRoles: { select: { userId: true }, distinct: ['userId'] },
 } satisfies Prisma.RoleInclude;
@@ -87,6 +89,7 @@ export class RoleService {
       AND: [
         await this.visibleTo(actingUserId),
         query.siteId ? { siteId: query.siteId } : {},
+        { archivedAt: query.archived ? { not: null } : null },
         query.search
           ? {
               OR: [
@@ -128,6 +131,11 @@ export class RoleService {
     const scope = await this.adminScope(actingUserId);
     const existing = await this.ensureExists(id);
     assertInScope(scope, existing.siteId);
+    if (existing.archivedAt) {
+      throw new BadRequestException(
+        'This role is archived — restore it before changing it',
+      );
+    }
     if (dto.name !== undefined && dto.name !== existing.name) {
       await this.assertNameAvailable(dto.name, existing.siteId);
     }
@@ -159,35 +167,101 @@ export class RoleService {
     return toView(role);
   }
 
-  // A role's permission grid is owned by the role and goes with it; users
-  // holding it block the deletion (removing it would silently strip rights).
-  async remove(id: string, actingUserId: string) {
+  /**
+   * A role is never deleted: archived (A·9), it is held by nobody any more
+   * and offered nowhere, and can be restored. Its holders lose it, or get
+   * `reassignToRoleId` instead (a role in use, global or of the same site);
+   * so do the delegations still running and the pending invitations.
+   */
+  async archive(id: string, dto: ArchiveRoleDto, actingUserId: string) {
     const scope = await this.adminScope(actingUserId);
-    const existing = await this.ensureExists(id);
-    assertInScope(scope, existing.siteId);
-    const usersCount = await this.database.userRole
-      .findMany({
-        where: { roleId: id },
-        select: { userId: true },
-        distinct: ['userId'],
-      })
-      .then((holders) => holders.length);
-    if (usersCount > 0) {
-      throw new ConflictException(
-        `Role is still held by ${usersCount} user(s) — remove it from them first`,
-      );
+    const role = await this.ensureExists(id);
+    assertInScope(scope, role.siteId);
+    if (role.archivedAt) {
+      throw new BadRequestException('This role is already archived');
+    }
+    const replacementId = dto.reassignToRoleId;
+    if (replacementId) {
+      if (replacementId === id) {
+        throw new BadRequestException('A role cannot replace itself');
+      }
+      const replacement = await this.ensureExists(replacementId);
+      if (replacement.archivedAt) {
+        throw new BadRequestException('The replacement role is archived');
+      }
+      if (replacement.siteId !== null && replacement.siteId !== role.siteId) {
+        throw new BadRequestException(
+          'The replacement role belongs to another site',
+        );
+      }
     }
 
-    await this.database.$transaction([
-      this.database.rolePermission.deleteMany({ where: { roleId: id } }),
-      this.database.role.delete({ where: { id } }),
-    ]);
+    const now = new Date();
+    const holders = await this.rbac.withAdminCoverage(async (tx) => {
+      const grants = await tx.userRole.findMany({
+        where: { roleId: id },
+        select: { userId: true, siteId: true },
+      });
+      if (replacementId && grants.length) {
+        await tx.userRole.createMany({
+          data: grants.map((grant) => ({ ...grant, roleId: replacementId })),
+          skipDuplicates: true,
+        });
+      }
+      await tx.userRole.deleteMany({ where: { roleId: id } });
+      // Delegations still running: handed the replacement, or ended now.
+      const running = { roleId: id, endDate: { gte: now } };
+      if (replacementId) {
+        await tx.delegation.updateMany({
+          where: running,
+          data: { roleId: replacementId },
+        });
+      } else {
+        await tx.delegation.updateMany({
+          where: { ...running, startDate: { gt: now } },
+          data: { startDate: now, endDate: now },
+        });
+        await tx.delegation.updateMany({
+          where: running,
+          data: { endDate: now },
+        });
+      }
+      await tx.invitation.updateMany({
+        where: { roleId: id, acceptedAt: null, revokedAt: null },
+        data: { roleId: replacementId ?? null },
+      });
+      await tx.role.update({
+        where: { id },
+        data: { archivedAt: now, archivedById: actingUserId },
+      });
+      return new Set(grants.map((grant) => grant.userId)).size;
+    });
+    return {
+      ...(await this.findOne(id, actingUserId)),
+      holders,
+      reassignedToRoleId: replacementId ?? null,
+    };
+  }
+
+  // Back in use, held by nobody: its former holders are not given it back.
+  async restore(id: string, actingUserId: string) {
+    const scope = await this.adminScope(actingUserId);
+    const role = await this.ensureExists(id);
+    assertInScope(scope, role.siteId);
+    if (!role.archivedAt) {
+      throw new BadRequestException('This role is not archived');
+    }
+    await this.database.role.update({
+      where: { id },
+      data: { archivedAt: null, archivedById: null },
+    });
+    return this.findOne(id, actingUserId);
   }
 
   // 'ALL' for a platform administrator, else the site they are the
   // responsible of; anyone else is refused.
   private async adminScope(actingUserId: string): Promise<SiteScopeList> {
-    const scope = await this.rbac.administeredSites(
+    const scope = await this.rbac.managedSites(
       actingUserId,
       PermissionCode.AdminManageRoles,
     );

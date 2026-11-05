@@ -9,13 +9,15 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { FindCanalsQueryDto } from './dto/find-canals.query.dto';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { CanalService } from './canal.service';
 import { CreateCanalDto } from './dto/create-canal.dto';
 import { UpdateCanalDto } from './dto/update-canal.dto';
@@ -28,31 +30,40 @@ export class CanalController {
   constructor(private readonly canalService: CanalService) {}
 
   @Post()
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  create(@Body() dto: CreateCanalDto) {
-    return this.canalService.create(dto);
+  create(@Body() dto: CreateCanalDto, @CurrentUser() user: JwtPayload) {
+    return this.canalService.create(dto, user.sub);
   }
 
+  // The caller's own site's canaux — every site's for a platform
+  // administrator (optionally ?siteId=).
   @Get()
-  findAll() {
-    return this.canalService.findAll();
+  findAll(@Query() query: FindCanalsQueryDto, @CurrentUser() user: JwtPayload) {
+    return this.canalService.findAll(query, user.sub);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.canalService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.canalService.findOne(id, user.sub);
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateCanalDto) {
-    return this.canalService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCanalDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.canalService.update(id, dto, user.sub);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.canalService.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.canalService.remove(id, user.sub);
   }
 }

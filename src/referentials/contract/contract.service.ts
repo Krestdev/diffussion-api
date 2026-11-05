@@ -14,7 +14,12 @@ import {
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import {
+  assertAdministers,
+  assertInScope,
+  RbacService,
+} from '../../auth/rbac/rbac.service';
+import { ownSiteFilter } from '../../common/utils/site-referentials';
 import {
   DEFAULT_TAKE,
   PaginationQueryDto,
@@ -78,8 +83,12 @@ export class ContractService {
     entityType: 'contract',
     operation: 'CREATE',
   })
-  async create(dto: CreateContractDto) {
+  async create(dto: CreateContractDto, actingUserId: string) {
     const { startDate, endDate, signedAt, authorizedUserIds, ...data } = dto;
+    await this.assertManages(
+      await this.siteOfProject(dto.projectId ?? null),
+      actingUserId,
+    );
     await this.assertLinks(data);
     const dates = toDates(startDate, endDate);
     assertDateOrder(dates.startDate, dates.endDate);
@@ -175,8 +184,21 @@ export class ContractService {
     entityType: 'contract',
     operation: 'UPDATE',
   })
-  async update(id: string, dto: UpdateContractDto) {
+  async update(id: string, dto: UpdateContractDto, actingUserId: string) {
     const existing = await this.findOne(id);
+    const siteId = await this.siteOfProject(existing.projectId);
+    await this.assertManages(siteId, actingUserId);
+    // It stays on its site: moved to another project of the same site only.
+    if (
+      dto.projectId !== undefined &&
+      dto.projectId !== existing.projectId &&
+      existing.projectId &&
+      (await this.siteOfProject(dto.projectId)) !== siteId
+    ) {
+      throw new BadRequestException(
+        'A contract can only move to another project of its own site',
+      );
+    }
     if (existing.status === ContractStatus.ARCHIVED) {
       throw new BadRequestException(
         'This contract is archived — unarchive it before changing it',
@@ -211,8 +233,12 @@ export class ContractService {
     entityType: 'contract',
     operation: 'UPDATE',
   })
-  async archive(id: string, reason?: string) {
+  async archive(id: string, actingUserId: string, reason?: string) {
     const contract = await this.findOne(id);
+    await this.assertManages(
+      await this.siteOfProject(contract.projectId),
+      actingUserId,
+    );
     if (contract.status === ContractStatus.ARCHIVED) {
       throw new BadRequestException('This contract is already archived');
     }
@@ -232,8 +258,12 @@ export class ContractService {
     entityType: 'contract',
     operation: 'UPDATE',
   })
-  async unarchive(id: string) {
+  async unarchive(id: string, actingUserId: string) {
     const contract = await this.findOne(id);
+    await this.assertManages(
+      await this.siteOfProject(contract.projectId),
+      actingUserId,
+    );
     if (contract.status !== ContractStatus.ARCHIVED) {
       throw new BadRequestException('This contract is not archived');
     }
@@ -253,8 +283,12 @@ export class ContractService {
     entityType: 'contract',
     operation: 'DELETE',
   })
-  async remove(id: string) {
+  async remove(id: string, actingUserId: string) {
     const contract = await this.findOne(id);
+    await this.assertManages(
+      await this.siteOfProject(contract.projectId),
+      actingUserId,
+    );
     if (contract._count.dossiers > 0) {
       throw new ConflictException(
         `This contract still contains ${contract._count.dossiers} dossier(s) — move or detach them first`,
@@ -362,8 +396,36 @@ export class ContractService {
     );
   }
 
+  // Those of its own site's projects (open to them) — all of them for a
+  // platform administrator. A contract without a project is the platform
+  // administrators' only.
   private async visibleTo(userId: string): Promise<Prisma.ContractWhereInput> {
-    return (await this.isAdmin(userId)) ? {} : visibleContractWhere(userId);
+    const site = await ownSiteFilter(this.rbac, this.database, userId);
+    return site ? { project: site, ...visibleContractWhere(userId) } : {};
+  }
+
+  private async siteOfProject(projectId: string | null) {
+    if (!projectId) return null;
+    const project = await this.database.project.findUnique({
+      where: { id: projectId },
+      select: { siteId: true },
+    });
+    if (!project) {
+      throw new BadRequestException(`Project ${projectId} not found`);
+    }
+    return project.siteId;
+  }
+
+  // A contract is managed by the responsible of its project's site, whoever
+  // holds ADMIN_MANAGE_REFERENTIALS there, or a platform administrator (the
+  // only one for a contract without project).
+  private async assertManages(siteId: string | null, userId: string) {
+    const scope = await this.rbac.managedSites(
+      userId,
+      PermissionCode.AdminManageReferentials,
+    );
+    assertAdministers(scope);
+    assertInScope(scope, siteId);
   }
 
   // A contract the user may not open is reported as not found.

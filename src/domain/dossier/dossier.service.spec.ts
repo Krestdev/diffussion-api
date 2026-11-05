@@ -18,6 +18,7 @@ describe('DossierService', () => {
     courrier: Record<string, jest.Mock>;
     livrable: Record<string, jest.Mock>;
     contract: Record<string, jest.Mock>;
+    project: Record<string, jest.Mock>;
     activityLog: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
@@ -37,6 +38,9 @@ describe('DossierService', () => {
       courrier: { findMany: jest.fn(), count: jest.fn().mockResolvedValue(0) },
       livrable: { findMany: jest.fn() },
       contract: { findUnique: jest.fn() },
+      project: {
+        findUnique: jest.fn().mockResolvedValue({ name: 'P', siteId: 's-1' }),
+      },
       activityLog: { findMany: jest.fn() },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
     };

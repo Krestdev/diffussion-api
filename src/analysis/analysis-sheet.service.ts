@@ -10,6 +10,7 @@ import {
   AnalysisOpinion,
   AnalysisSheetStatus,
   ContractStatus,
+  CourrierStatus,
   InstructionStatus,
   LivrableStatus,
   Prisma,
@@ -129,6 +130,20 @@ export function sheetsAtSites(siteId: {
   };
 }
 
+// An effet in one of these is done with: no new fiche (nor new version) is
+// opened on it. Its existing fiches stay readable.
+const FROZEN_EFFET_STATUSES: CourrierStatus[] = [
+  CourrierStatus.CLOTURE,
+  CourrierStatus.ARCHIVE,
+  CourrierStatus.ANNULE,
+];
+
+const FROZEN_LABEL: Partial<Record<CourrierStatus, string>> = {
+  [CourrierStatus.CLOTURE]: 'clôturé',
+  [CourrierStatus.ARCHIVE]: 'archivé',
+  [CourrierStatus.ANNULE]: 'annulé',
+};
+
 // `value` without the given keys.
 function withoutKeys<T extends object, K extends keyof T>(
   value: T,
@@ -177,6 +192,7 @@ export class AnalysisSheetService {
     if (!courrier) {
       throw new NotFoundException(`Courrier ${dto.courrierId} not found`);
     }
+    assertEffetOpen(courrier);
     // Its dossier, or — dispatched to a contract — its contract: either one
     // will do.
     const { dossierId, contractId } = courrier;
@@ -219,7 +235,9 @@ export class AnalysisSheetService {
             label: document.originalName,
           }))
         : []);
-    const templates = await this.defaultTemplates();
+    const templates = await this.defaultTemplates(
+      await this.siteOfEffet(courrier),
+    );
 
     const { courrierId, projectId, remise, ...fields } = dto;
     const rest = withoutKeys(fields, [
@@ -282,13 +300,15 @@ export class AnalysisSheetService {
     const skip = query.skip ?? 0;
     const take = query.take ?? DEFAULT_TAKE;
     // Everything but the status: the tab counts ignore the tab shown.
+    // Only the sites where the caller may read analyses. Kept in AND: the
+    // site filter is itself an OR, which the search below must not replace.
+    const atSites = await this.rbac.siteFilter(
+      userId,
+      PermissionCode.AnalysisRead,
+      (siteId): Prisma.AnalysisSheetWhereInput => sheetsAtSites(siteId),
+    );
     const scope: Prisma.AnalysisSheetWhereInput = {
-      // Only the sites where the caller may read analyses.
-      ...(await this.rbac.siteFilter(
-        userId,
-        PermissionCode.AnalysisRead,
-        (siteId): Prisma.AnalysisSheetWhereInput => sheetsAtSites(siteId),
-      )),
+      AND: [atSites],
       dossierId: query.dossierId,
       contractId: query.contractId,
       courrierId: query.courrierId,
@@ -442,7 +462,9 @@ export class AnalysisSheetService {
       }
     }
 
-    const templates = await this.defaultTemplates();
+    const templates = await this.defaultTemplates(
+      await this.siteOfSheet(sheetId),
+    );
     const order =
       dto.order ??
       sheet.items.reduce((max, item) => Math.max(max, item.order), 0) + 1;
@@ -500,13 +522,16 @@ export class AnalysisSheetService {
         'Each criterion may appear only once on an element',
       );
     }
-    const { allowCustomCriteria } = await this.criteria.getSettings();
+    const siteId = await this.siteOfSheet(item.sheetId);
+    const { allowCustomCriteria } = await this.criteria.getSettings(siteId);
     if (!allowCustomCriteria) {
       const templateIds = dto.criteria.map((c) => c.templateId);
+      // The catalogue of the fiche's site: common criteria and its own.
       const known = await this.database.analysisCriterionTemplate.count({
         where: {
           id: { in: templateIds.filter((t): t is string => Boolean(t)) },
           isActive: true,
+          ...this.criteria.offeredWhere(siteId),
         },
       });
       if (templateIds.some((t) => !t) || known !== new Set(templateIds).size) {
@@ -676,7 +701,12 @@ export class AnalysisSheetService {
     }
     // Rejected: v1 stays as it is, readable for ever, and a fresh version is
     // opened for the author to redo the analysis — its judgements blank,
-    // because they are precisely what was rejected.
+    // because they are precisely what was rejected. Not on an effet done
+    // with (closed, archived, cancelled): the decision stands alone.
+    const effet = await this.effetOf(sheet.courrierId);
+    if (FROZEN_EFFET_STATUSES.includes(effet.status)) {
+      return { ...(await this.findOne(id)), nextVersion: null };
+    }
     const next = await this.createNextVersion(sheet, {
       keepJudgements: false,
       motif: dto.motif ?? `Avis ${dto.overallOpinion}`,
@@ -766,6 +796,7 @@ export class AnalysisSheetService {
         `Fiche ${sheet.reference} already has its version ${sheet.nextVersion.version} — open a new version from the latest one`,
       );
     }
+    assertEffetOpen(await this.effetOf(sheet.courrierId));
     const next = await this.createNextVersion(sheet, {
       keepJudgements: true,
       motif: dto.motif ?? null,
@@ -926,6 +957,13 @@ export class AnalysisSheetService {
    * instruction, a new livrable version of it too. Same structure —
    * elements and criteria — with the judgements kept or left blank.
    */
+  private async effetOf(courrierId: string) {
+    return this.database.courrier.findUniqueOrThrow({
+      where: { id: courrierId },
+      select: { number: true, status: true },
+    });
+  }
+
   private async createNextVersion(
     previous: Sheet,
     options: { keepJudgements: boolean; motif: string | null },
@@ -1204,12 +1242,50 @@ export class AnalysisSheetService {
     return item;
   }
 
-  /** The grid put on a new element: active criteria applied by default. */
-  private defaultTemplates() {
+  /**
+   * The grid put on a new element: the active criteria applied by default,
+   * common and of the fiche's site.
+   */
+  private defaultTemplates(siteId: string | null) {
     return this.database.analysisCriterionTemplate.findMany({
-      where: { isActive: true, appliedByDefault: true },
-      orderBy: { order: 'asc' },
+      where: {
+        isActive: true,
+        appliedByDefault: true,
+        ...this.criteria.offeredWhere(siteId),
+      },
+      orderBy: [{ siteId: { sort: 'asc', nulls: 'first' } }, { order: 'asc' }],
     });
+  }
+
+  // A fiche's site: its effet's (its dossier's, else its registrant's).
+  private async siteOfSheet(sheetId: string): Promise<string | null> {
+    const sheet = await this.database.analysisSheet.findUnique({
+      where: { id: sheetId },
+      select: {
+        dossier: { select: { siteId: true } },
+        courrier: { select: { createdBy: { select: { siteId: true } } } },
+      },
+    });
+    return sheet?.dossier?.siteId ?? sheet?.courrier?.createdBy?.siteId ?? null;
+  }
+
+  private async siteOfEffet(effet: {
+    dossierId: string | null;
+    createdById: string | null;
+  }): Promise<string | null> {
+    if (effet.dossierId) {
+      const dossier = await this.database.dossier.findUnique({
+        where: { id: effet.dossierId },
+        select: { siteId: true },
+      });
+      return dossier?.siteId ?? null;
+    }
+    if (!effet.createdById) return null;
+    const registrant = await this.database.user.findUnique({
+      where: { id: effet.createdById },
+      select: { siteId: true },
+    });
+    return registrant?.siteId ?? null;
   }
 
   /**
@@ -1242,5 +1318,14 @@ export class AnalysisSheetService {
     });
 
     return this.findOne(sheetId);
+  }
+}
+
+// No new fiche, nor new version, on an effet closed, archived or cancelled.
+function assertEffetOpen(effet: { number: string; status: CourrierStatus }) {
+  if (FROZEN_EFFET_STATUSES.includes(effet.status)) {
+    throw new BadRequestException(
+      `L'effet ${effet.number} est ${FROZEN_LABEL[effet.status]} : aucune nouvelle fiche d'analyse ne peut y être ouverte`,
+    );
   }
 }

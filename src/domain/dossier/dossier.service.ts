@@ -31,6 +31,7 @@ import {
 import { visibleDossierWhere } from '../../common/utils/dossier-visibility';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { assertSiteActive } from '../../common/utils/referential-guards';
+import { assertProjectOfSite } from '../../common/utils/site-referentials';
 import { DatabaseService } from '../../database/database.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
 import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
@@ -108,6 +109,9 @@ export class DossierService {
       dto.contractId,
       dto.projectId,
     );
+    if (projectId) {
+      await assertProjectOfSite(this.database, projectId, dto.siteId);
+    }
     const { keywords, dueDate: rawDueDate, number: givenNumber, ...data } = dto;
     const openedAt = new Date();
     const dueDate = rawDueDate ? new Date(rawDueDate) : null;
@@ -273,6 +277,12 @@ export class DossierService {
             dto.projectId !== undefined ? dto.projectId : dossier.projectId,
           )
         : undefined;
+    // Its project is of its site.
+    const targetProjectId =
+      projectId !== undefined ? projectId : dossier.projectId;
+    if (targetProjectId && (projectId !== undefined || siteChanged)) {
+      await assertProjectOfSite(this.database, targetProjectId, targetSiteId);
+    }
     const { keywords, dueDate: rawDueDate, ...data } = dto;
     const dueDateChanged = 'dueDate' in dto;
     const dueDate = rawDueDate ? new Date(rawDueDate) : null;

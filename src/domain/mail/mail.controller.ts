@@ -362,11 +362,18 @@ export class MailController {
     return this.mailService.cancel(id, dto?.reason);
   }
 
-  // Its open instructions are cancelled with it. Optional { note }.
+  // Its open instructions are cancelled with it. Optional { note }. By its
+  // designated responsible, its supervisor, its site's responsible, a
+  // platform administrator, or COURRIER_CLOSE at its site — checked in the
+  // service.
   @Post(':id/close')
   @RequirePermission(PermissionCode.CourrierRead)
-  close(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CloseMailDto) {
-    return this.mailService.close(id, dto);
+  close(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CloseMailDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.close(id, dto, user.sub);
   }
 
   // An entrant once CLOTURE; a sortant once DECHARGE or ANNULE. Optional
@@ -376,14 +383,18 @@ export class MailController {
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
-    return this.mailService.archive(id, dto?.reason);
+    return this.mailService.archive(id, dto?.reason, user.sub);
   }
 
   @Post(':id/unarchive')
   @RequirePermission(PermissionCode.CourrierRead)
-  unarchive(@Param('id', ParseUUIDPipe) id: string) {
-    return this.mailService.unarchive(id);
+  unarchive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.unarchive(id, user.sub);
   }
 
   // A physical effet expected back is handed back — physical custody is the

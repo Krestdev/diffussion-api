@@ -116,7 +116,7 @@ describe('PermissionGuard', () => {
 
   describe('platform administration', () => {
     it('requires a global grant for a platform permission', async () => {
-      route(PermissionCode.AdminManageRoles);
+      route(PermissionCode.AdminManageCategories);
       rbac.hasGlobalPermission.mockResolvedValue(false); // held at a site only
 
       await expect(guard.canActivate(context({}))).rejects.toBeInstanceOf(
@@ -124,13 +124,13 @@ describe('PermissionGuard', () => {
       );
       expect(rbac.hasGlobalPermission).toHaveBeenCalledWith(
         'u-1',
-        PermissionCode.AdminManageRoles,
+        PermissionCode.AdminManageCategories,
       );
       expect(rbac.hasPermission).not.toHaveBeenCalled();
     });
 
     it('lets a platform administrator through', async () => {
-      route(PermissionCode.AdminManageReferentials);
+      route(PermissionCode.AdminManageCategories);
       rbac.hasGlobalPermission.mockResolvedValue(true);
 
       await expect(guard.canActivate(context({}))).resolves.toBe(true);

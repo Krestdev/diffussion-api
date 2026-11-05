@@ -1,15 +1,24 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
+import { createHash, randomBytes } from 'crypto';
 import {
+  AccessProfile,
   Prisma,
   SiteStatus,
   UserStatus,
 } from '../../../generated/prisma/client';
+import { MailerService } from '../../mail/mailer.service';
+import {
+  AcceptInvitationDto,
+  CreateInvitationDto,
+  FindInvitationsQueryDto,
+} from './dto/invitation.dto';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import {
   assertAdministers,
@@ -21,15 +30,51 @@ import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
 import { DatabaseService } from '../../database/database.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { CreateUserDto } from './dto/create-user.dto';
+import { FindDirectoryQueryDto } from './dto/find-directory.query.dto';
 import { FindUsersQueryDto } from './dto/find-users.query.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
 const SALT_ROUNDS = 10;
+// An invitation link is valid this long.
+const INVITATION_TTL_DAYS = 7;
 
 const userInclude = {
   userRoles: { include: { role: true } },
   site: true,
+  deactivatedBy: { select: { id: true, name: true } },
 } satisfies Prisma.UserInclude;
+
+const invitationSelect = {
+  id: true,
+  email: true,
+  name: true,
+  sentAt: true,
+  expiresAt: true,
+  site: { select: { id: true, name: true } },
+  role: { select: { id: true, name: true } },
+  invitedBy: { select: { id: true, name: true } },
+} satisfies Prisma.InvitationSelect;
+
+function hashToken(token: string) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+// Neither accepted nor revoked, and not expired.
+function pendingInvitation(now = new Date()): Prisma.InvitationWhereInput {
+  return { acceptedAt: null, revokedAt: null, expiresAt: { gt: now } };
+}
+
+function appBaseUrl() {
+  // CORS_ORIGINS may be "*" (any origin) — not a usable link base.
+  const firstCorsOrigin = process.env.CORS_ORIGINS?.split(',')[0]?.trim();
+  return (
+    process.env.APP_WEB_URL ??
+    (firstCorsOrigin && firstCorsOrigin !== '*'
+      ? firstCorsOrigin
+      : undefined) ??
+    'http://localhost:4000'
+  ).replace(/\/$/, '');
+}
 
 function toView(user: Prisma.UserGetPayload<{ include: typeof userInclude }>) {
   // password/refreshToken destructured solely to exclude them from `rest`
@@ -51,6 +96,7 @@ export class UsersService {
     private readonly database: DatabaseService,
     private readonly rbac: RbacService,
     private readonly realtime: RealtimeGateway,
+    private readonly mailer: MailerService,
   ) {}
 
   async create(dto: CreateUserDto, actingUserId: string) {
@@ -58,6 +104,7 @@ export class UsersService {
     const { roleIds = [], siteId: requestedSiteId, password, ...data } = dto;
     const siteId = this.siteForNewUser(scope, requestedSiteId);
     assertInScope(scope, siteId);
+    this.assertProfileAllowed(scope, dto.accessProfile);
     await this.assertEmailAvailable(dto.email);
     await this.assertReferencesExist(roleIds, siteId);
 
@@ -130,6 +177,16 @@ export class UsersService {
     const scope = await this.adminScope(actingUserId);
     const existing = await this.ensureExists(id);
     assertInScope(scope, existing.siteId);
+    // A platform administrator's profile is theirs to change only.
+    if (
+      dto.accessProfile !== undefined ||
+      existing.accessProfile === AccessProfile.SUPER_ADMIN
+    ) {
+      this.assertProfileAllowed(
+        scope,
+        dto.accessProfile ?? existing.accessProfile,
+      );
+    }
     const { roleIds, siteId: requestedSiteId, password, ...data } = dto;
     // `siteId` absent: unchanged; null: becomes a platform user.
     const siteId =
@@ -210,8 +267,14 @@ export class UsersService {
               status: UserStatus.SUSPENDED,
               refreshToken: null,
               isConnected: false,
+              deactivatedAt: new Date(),
+              deactivatedById: actingUserId,
             }
-          : { status: UserStatus.ACTIVE },
+          : {
+              status: UserStatus.ACTIVE,
+              deactivatedAt: null,
+              deactivatedById: null,
+            },
         include: userInclude,
       }),
     );
@@ -248,6 +311,271 @@ export class UsersService {
       throw error;
     }
     this.realtime.broadcast('user:delete', { id });
+  }
+
+  // -------------------------------------------------------------- directory
+
+  /**
+   * The people pickers (superviseur, agents, validateur, signataire...):
+   * readable by every signed-in user, unlike the administration list. The
+   * active people of the caller's own site — any site for a platform
+   * administrator — with only what a picker shows. `ids` resolves people
+   * already chosen, whatever their site or status.
+   */
+  async directory(query: FindDirectoryQueryDto, actingUserId: string) {
+    const select = {
+      id: true,
+      name: true,
+      email: true,
+      function: true,
+      siteId: true,
+      status: true,
+    } satisfies Prisma.UserSelect;
+    const take = query.take ?? 200;
+
+    if (query.ids?.length) {
+      return this.database.user.findMany({
+        where: { id: { in: query.ids } },
+        select,
+        orderBy: { name: 'asc' },
+      });
+    }
+
+    const global = await this.rbac.hasGlobalPermission(
+      actingUserId,
+      PermissionCode.AdminManageUsers,
+    );
+    let siteId = query.siteId;
+    if (!global) {
+      const me = await this.database.user.findUnique({
+        where: { id: actingUserId },
+        select: { siteId: true },
+      });
+      // Their own site's people only.
+      if (!me?.siteId || (siteId && siteId !== me.siteId)) return [];
+      siteId = me.siteId;
+    }
+
+    const now = new Date();
+    const holds = query.permission
+      ? {
+          role: {
+            archivedAt: null,
+            rolePermissions: {
+              some: { permission: { code: query.permission } },
+            },
+          },
+        }
+      : undefined;
+    const where: Prisma.UserWhereInput = {
+      status: UserStatus.ACTIVE,
+      ...(siteId ? { siteId } : {}),
+      AND: [
+        holds
+          ? {
+              OR: [
+                {
+                  userRoles: {
+                    some: {
+                      ...holds,
+                      ...(siteId ? { OR: [{ siteId }, { siteId: null }] } : {}),
+                    },
+                  },
+                },
+                {
+                  delegationsReceived: {
+                    some: {
+                      ...holds,
+                      ...(siteId ? { siteId } : {}),
+                      startDate: { lte: now },
+                      endDate: {
+                        gte: new Date(
+                          now.getFullYear(),
+                          now.getMonth(),
+                          now.getDate(),
+                        ),
+                      },
+                    },
+                  },
+                },
+              ],
+            }
+          : {},
+        query.search
+          ? {
+              OR: [
+                { name: { contains: query.search, mode: 'insensitive' } },
+                { email: { contains: query.search, mode: 'insensitive' } },
+                { function: { contains: query.search, mode: 'insensitive' } },
+              ],
+            }
+          : {},
+      ],
+    };
+    return this.database.user.findMany({
+      where,
+      select,
+      orderBy: { name: 'asc' },
+      take,
+    });
+  }
+
+  // ------------------------------------------------------------ invitations
+
+  /**
+   * Invites someone (A·12): the link reaches them by email, and accepting
+   * it with a password creates their account, at `siteId` with `roleId`.
+   */
+  async invite(dto: CreateInvitationDto, actingUserId: string) {
+    const scope = await this.adminScope(actingUserId);
+    const siteId = this.siteForNewUser(scope, dto.siteId);
+    assertInScope(scope, siteId);
+    await this.assertEmailAvailable(dto.email);
+    await this.assertReferencesExist(
+      dto.roleId ? [dto.roleId] : undefined,
+      siteId,
+    );
+    const pending = await this.database.invitation.findFirst({
+      where: { email: dto.email, ...pendingInvitation() },
+      select: { id: true },
+    });
+    if (pending) {
+      throw new ConflictException(
+        'An invitation is already pending for this email — revoke it first',
+      );
+    }
+
+    const token = randomBytes(32).toString('hex');
+    const expiresAt = new Date(
+      Date.now() + INVITATION_TTL_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const invitation = await this.database.invitation.create({
+      data: {
+        email: dto.email,
+        name: dto.name,
+        siteId,
+        roleId: dto.roleId ?? null,
+        invitedById: actingUserId,
+        tokenHash: hashToken(token),
+        expiresAt,
+      },
+      select: invitationSelect,
+    });
+    await this.mailer.sendInvitation({
+      to: invitation.email,
+      name: invitation.name,
+      invitedBy: invitation.invitedBy?.name ?? null,
+      acceptLink: `${appBaseUrl()}/invitation?token=${token}`,
+      expiresAt,
+    });
+    return invitation;
+  }
+
+  // The pending invitations the caller administers, latest first.
+  async findInvitations(query: FindInvitationsQueryDto, actingUserId: string) {
+    const scope = await this.adminScope(actingUserId);
+    return this.database.invitation.findMany({
+      where: {
+        ...pendingInvitation(),
+        AND: [
+          scope === 'ALL' ? {} : { siteId: { in: scope } },
+          query.siteId ? { siteId: query.siteId } : {},
+        ],
+      },
+      select: invitationSelect,
+      orderBy: { sentAt: 'desc' },
+    });
+  }
+
+  // The link stops working; the invitation leaves the pending list.
+  async revokeInvitation(id: string, actingUserId: string) {
+    const scope = await this.adminScope(actingUserId);
+    const invitation = await this.database.invitation.findUnique({
+      where: { id },
+      select: { siteId: true },
+    });
+    if (!invitation) {
+      throw new NotFoundException(`Invitation ${id} not found`);
+    }
+    assertInScope(scope, invitation.siteId);
+    const { count } = await this.database.invitation.updateMany({
+      where: { id, ...pendingInvitation() },
+      data: { revokedAt: new Date() },
+    });
+    if (count === 0) {
+      throw new BadRequestException('This invitation is no longer pending');
+    }
+  }
+
+  // What the invitee sees before accepting: who invited them, to what.
+  async invitationByToken(token: string) {
+    const invitation = await this.database.invitation.findFirst({
+      where: { tokenHash: hashToken(token ?? ''), ...pendingInvitation() },
+      select: invitationSelect,
+    });
+    if (!invitation) {
+      throw new BadRequestException(
+        'This invitation link is invalid or has expired',
+      );
+    }
+    return invitation;
+  }
+
+  // Creates the account, with the role it was invited to, once.
+  async acceptInvitation(dto: AcceptInvitationDto) {
+    const invitation = await this.database.invitation.findFirst({
+      where: { tokenHash: hashToken(dto.token), ...pendingInvitation() },
+      include: { role: { select: { archivedAt: true } } },
+    });
+    if (!invitation) {
+      throw new BadRequestException(
+        'This invitation link is invalid or has expired',
+      );
+    }
+    await this.assertEmailAvailable(invitation.email);
+    const roleId =
+      invitation.roleId && !invitation.role?.archivedAt
+        ? invitation.roleId
+        : null;
+    const password = await bcrypt.hash(dto.password, SALT_ROUNDS);
+    const user = await this.database.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data: {
+          name: invitation.name,
+          email: invitation.email,
+          password,
+          siteId: invitation.siteId,
+          status: UserStatus.ACTIVE,
+          isVerified: true,
+          userRoles: roleId
+            ? { create: grantsAt([roleId], invitation.siteId) }
+            : undefined,
+        },
+        select: { id: true, name: true, email: true },
+      });
+      const { count } = await tx.invitation.updateMany({
+        where: { id: invitation.id, acceptedAt: null, revokedAt: null },
+        data: { acceptedAt: new Date(), userId: created.id },
+      });
+      if (count === 0) {
+        throw new ConflictException('This invitation was used meanwhile');
+      }
+      return created;
+    });
+    this.realtime.broadcast('user:new', { id: user.id });
+    return user;
+  }
+
+  // SUPER_ADMIN is granted by a platform administrator only.
+  private assertProfileAllowed(
+    scope: SiteScopeList,
+    profile: AccessProfile | undefined,
+  ) {
+    if (profile === AccessProfile.SUPER_ADMIN && scope !== 'ALL') {
+      throw new ForbiddenException(
+        'Only a platform administrator can manage a SUPER_ADMIN profile',
+      );
+    }
   }
 
   // 'ALL' for a platform administrator, else the site they are the
@@ -318,12 +646,18 @@ export class UsersService {
     if (roleIds?.length) {
       const found = await this.database.role.findMany({
         where: { id: { in: roleIds } },
-        select: { id: true, name: true, siteId: true },
+        select: { id: true, name: true, siteId: true, archivedAt: true },
       });
       const missing = roleIds.filter((id) => !found.some((r) => r.id === id));
       if (missing.length) {
         throw new BadRequestException(
           `Unknown role ids: ${missing.join(', ')}`,
+        );
+      }
+      const archived = found.filter((role) => role.archivedAt);
+      if (archived.length) {
+        throw new BadRequestException(
+          `Archived roles cannot be granted: ${archived.map((role) => role.name).join(', ')}`,
         );
       }
       // A user holds global roles, or roles of their own site.

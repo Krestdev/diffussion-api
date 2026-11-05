@@ -22,12 +22,13 @@ describe('ProjectService', () => {
     instruction: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
-  let rbac: { hasGlobalPermission: jest.Mock };
+  let rbac: { hasGlobalPermission: jest.Mock; managedSites: jest.Mock };
 
   const project = (over: Record<string, unknown> = {}) => ({
     id: 'p-1',
     status: 'ACTIVE',
     responsibleId: 'u-resp',
+    siteId: 's-1',
     maitreOuvrageId: null,
     startDate: null,
     endDate: null,
@@ -50,6 +51,7 @@ describe('ProjectService', () => {
       },
       correspondent: {
         findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue({ id: 'c-new' }),
       },
       projectAccess: {
@@ -57,7 +59,10 @@ describe('ProjectService', () => {
         createMany: jest.fn(),
         count: jest.fn().mockResolvedValue(0),
       },
-      user: { findMany: jest.fn().mockResolvedValue([]) },
+      user: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn().mockResolvedValue({ siteId: 's-1' }),
+      },
       contract: { count: jest.fn().mockResolvedValue(0) },
       dossier: { count: jest.fn().mockResolvedValue(0) },
       courrier: { count: jest.fn().mockResolvedValue(0) },
@@ -67,7 +72,10 @@ describe('ProjectService', () => {
       },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
     };
-    rbac = { hasGlobalPermission: jest.fn().mockResolvedValue(false) };
+    rbac = {
+      hasGlobalPermission: jest.fn().mockResolvedValue(false),
+      managedSites: jest.fn().mockResolvedValue('ALL'),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -96,6 +104,7 @@ describe('ProjectService', () => {
           id: 'p-1',
           AND: [
             {
+              siteId: 's-1',
               OR: [
                 { accesses: { none: {} } },
                 { responsibleId: 'u-1' },
@@ -163,7 +172,11 @@ describe('ProjectService', () => {
         project({ status: 'CLOSED' }),
       );
 
-      await service.update('p-1', { status: 'ARCHIVED', reason: 'Terminé' });
+      await service.update(
+        'p-1',
+        { status: 'ARCHIVED', reason: 'Terminé' },
+        'u-admin',
+      );
 
       expect(updatedData()).toMatchObject({
         status: 'ARCHIVED',
@@ -176,7 +189,7 @@ describe('ProjectService', () => {
         project({ status: 'ARCHIVED' }),
       );
 
-      await service.update('p-1', { status: 'CLOSED' });
+      await service.update('p-1', { status: 'CLOSED' }, 'u-admin');
 
       expect(updatedData()).toMatchObject({
         status: 'CLOSED',
@@ -187,37 +200,46 @@ describe('ProjectService', () => {
 
     it('refuses a reason without archiving', async () => {
       await expect(
-        service.update('p-1', { reason: 'Pourquoi pas' }),
+        service.update('p-1', { reason: 'Pourquoi pas' }, 'u-admin'),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('refuses to skip a step', async () => {
       await expect(
-        service.update('p-1', { status: 'ARCHIVED' }),
+        service.update('p-1', { status: 'ARCHIVED' }, 'u-admin'),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 
   describe("maître d'ouvrage by name", () => {
     it('reuses the correspondent with that name', async () => {
-      database.correspondent.findFirst.mockResolvedValue({
-        id: 'c-1',
-        name: 'Port Autonome',
-        status: 'ACTIVE',
-      });
+      database.correspondent.findMany.mockResolvedValue([
+        { id: 'c-1', name: 'Port Autonome', status: 'ACTIVE', siteId: 's-1' },
+      ]);
 
-      await service.update('p-1', { maitreOuvrageName: 'port autonome' });
+      await service.update(
+        'p-1',
+        { maitreOuvrageName: 'port autonome' },
+        'u-admin',
+      );
 
       expect(database.correspondent.create).not.toHaveBeenCalled();
       expect(updatedData().maitreOuvrageId).toBe('c-1');
     });
 
-    it('creates it when there is none', async () => {
-      await service.update('p-1', { maitreOuvrageName: 'Mairie de Kribi' });
+    it("creates it on the project's site when there is none", async () => {
+      await service.update(
+        'p-1',
+        { maitreOuvrageName: 'Mairie de Kribi' },
+        'u-admin',
+      );
 
       expect(database.correspondent.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ name: 'Mairie de Kribi' }),
+          data: expect.objectContaining({
+            name: 'Mairie de Kribi',
+            siteId: 's-1',
+          }),
         }),
       );
       expect(updatedData().maitreOuvrageId).toBe('c-new');

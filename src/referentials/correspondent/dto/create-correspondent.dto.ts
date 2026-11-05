@@ -15,6 +15,12 @@ export class CreateCorrespondentDto {
   @MaxLength(150)
   name: string;
 
+  @ApiProperty({
+    description: "The site it belongs to: only that site's effets use it",
+  })
+  @IsUUID('4')
+  siteId: string;
+
   @ApiPropertyOptional({ description: 'CorrespondentType id' })
   @IsOptional()
   @IsUUID()

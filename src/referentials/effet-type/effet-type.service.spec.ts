@@ -12,7 +12,7 @@ describe('EffetTypeService', () => {
     courrier: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
   };
-  let rbac: { administeredSites: jest.Mock; hasGlobalPermission: jest.Mock };
+  let rbac: { managedSites: jest.Mock; hasGlobalPermission: jest.Mock };
 
   const createdData = () =>
     (
@@ -36,7 +36,7 @@ describe('EffetTypeService', () => {
     };
     rbac = {
       // The responsible of site s-1 unless a test says otherwise.
-      administeredSites: jest.fn().mockResolvedValue(['s-1']),
+      managedSites: jest.fn().mockResolvedValue(['s-1']),
       hasGlobalPermission: jest.fn().mockResolvedValue(false),
     };
 
@@ -100,7 +100,7 @@ describe('EffetTypeService', () => {
   });
 
   it('refuses someone who administers nothing', async () => {
-    rbac.administeredSites.mockResolvedValue([]);
+    rbac.managedSites.mockResolvedValue([]);
 
     await expect(
       service.create({ name: 'Échantillon' }, 'nobody'),
@@ -108,7 +108,7 @@ describe('EffetTypeService', () => {
   });
 
   it('creates global types for a platform administrator', async () => {
-    rbac.administeredSites.mockResolvedValue('ALL');
+    rbac.managedSites.mockResolvedValue('ALL');
 
     await service.create({ name: 'Plan' }, 'super-admin');
 
