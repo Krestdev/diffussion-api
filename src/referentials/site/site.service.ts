@@ -50,6 +50,23 @@ export class SiteService {
         if (dto.responsibleId) {
           await this.moveIntoSite(tx, dto.responsibleId, site.id);
         }
+        // Every site has its own analysis criteria: a copy of the common
+        // model, which it then adapts.
+        const model = await tx.analysisCriterionTemplate.findMany({
+          where: { siteId: null },
+          select: {
+            label: true,
+            description: true,
+            order: true,
+            isActive: true,
+            appliedByDefault: true,
+          },
+        });
+        if (model.length) {
+          await tx.analysisCriterionTemplate.createMany({
+            data: model.map((criterion) => ({ ...criterion, siteId: site.id })),
+          });
+        }
         return site;
       }),
     );

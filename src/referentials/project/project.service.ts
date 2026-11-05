@@ -109,7 +109,12 @@ export class ProjectService {
       }
       siteId = scope[0];
     }
-    assertInScope(scope, siteId);
+    await this.rbac.explainOutOfScope(
+      scope,
+      siteId,
+      'Ce projet',
+      PermissionCode.AdminManageReferentials,
+    );
     await assertSiteExists(this.database, siteId);
     await this.assertLinks(data, undefined, siteId);
     const dates = toDates(startDate, endDate);
@@ -328,12 +333,12 @@ export class ProjectService {
   // A project is managed by its site's responsible, whoever holds
   // ADMIN_MANAGE_REFERENTIALS at its site, or a platform administrator.
   private async assertManages(siteId: string, userId: string) {
-    const scope = await this.rbac.managedSites(
+    await this.rbac.assertManagesSite(
       userId,
       PermissionCode.AdminManageReferentials,
+      siteId,
+      'Ce projet',
     );
-    assertAdministers(scope);
-    assertInScope(scope, siteId);
   }
 
   // A project the user may not open is reported as not found.

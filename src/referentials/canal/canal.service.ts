@@ -82,12 +82,12 @@ export class CanalService {
   }
 
   private async assertManages(siteId: string, userId: string) {
-    const scope = await this.rbac.managedSites(
+    await this.rbac.assertManagesSite(
       userId,
       PermissionCode.AdminManageReferentials,
+      siteId,
+      'Ce canal',
     );
-    assertAdministers(scope);
-    assertInScope(scope, siteId);
   }
 
   private async assertNameAvailable(

@@ -198,6 +198,56 @@ export class RbacService {
     return [...new Set([...administered, ...held])];
   }
 
+  /**
+   * managedSites, with a refusal that says why: the permission is held
+   * nowhere, the object is common to every site (platform administrators
+   * only), or it belongs to a site the caller doesn't manage — naming the
+   * sites they do manage. `what` names the object ("Le critère « Forme »").
+   */
+  async assertManagesSite(
+    userUuid: string,
+    permission: PermissionCode,
+    siteId: string | null,
+    what: string,
+  ): Promise<SiteScopeList> {
+    const scope = await this.managedSites(userUuid, permission);
+    await this.explainOutOfScope(scope, siteId, what, permission);
+    return scope;
+  }
+
+  /** The refusal of assertManagesSite, for a scope already computed. */
+  async explainOutOfScope(
+    scope: SiteScopeList,
+    siteId: string | null,
+    what: string,
+    permission: PermissionCode,
+  ): Promise<void> {
+    if (isInScope(scope, siteId)) return;
+    if (scope !== 'ALL' && scope.length === 0) {
+      throw new ForbiddenException(
+        `Refusé : vous n'avez la permission ${permission} sur aucun site et n'êtes responsable d'aucun site.`,
+      );
+    }
+    const managed = await this.database.site.findMany({
+      where: { id: { in: scope === 'ALL' ? [] : scope } },
+      select: { name: true },
+      orderBy: { name: 'asc' },
+    });
+    const mine = managed.map((site) => `« ${site.name} »`).join(', ');
+    if (siteId === null) {
+      throw new ForbiddenException(
+        `Refusé : ${what} est commun à tous les sites — seul un administrateur plateforme (${permission} tenue globalement) peut le gérer. Vous gérez : ${mine}.`,
+      );
+    }
+    const site = await this.database.site.findUnique({
+      where: { id: siteId },
+      select: { name: true },
+    });
+    throw new ForbiddenException(
+      `Refusé : ${what} appartient au site « ${site?.name ?? siteId} » — vous ne gérez que ${mine}.`,
+    );
+  }
+
   /** Held through a global grant — what platform-wide administration needs. */
   async hasGlobalPermission(
     userUuid: string,

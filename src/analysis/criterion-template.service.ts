@@ -8,12 +8,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { ActivityService } from '../activity/activity.service';
 import { AuditLog } from '../activity/decorators/audit-log.decorator';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
-import {
-  assertAdministers,
-  assertInScope,
-  RbacService,
-  SiteScopeList,
-} from '../auth/rbac/rbac.service';
+import { RbacService, SiteScopeList } from '../auth/rbac/rbac.service';
 import { DatabaseService } from '../database/database.service';
 import {
   CreateCriterionTemplateDto,
@@ -55,7 +50,12 @@ export class CriterionTemplateService {
     const scope = await this.manageScope(actingUserId);
     const { siteId: requested, ...data } = dto;
     const siteId = siteForNew(scope, requested);
-    assertInScope(scope, siteId);
+    await this.rbac.explainOutOfScope(
+      scope,
+      siteId,
+      siteId ? 'Ce critère' : 'Un critère commun (modèle)',
+      PermissionCode.AdminManageAnalysisCriteria,
+    );
     await this.assertLabelAvailable(dto.label, siteId);
     return this.database.analysisCriterionTemplate.create({
       data: { ...data, siteId },
@@ -73,11 +73,15 @@ export class CriterionTemplateService {
     });
   }
 
-  /** What a fiche of `siteId` offers: the common criteria and its site's. */
+  /**
+   * What a fiche of `siteId` offers: its site's own criteria — every site
+   * has its own (copied from the common model when the site is created).
+   * The common model only serves an effet whose site is unknown.
+   */
   offeredWhere(
     siteId: string | null,
   ): Prisma.AnalysisCriterionTemplateWhereInput {
-    return { OR: [{ siteId: null }, ...(siteId ? [{ siteId }] : [])] };
+    return { siteId: siteId ?? null };
   }
 
   async findOne(id: string) {
@@ -102,7 +106,7 @@ export class CriterionTemplateService {
     actingUserId: string,
   ) {
     const template = await this.findOne(id);
-    assertInScope(await this.manageScope(actingUserId), template.siteId);
+    await this.assertManages(actingUserId, template);
     if (dto.label !== undefined && dto.label !== template.label) {
       await this.assertLabelAvailable(dto.label, template.siteId);
     }
@@ -120,7 +124,7 @@ export class CriterionTemplateService {
   })
   async remove(id: string, actingUserId: string) {
     const template = await this.findOne(id);
-    assertInScope(await this.manageScope(actingUserId), template.siteId);
+    await this.assertManages(actingUserId, template);
     // Criteria already copied onto elements keep their own label, so removing
     // a template never mutates a filled sheet.
     await this.database.analysisCriterionTemplate.delete({ where: { id } });
@@ -152,7 +156,12 @@ export class CriterionTemplateService {
 
   async updateSettings(dto: UpdateAnalysisSettingsDto, actingUserId: string) {
     const { siteId, ...data } = dto;
-    assertInScope(await this.manageScope(actingUserId), siteId ?? null);
+    await this.rbac.assertManagesSite(
+      actingUserId,
+      PermissionCode.AdminManageAnalysisCriteria,
+      siteId ?? null,
+      siteId ? 'Le réglage de ce site' : 'Le réglage commun',
+    );
     if (siteId) {
       await this.database.analysisSiteSettings.upsert({
         where: { siteId },
@@ -184,8 +193,28 @@ export class CriterionTemplateService {
       actingUserId,
       PermissionCode.AdminManageAnalysisCriteria,
     );
-    assertAdministers(scope);
+    // Says why when the permission is held nowhere.
+    await this.rbac.explainOutOfScope(
+      scope === 'ALL' || scope.length ? 'ALL' : scope,
+      null,
+      'Ce critère',
+      PermissionCode.AdminManageAnalysisCriteria,
+    );
     return scope;
+  }
+
+  private assertManages(
+    actingUserId: string,
+    template: { label: string; siteId: string | null },
+  ) {
+    return this.rbac.assertManagesSite(
+      actingUserId,
+      PermissionCode.AdminManageAnalysisCriteria,
+      template.siteId,
+      template.siteId
+        ? `Le critère « ${template.label} »`
+        : `Le critère « ${template.label} » (modèle commun)`,
+    );
   }
 
   private async offeredAt(

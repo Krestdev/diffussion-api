@@ -157,12 +157,12 @@ export class CorrespondantService {
   }
 
   private async assertManages(siteId: string, userId: string) {
-    const scope = await this.rbac.managedSites(
+    await this.rbac.assertManagesSite(
       userId,
       PermissionCode.AdminManageReferentials,
+      siteId,
+      'Cet expéditeur',
     );
-    assertAdministers(scope);
-    assertInScope(scope, siteId);
   }
 
   private async assertTypeExists(typeId: string) {

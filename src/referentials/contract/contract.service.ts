@@ -420,12 +420,12 @@ export class ContractService {
   // holds ADMIN_MANAGE_REFERENTIALS there, or a platform administrator (the
   // only one for a contract without project).
   private async assertManages(siteId: string | null, userId: string) {
-    const scope = await this.rbac.managedSites(
+    await this.rbac.assertManagesSite(
       userId,
       PermissionCode.AdminManageReferentials,
+      siteId,
+      'Ce contrat',
     );
-    assertAdministers(scope);
-    assertInScope(scope, siteId);
   }
 
   // A contract the user may not open is reported as not found.
