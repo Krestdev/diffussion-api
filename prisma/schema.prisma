@@ -1278,11 +1278,18 @@ model ActivityLog {
   message     String?        @db.Text
   stack       String?        @db.Text
   metadata    Json?
+  /// The site the entry belongs to: its object's site (an effet's, a
+  /// dossier's, a project's...), else its author's. Null: a platform-wide
+  /// object (a global role, a common referential) — platform audit only.
+  siteId      String?
+  /// The author's IP address.
+  ip          String?        @db.VarChar(64)
 
   parent   ActivityLog?  @relation("ActivityLogTree", fields: [parentLogId], references: [id])
   children ActivityLog[] @relation("ActivityLogTree")
 
   @@index([parentLogId])
+  @@index([siteId, createdAt])
   @@index([entityType, entityId])
   @@index([userId, createdAt])
   @@index([source, createdAt])

@@ -4,6 +4,7 @@ import { ActivityService } from '../activity/activity.service';
 import { RbacService } from '../auth/rbac/rbac.service';
 import { DatabaseService } from '../database/database.service';
 import { CriterionTemplateService } from './criterion-template.service';
+import { withScopeChecks } from '../auth/rbac/rbac.testing-spec';
 
 describe('CriterionTemplateService', () => {
   let service: CriterionTemplateService;
@@ -55,7 +56,7 @@ describe('CriterionTemplateService', () => {
       providers: [
         CriterionTemplateService,
         { provide: DatabaseService, useValue: database },
-        { provide: RbacService, useValue: rbac },
+        { provide: RbacService, useValue: withScopeChecks(rbac) },
         {
           provide: ActivityService,
           useValue: { tryRecord: jest.fn().mockResolvedValue(null) },
@@ -116,13 +117,11 @@ describe('CriterionTemplateService', () => {
     expect(createdData().siteId).toBeNull();
   });
 
-  it("offers a site's fiches the common criteria and its own", async () => {
+  it("offers a site's fiches its own criteria only", async () => {
     await service.findAll({ siteId: 's-1' }, 'u-s1');
 
     expect(database.analysisCriterionTemplate.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { OR: [{ siteId: null }, { siteId: 's-1' }] },
-      }),
+      expect.objectContaining({ where: { siteId: 's-1' } }),
     );
   });
 

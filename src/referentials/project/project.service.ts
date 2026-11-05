@@ -19,11 +19,7 @@ import {
 } from '../../common/dto/pagination.query.dto';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import {
-  assertAdministers,
-  assertInScope,
-  RbacService,
-} from '../../auth/rbac/rbac.service';
+import { assertAdministers, RbacService } from '../../auth/rbac/rbac.service';
 import {
   assertSiteExists,
   ownSiteFilter,

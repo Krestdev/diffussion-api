@@ -14,6 +14,7 @@ describe('SiteService', () => {
     user: Record<string, jest.Mock>;
     userRole: Record<string, jest.Mock>;
     delegation: Record<string, jest.Mock>;
+    analysisCriterionTemplate: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
   let rbac: { administeredSites: jest.Mock };
@@ -40,6 +41,19 @@ describe('SiteService', () => {
       },
       userRole: { updateMany: jest.fn(), deleteMany: jest.fn() },
       delegation: { deleteMany: jest.fn() },
+      // The common model of analysis criteria, copied onto a new site.
+      analysisCriterionTemplate: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            label: 'Forme',
+            description: null,
+            order: 1,
+            isActive: true,
+            appliedByDefault: true,
+          },
+        ]),
+        createMany: jest.fn(),
+      },
       $transaction: jest.fn(),
     };
     database.$transaction.mockImplementation(
@@ -134,6 +148,23 @@ describe('SiteService', () => {
       expect(database.site.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: { responsibleId: 'u-1' } }),
       );
+    });
+  });
+
+  it('gives a new site its own copy of the analysis criteria', async () => {
+    await service.create({ name: 'Garoua' });
+
+    expect(database.analysisCriterionTemplate.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          label: 'Forme',
+          description: null,
+          order: 1,
+          isActive: true,
+          appliedByDefault: true,
+          siteId: 's-new',
+        },
+      ],
     });
   });
 });

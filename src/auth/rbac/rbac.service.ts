@@ -39,6 +39,37 @@ export function assertInScope(scope: SiteScopeList, siteId: string | null) {
   }
 }
 
+const effetSiteSelect = {
+  dossier: { select: { siteId: true } },
+  createdBy: { select: { siteId: true } },
+} as const;
+
+function effetSite(effet: {
+  dossier: { siteId: string } | null;
+  createdBy: { siteId: string | null } | null;
+}): string | null {
+  return effet.dossier?.siteId ?? effet.createdBy?.siteId ?? null;
+}
+
+const taskSiteSelect = {
+  dossier: { select: { siteId: true } },
+  courrier: { select: effetSiteSelect },
+  contract: { select: { project: { select: { siteId: true } } } },
+} as const;
+
+function taskSite(task: {
+  dossier: { siteId: string } | null;
+  courrier: Parameters<typeof effetSite>[0] | null;
+  contract: { project: { siteId: string } | null } | null;
+}): string | null {
+  return (
+    task.dossier?.siteId ??
+    (task.courrier ? effetSite(task.courrier) : null) ??
+    task.contract?.project?.siteId ??
+    null
+  );
+}
+
 @Injectable()
 export class RbacService {
   constructor(private readonly database: DatabaseService) {}
@@ -348,30 +379,30 @@ export class RbacService {
             select: { siteId: true },
           })
         )?.siteId;
+      // An effet's site: its dossier's, else its registrant's — never "no
+      // site", which would let any site's permission through.
       case 'courrier': {
         const courrier = await db.courrier.findUnique({
           where: { id },
-          select: { dossier: { select: { siteId: true } } },
+          select: effetSiteSelect,
         });
-        return courrier ? (courrier.dossier?.siteId ?? null) : undefined;
+        return courrier ? effetSite(courrier) : undefined;
       }
+      // A task's site: its dossier's, else its effet's, else its contract's
+      // project's.
       case 'instruction': {
         const instr = await db.instruction.findUnique({
           where: { id },
-          select: { dossier: { select: { siteId: true } } },
+          select: taskSiteSelect,
         });
-        return instr?.dossier?.siteId ?? null;
+        return instr ? taskSite(instr) : undefined;
       }
       case 'livrable': {
         const liv = await db.livrable.findUnique({
           where: { id },
-          select: {
-            instruction: {
-              select: { dossier: { select: { siteId: true } } },
-            },
-          },
+          select: { instruction: { select: taskSiteSelect } },
         });
-        return liv?.instruction.dossier?.siteId ?? null;
+        return liv ? taskSite(liv.instruction) : undefined;
       }
       // A fiche's dossier's site, or — without a dossier — the site of
       // whoever registered its courrier.

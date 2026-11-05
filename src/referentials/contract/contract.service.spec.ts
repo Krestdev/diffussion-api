@@ -4,6 +4,7 @@ import { ActivityService } from '../../activity/activity.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { ContractService } from './contract.service';
+import { withScopeChecks } from '../../auth/rbac/rbac.testing-spec';
 
 describe('ContractService', () => {
   let service: ContractService;
@@ -50,10 +51,10 @@ describe('ContractService', () => {
         },
         {
           provide: RbacService,
-          useValue: {
+          useValue: withScopeChecks({
             hasGlobalPermission: jest.fn().mockResolvedValue(false),
             managedSites: jest.fn().mockResolvedValue('ALL'),
-          },
+          }),
         },
       ],
     }).compile();

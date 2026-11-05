@@ -177,11 +177,13 @@ export function formatCourrier<T extends Record<string, any>>(courrier: T) {
 
   // The effet's site: its dossier's, else its registrant's (see
   // siteOfEffet) — the site its supervisor and agents are picked from.
+  const { dossier, createdBy } = courrier as {
+    dossier?: { siteId?: string } | null;
+    createdBy?: { siteId?: string | null } | null;
+  };
   const siteId =
-    courrier.dossier !== undefined || courrier.createdBy !== undefined
-      ? ((courrier.dossier?.siteId as string | undefined) ??
-        (courrier.createdBy?.siteId as string | null | undefined) ??
-        null)
+    dossier !== undefined || createdBy !== undefined
+      ? (dossier?.siteId ?? createdBy?.siteId ?? null)
       : undefined;
 
   return {
@@ -473,7 +475,16 @@ export class MailService {
     return formatCourrier(draft);
   }
 
-  async findAll(query: FindMailsQueryDto) {
+  async findAll(query: FindMailsQueryDto, userId: string) {
+    const sites = await this.readableSites(userId);
+    const visible: Prisma.CourrierWhereInput = query.direction
+      ? visibleMailsWhere(query.direction, userId, sites)
+      : {
+          OR: [
+            visibleMailsWhere(CourrierDirection.ENTRANT, userId, sites),
+            visibleMailsWhere(CourrierDirection.SORTANT, userId, sites),
+          ],
+        };
     const where: Prisma.CourrierWhereInput = {
       dossierId: query.dossierId,
       direction: query.direction,
@@ -481,7 +492,7 @@ export class MailService {
       correspondentId: query.correspondentId,
       ownerId: query.ownerId,
       typeId: query.typeId,
-      AND: [projectOrContractWhere(query)].filter(
+      AND: [visible, projectOrContractWhere(query)].filter(
         (filter) => filter !== undefined,
       ),
     };
@@ -751,7 +762,11 @@ export class MailService {
   }
 
   // GET /courriers/:id: the effet with who must approve it.
-  async findOneDetailed(id: string) {
+  // The effet page: only an effet the caller would see in their lists
+  // (their sites', a dossier open to them, or entrusted to them) — else
+  // 404, as if it didn't exist.
+  async findOneDetailed(id: string, userId?: string) {
+    if (userId) await this.assertVisible(id, userId);
     const [courrier] = await this.withApprovers([await this.findOne(id)]);
     return courrier;
   }

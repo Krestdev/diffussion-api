@@ -119,9 +119,15 @@ export class MailController {
     return this.mailService.createOutgoingDraft(dto, user.sub);
   }
 
+  // Only what the caller may see: their sites' effets (see
+  // visibleMailsWhere), like the entrants / sortants lists.
   @Get()
-  findAll(@Query() query: FindMailsQueryDto) {
-    return this.mailService.findAll(query);
+  @RequirePermission(PermissionCode.CourrierRead)
+  findAll(
+    @Query() query: FindMailsQueryDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.findAll(query, user.sub);
   }
 
   // Declared before @Get(':id') so "entrants" isn't parsed as an id.
@@ -184,8 +190,11 @@ export class MailController {
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.mailService.findOneDetailed(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.mailService.findOneDetailed(id, user.sub);
   }
 
   // The PDF of an authorized sortant (VALIDE, SIGNE, ENVOYE, DECHARGE, or

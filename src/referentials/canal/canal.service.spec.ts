@@ -4,6 +4,7 @@ import { ActivityService } from '../../activity/activity.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { CanalService } from './canal.service';
+import { withScopeChecks } from '../../auth/rbac/rbac.testing-spec';
 
 describe('CanalService', () => {
   let service: CanalService;
@@ -30,7 +31,7 @@ describe('CanalService', () => {
         CanalService,
         { provide: DatabaseService, useValue: database },
         { provide: ActivityService, useValue: { tryRecord: jest.fn() } },
-        { provide: RbacService, useValue: rbac },
+        { provide: RbacService, useValue: withScopeChecks(rbac) },
       ],
     }).compile();
 
