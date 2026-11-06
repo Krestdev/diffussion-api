@@ -7,6 +7,7 @@ import {
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { RoleService } from './role.service';
+import { ActivityService } from '../../activity/activity.service';
 
 const ROLE_VIEW = { id: 'r-new', rolePermissions: [], userRoles: [] };
 
@@ -72,6 +73,10 @@ describe('RoleService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         RoleService,
+        {
+          provide: ActivityService,
+          useValue: { tryRecord: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DatabaseService, useValue: database },
         { provide: RbacService, useValue: rbac },
       ],

@@ -45,7 +45,7 @@ export class CorrespondantService {
   async create(dto: CreateCorrespondentDto, actingUserId: string) {
     await this.assertManages(dto.siteId, actingUserId);
     await assertSiteExists(this.database, dto.siteId);
-    if (dto.typeId) await this.assertTypeExists(dto.typeId);
+    if (dto.typeId) await this.assertTypeUsable(dto.typeId, dto.siteId);
     return createWithUniqueReference('CP', (code) =>
       this.database.correspondent.create({
         data: { ...dto, code },
@@ -121,7 +121,9 @@ export class CorrespondantService {
   ) {
     const existing = await this.findOne(uuid);
     await this.assertManages(existing.siteId, actingUserId);
-    if (dto.typeId) await this.assertTypeExists(dto.typeId);
+    if (dto.typeId && dto.typeId !== existing.typeId) {
+      await this.assertTypeUsable(dto.typeId, existing.siteId);
+    }
     return this.database.correspondent.update({
       where: { id: uuid },
       data: dto,
@@ -161,13 +163,24 @@ export class CorrespondantService {
     );
   }
 
-  private async assertTypeExists(typeId: string) {
+  // A correspondent's kind: an active type of its own site.
+  private async assertTypeUsable(typeId: string, siteId: string) {
     const type = await this.database.correspondentType.findUnique({
       where: { id: typeId },
-      select: { id: true },
+      select: { name: true, siteId: true, active: true },
     });
     if (!type) {
       throw new BadRequestException(`Correspondent type ${typeId} not found`);
+    }
+    if (type.siteId !== siteId) {
+      throw new BadRequestException(
+        `The correspondent type « ${type.name} » belongs to another site`,
+      );
+    }
+    if (!type.active) {
+      throw new BadRequestException(
+        `The correspondent type « ${type.name} » is inactive and can no longer be chosen`,
+      );
     }
   }
 }

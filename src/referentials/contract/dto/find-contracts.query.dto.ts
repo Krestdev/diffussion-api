@@ -1,10 +1,16 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
 import {
-  ContractStatus,
-  ContractType,
-} from '../../../../generated/prisma/client';
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
+import { ContractStatus } from '../../../../generated/prisma/client';
 import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 
 // `search` (inherited) matches the contract's number, title or reference.
@@ -30,8 +36,9 @@ export class FindContractsQueryDto extends PaginationQueryDto {
   @IsEnum(ContractStatus)
   status?: ContractStatus;
 
-  @ApiPropertyOptional({ enum: ContractType })
+  @ApiPropertyOptional({ description: 'A contract type code', example: 'MOE' })
   @IsOptional()
-  @IsEnum(ContractType)
-  type?: ContractType;
+  @IsString()
+  @MaxLength(30)
+  type?: string;
 }

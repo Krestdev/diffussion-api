@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsArray,
   IsDateString,
-  IsEnum,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -11,7 +10,6 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { ContractType } from '../../../../generated/prisma/client';
 
 export class CreateContractDto {
   @ApiProperty({ example: 'Travaux de réhabilitation du quai 12' })
@@ -34,10 +32,14 @@ export class CreateContractDto {
   @IsString()
   description?: string;
 
-  @ApiPropertyOptional({ enum: ContractType })
+  @ApiPropertyOptional({
+    example: 'MOE',
+    description: 'The code of an active contract type (GET /contract-types)',
+  })
   @IsOptional()
-  @IsEnum(ContractType)
-  type?: ContractType;
+  @IsString()
+  @MaxLength(30)
+  type?: string;
 
   @ApiPropertyOptional({ example: 125000000, description: 'Montant' })
   @IsOptional()

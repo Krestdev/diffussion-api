@@ -1,3 +1,4 @@
+import { RbacService } from '../../auth/rbac/rbac.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { ActivityService } from '../../activity/activity.service';
@@ -15,6 +16,7 @@ describe('CorrespondentTypeController', () => {
         CorrespondentTypeService,
         { provide: DatabaseService, useValue: {} },
         { provide: ActivityService, useValue: {} },
+        { provide: RbacService, useValue: {} },
       ],
     })
       .overrideGuard(PermissionGuard)

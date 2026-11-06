@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -50,12 +49,15 @@ export class CanalService {
 
   async findAll(query: FindCanalsQueryDto, userId: string) {
     return this.database.canal.findMany({
-      where: await siteReferentialsWhere(
-        this.rbac,
-        this.database,
-        userId,
-        query.siteId,
-      ),
+      where: {
+        ...(await siteReferentialsWhere(
+          this.rbac,
+          this.database,
+          userId,
+          query.siteId,
+        )),
+        active: query.active,
+      },
       orderBy: [{ name: 'asc' }, { siteId: 'asc' }],
       include: canalInclude,
     });
@@ -135,8 +137,8 @@ export class CanalService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2003'
       ) {
-        throw new BadRequestException(
-          'Canal is still referenced by one or more courriers',
+        throw new ConflictException(
+          'This canal is used by effets — deactivate it instead (active: false)',
         );
       }
       throw error;

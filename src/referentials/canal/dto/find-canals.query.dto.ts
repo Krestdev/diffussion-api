@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsUUID } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
 
 export class FindCanalsQueryDto {
   @ApiPropertyOptional({
@@ -9,4 +10,12 @@ export class FindCanalsQueryDto {
   @IsOptional()
   @IsUUID('4')
   siteId?: string;
+
+  @ApiPropertyOptional({ description: 'true: the active ones only' })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' ? true : value === 'false' ? false : value,
+  )
+  @IsBoolean()
+  active?: boolean;
 }

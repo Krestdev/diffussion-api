@@ -3,6 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { DatabaseService } from '../database/database.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { ModuleNotificationsService } from '../administration/settings/module-notifications.service';
 import { NotificationStatus } from '../../generated/prisma/client';
 
 describe('NotificationsService', () => {
@@ -14,8 +15,13 @@ describe('NotificationsService', () => {
     $transaction: jest.Mock;
   };
   let realtime: { emitToUsers: jest.Mock; broadcast: jest.Mock };
+  // Every recipient's site shows every event, unless a test says otherwise.
+  let moduleNotifications: { inAppRecipients: jest.Mock };
 
   beforeEach(async () => {
+    moduleNotifications = {
+      inAppRecipients: jest.fn((ids: string[]) => Promise.resolve(ids)),
+    };
     database = {
       notification: { create: jest.fn() },
       userNotification: {
@@ -36,6 +42,7 @@ describe('NotificationsService', () => {
         NotificationsService,
         { provide: DatabaseService, useValue: database },
         { provide: RealtimeGateway, useValue: realtime },
+        { provide: ModuleNotificationsService, useValue: moduleNotifications },
       ],
     }).compile();
 
@@ -44,6 +51,20 @@ describe('NotificationsService', () => {
 
   it('is defined', () => {
     expect(service).toBeDefined();
+  });
+
+  it('leaves out the recipients whose site turned the event off (PA·9)', async () => {
+    moduleNotifications.inAppRecipients.mockResolvedValue([]);
+
+    const res = await service.create({
+      recipientIds: ['u-1', 'u-2'],
+      type: 'TASK_ASSIGNED',
+      message: 'x',
+      canal: 'IN_APP',
+    } as never);
+
+    expect(res).toBeNull();
+    expect(database.notification.create).not.toHaveBeenCalled();
   });
 
   it('fans out to every recipient (RG-NOT-003)', async () => {

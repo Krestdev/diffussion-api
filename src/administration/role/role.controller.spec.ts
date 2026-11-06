@@ -4,6 +4,7 @@ import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { RoleController } from './role.controller';
 import { RoleService } from './role.service';
+import { ActivityService } from '../../activity/activity.service';
 
 describe('RoleController', () => {
   let controller: RoleController;
@@ -13,6 +14,10 @@ describe('RoleController', () => {
       controllers: [RoleController],
       providers: [
         RoleService,
+        {
+          provide: ActivityService,
+          useValue: { tryRecord: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DatabaseService, useValue: {} },
         { provide: RbacService, useValue: {} },
       ],

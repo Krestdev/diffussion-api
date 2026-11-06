@@ -41,6 +41,13 @@ export class CreateDossierDto {
   categoryId?: string;
 
   @ApiPropertyOptional({
+    description: 'Its kind: an active dossier type of its site (PA·7)',
+  })
+  @IsOptional()
+  @IsUUID()
+  typeId?: string;
+
+  @ApiPropertyOptional({
     description: 'Optional wider project/programme this dossier belongs to',
   })
   @IsOptional()

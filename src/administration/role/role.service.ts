@@ -15,6 +15,7 @@ import {
   RbacService,
   SiteScopeList,
 } from '../../auth/rbac/rbac.service';
+import { ActivityService } from '../../activity/activity.service';
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { DatabaseService } from '../../database/database.service';
@@ -50,7 +51,34 @@ export class RoleService {
   constructor(
     private readonly database: DatabaseService,
     private readonly rbac: RbacService,
+    private readonly activity: ActivityService,
   ) {}
+
+  // The audit journal (AU·1): every change to a role, with its permissions
+  // before / after when they change.
+  private journal(
+    action: string,
+    roleId: string,
+    extra: {
+      changes?: Record<string, [unknown, unknown]>;
+      metadata?: Record<string, unknown>;
+    } = {},
+  ) {
+    return this.activity.tryRecord({
+      action,
+      entityType: 'role',
+      entityId: roleId,
+      ...extra,
+    });
+  }
+
+  private async permissionCodes(roleId: string) {
+    const rows = await this.database.rolePermission.findMany({
+      where: { roleId },
+      select: { permission: { select: { code: true } } },
+    });
+    return rows.map((row) => row.permission.code).sort();
+  }
 
   async create(dto: CreateRoleDto, actingUserId: string) {
     const scope = await this.adminScope(actingUserId);
@@ -79,7 +107,15 @@ export class RoleService {
         include: roleInclude,
       }),
     );
-    return toView(role);
+    const view = toView(role);
+    await this.journal('role.created', role.id, {
+      metadata: {
+        name: role.name,
+        siteId,
+        permissions: view.permissions.map((p) => p.code).sort(),
+      },
+    });
+    return view;
   }
 
   async findAll(query: FindRolesQueryDto, actingUserId: string) {
@@ -141,6 +177,7 @@ export class RoleService {
     }
     await this.assertPermissionsAllowed(dto.permissionIds, existing.siteId);
     const { permissionIds, ...data } = dto;
+    const before = await this.permissionCodes(id);
 
     // Guarded: dropping admin permissions from the last admin role would
     // lock everyone out of administration.
@@ -164,7 +201,25 @@ export class RoleService {
         include: roleInclude,
       }),
     );
-    return toView(role);
+    const view = toView(role);
+    const after = view.permissions.map((p) => p.code).sort();
+    const changes: Record<string, [unknown, unknown]> = {};
+    for (const key of ['name', 'description'] as const) {
+      if (dto[key] !== undefined && dto[key] !== existing[key]) {
+        changes[key] = [existing[key], dto[key]];
+      }
+    }
+    if (before.join() !== after.join()) {
+      changes.permissions = [before, after];
+    }
+    await this.journal('role.updated', id, {
+      changes,
+      metadata: {
+        added: after.filter((code) => !before.includes(code)),
+        removed: before.filter((code) => !after.includes(code)),
+      },
+    });
+    return view;
   }
 
   /**
@@ -236,6 +291,9 @@ export class RoleService {
       });
       return new Set(grants.map((grant) => grant.userId)).size;
     });
+    await this.journal('role.archived', id, {
+      metadata: { holders, reassignedToRoleId: replacementId ?? null },
+    });
     return {
       ...(await this.findOne(id, actingUserId)),
       holders,
@@ -255,6 +313,7 @@ export class RoleService {
       where: { id },
       data: { archivedAt: null, archivedById: null },
     });
+    await this.journal('role.restored', id);
     return this.findOne(id, actingUserId);
   }
 

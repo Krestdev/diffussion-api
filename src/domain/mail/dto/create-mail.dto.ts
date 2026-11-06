@@ -124,6 +124,16 @@ export class CreateMailDto {
   receivedAt?: string;
 
   @ApiPropertyOptional({
+    example: '2026-11-20',
+    description:
+      "The effet's deadline. Left out at creation: its site's default delay (PA·8) — an entrant's treatment from its reception, a sortant's sending from today",
+  })
+  @IsOptional()
+  @EmptyToUndefined()
+  @IsDateString()
+  dueDate?: string;
+
+  @ApiPropertyOptional({
     description:
       'Entrant only: transmit it to its dossier\'s responsible in the same request ("Voulez-vous transmettre ?"). Needs the dossier.',
     example: true,

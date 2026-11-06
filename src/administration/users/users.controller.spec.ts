@@ -6,6 +6,7 @@ import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { MailerService } from '../../mail/mailer.service';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import { ActivityService } from '../../activity/activity.service';
 
 describe('UsersController', () => {
   let controller: UsersController;
@@ -15,6 +16,10 @@ describe('UsersController', () => {
       controllers: [UsersController],
       providers: [
         UsersService,
+        {
+          provide: ActivityService,
+          useValue: { tryRecord: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DatabaseService, useValue: {} },
         {
           provide: MailerService,

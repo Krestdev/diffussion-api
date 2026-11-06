@@ -51,9 +51,14 @@ export async function assertCanalOfSite(
 ) {
   const canal = await db.canal.findUnique({
     where: { id: canalId },
-    select: { name: true, siteId: true },
+    select: { name: true, siteId: true, active: true },
   });
   if (!canal) throw new BadRequestException(`Canal ${canalId} not found`);
+  if (!canal.active) {
+    throw new BadRequestException(
+      `The canal "${canal.name}" is inactive and can no longer be chosen`,
+    );
+  }
   if (siteId && canal.siteId !== siteId) {
     throw new BadRequestException(
       `The canal "${canal.name}" belongs to another site`,

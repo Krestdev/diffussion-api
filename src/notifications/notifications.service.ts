@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { NotificationStatus, Prisma } from '../../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
+import { ModuleNotificationsService } from '../administration/settings/module-notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { NotificationPreferenceDto } from './dto/set-notification-preferences.dto';
@@ -11,13 +12,18 @@ export class NotificationsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly realtime: RealtimeGateway,
+    private readonly moduleNotifications: ModuleNotificationsService,
   ) {}
 
-  // Each recipient who turned this type off is left out; with nobody left,
+  // Each recipient whose site doesn't show this type in the application
+  // (PA·9), or who turned it off themselves, is left out; with nobody left,
   // nothing is written (null).
   async create(dto: CreateNotificationDto) {
     const { recipientIds: addressed, ...data } = dto;
-    const recipientIds = await this.wantedBy(addressed, dto.type);
+    const recipientIds = await this.wantedBy(
+      await this.moduleNotifications.inAppRecipients(addressed, dto.type),
+      dto.type,
+    );
     if (recipientIds.length === 0) return null;
     const notification = await this.database.notification.create({
       data: {

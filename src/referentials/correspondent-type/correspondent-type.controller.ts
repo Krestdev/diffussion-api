@@ -13,21 +13,19 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import {
-  PlatformOnly,
-  RequirePermission,
-} from '../../auth/rbac/require-permission.decorator';
-import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
+import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { FindSiteListQueryDto } from '../../common/dto/site-list-item.dto';
 import { CorrespondentTypeService } from './correspondent-type.service';
 import { CreateCorrespondentTypeDto } from './dto/create-correspondent-type.dto';
 import { UpdateCorrespondentTypeDto } from './dto/update-correspondent-type.dto';
 
+// Each site's own (PA·7): managed by its responsible or whoever holds
+// ADMIN_MANAGE_REFERENTIALS there — checked in the service.
 @ApiTags('correspondent-types')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(JwtAuthGuard)
 @Controller('correspondent-types')
 export class CorrespondentTypeController {
   constructor(
@@ -35,15 +33,20 @@ export class CorrespondentTypeController {
   ) {}
 
   @Post()
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  @PlatformOnly()
-  create(@Body() dto: CreateCorrespondentTypeDto) {
-    return this.correspondentTypeService.create(dto);
+  create(
+    @Body() dto: CreateCorrespondentTypeDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.correspondentTypeService.create(dto, user.sub);
   }
 
+  // The caller's own site's — every site's for a platform administrator.
   @Get()
-  findAll(@Query() query: PaginationQueryDto) {
-    return this.correspondentTypeService.findAll(query);
+  findAll(
+    @Query() query: FindSiteListQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.correspondentTypeService.findAll(query, user.sub);
   }
 
   @Get(':id')
@@ -52,20 +55,20 @@ export class CorrespondentTypeController {
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  @PlatformOnly()
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCorrespondentTypeDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.correspondentTypeService.update(id, dto);
+    return this.correspondentTypeService.update(id, dto, user.sub);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  @PlatformOnly()
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.correspondentTypeService.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.correspondentTypeService.remove(id, user.sub);
   }
 }

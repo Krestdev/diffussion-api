@@ -35,6 +35,7 @@ import { suggestItemOpinion, suggestSheetOpinion } from './analysis-opinion';
 import { renderAnalysisSheetPdf } from './analysis-sheet-pdf';
 import { LIVE_ANALYSIS_SHEET_WHERE } from './live-sheet';
 import { CriterionTemplateService } from './criterion-template.service';
+import { DocumentIdentityService } from '../administration/settings/document-identity.service';
 import {
   CreateAnalysisItemDto,
   CreateAnalysisSheetDto,
@@ -169,6 +170,7 @@ export class AnalysisSheetService {
     private readonly activity: ActivityService,
     private readonly storage: StorageService,
     private readonly criteria: CriterionTemplateService,
+    private readonly identity: DocumentIdentityService,
   ) {}
 
   /**
@@ -945,6 +947,8 @@ export class AnalysisSheetService {
       },
       signedAt: sheet.signedAt,
       signatoryName: sheet.signatoryName,
+      // The letterhead of the fiche's site (PA·3).
+      identity: await this.identity.forPdf(await this.siteOfSheet(sheet.id)),
     });
     return {
       pdf,

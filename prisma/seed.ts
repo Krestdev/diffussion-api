@@ -196,9 +196,9 @@ async function seedReferentials(siteId: string) {
   await Promise.all(
     correspondentTypes.map((name) =>
       prisma.correspondentType.upsert({
-        where: { name },
+        where: { siteId_name: { siteId, name } },
         update: {},
-        create: { name },
+        create: { name, siteId },
       }),
     ),
   );

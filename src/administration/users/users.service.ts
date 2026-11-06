@@ -13,6 +13,7 @@ import {
   SiteStatus,
   UserStatus,
 } from '../../../generated/prisma/client';
+import { ActivityService } from '../../activity/activity.service';
 import { MailerService } from '../../mail/mailer.service';
 import {
   AcceptInvitationDto,
@@ -97,7 +98,25 @@ export class UsersService {
     private readonly rbac: RbacService,
     private readonly realtime: RealtimeGateway,
     private readonly mailer: MailerService,
+    private readonly activity: ActivityService,
   ) {}
+
+  // The audit journal (AU·1): account changes, role grants and profiles.
+  private journal(
+    action: string,
+    userId: string,
+    extra: {
+      changes?: Record<string, [unknown, unknown]>;
+      metadata?: Record<string, unknown>;
+    } = {},
+  ) {
+    return this.activity.tryRecord({
+      action,
+      entityType: 'user',
+      entityId: userId,
+      ...extra,
+    });
+  }
 
   async create(dto: CreateUserDto, actingUserId: string) {
     const scope = await this.adminScope(actingUserId);
@@ -121,7 +140,16 @@ export class UsersService {
       include: userInclude,
     });
     this.realtime.broadcast('user:new', { id: user.id });
-    return toView(user);
+    const view = toView(user);
+    await this.journal('user.created', user.id, {
+      metadata: {
+        email: user.email,
+        siteId,
+        accessProfile: user.accessProfile,
+        roles: view.roles.map((role) => role.name).sort(),
+      },
+    });
+    return view;
   }
 
   async findAll(query: FindUsersQueryDto, actingUserId: string) {
@@ -218,6 +246,15 @@ export class UsersService {
     const hashedPassword = password
       ? await bcrypt.hash(password, SALT_ROUNDS)
       : undefined;
+    const rolesBefore = (
+      await this.database.userRole.findMany({
+        where: { userId: id },
+        select: { role: { select: { name: true } } },
+      })
+    )
+      .map((grant) => grant.role?.name)
+      .filter((name): name is string => Boolean(name))
+      .sort();
 
     // Guarded: replacing the role set may strip the last admin's rights.
     const user = await this.rbac.withAdminCoverage((tx) =>
@@ -242,7 +279,59 @@ export class UsersService {
       }),
     );
     this.realtime.broadcast('user:update', { id: user.id });
-    return toView(user);
+    const view = toView(user);
+    await this.journalUpdate(existing, user, rolesBefore, view, !!password);
+    return view;
+  }
+
+  // One entry per kind of change: roles, profile, the rest of the account.
+  private async journalUpdate(
+    before: {
+      id: string;
+      name: string;
+      email: string;
+      function: string | null;
+      phone: string | null;
+      siteId: string | null;
+      accessProfile: AccessProfile;
+    },
+    after: typeof before,
+    rolesBefore: string[],
+    view: { roles: { name: string }[] },
+    passwordReset: boolean,
+  ) {
+    const rolesAfter = view.roles.map((role) => role.name).sort();
+    if (rolesBefore.join() !== rolesAfter.join()) {
+      await this.journal('user.roles.updated', before.id, {
+        changes: { roles: [rolesBefore, rolesAfter] },
+        metadata: {
+          added: rolesAfter.filter((name) => !rolesBefore.includes(name)),
+          removed: rolesBefore.filter((name) => !rolesAfter.includes(name)),
+        },
+      });
+    }
+    if (before.accessProfile !== after.accessProfile) {
+      await this.journal('user.access-profile.updated', before.id, {
+        changes: { accessProfile: [before.accessProfile, after.accessProfile] },
+      });
+    }
+    const changes: Record<string, [unknown, unknown]> = {};
+    for (const key of [
+      'name',
+      'email',
+      'function',
+      'phone',
+      'siteId',
+    ] as const) {
+      if (before[key] !== after[key]) changes[key] = [before[key], after[key]];
+    }
+    if (Object.keys(changes).length || passwordReset) {
+      await this.journal('user.updated', before.id, {
+        changes,
+        // Never the password itself.
+        metadata: passwordReset ? { passwordReset: true } : undefined,
+      });
+    }
   }
 
   async toggleStatus(id: string, actingUserId: string) {
@@ -279,6 +368,7 @@ export class UsersService {
       }),
     );
     this.realtime.broadcast('user:update', { id: updated.id });
+    await this.journal(suspending ? 'user.suspended' : 'user.reactivated', id);
     return toView(updated);
   }
 

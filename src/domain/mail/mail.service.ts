@@ -24,6 +24,8 @@ import {
   markDossierInProgress,
 } from '../../common/utils/dossier-lifecycle';
 import { assertCorrespondentActive } from '../../common/utils/referential-guards';
+import { addDelay } from '../../common/utils/business-days';
+import { SettingsService } from '../../administration/settings/settings.service';
 import {
   assertCanalOfSite,
   assertProjectOfSite,
@@ -349,7 +351,22 @@ export class MailService {
     private readonly rbac: RbacService,
     private readonly storage: StorageService,
     private readonly activity: ActivityService,
+    private readonly settings: SettingsService,
   ) {}
+
+  /**
+   * A deadline `pick`'s days after `from`, from the settings of `siteId`
+   * (PA·8) — business days when the site counts only those.
+   */
+  private async defaultDeadline(
+    siteId: string | null,
+    from: Date,
+    pick:
+      'defaultTreatmentDays' | 'outgoingReplyDays' | 'dischargeExpectedDays',
+  ) {
+    const settings = await this.settings.get(siteId);
+    return addDelay(from, settings[pick], settings.businessDaysOnly);
+  }
 
   // (dto already carries ownerId straight through via `...data` below —
   // Prisma accepts the scalar FK field directly on CourrierCreateInput.)
@@ -384,22 +401,39 @@ export class MailService {
       direction: dto.direction,
       siteId,
     });
-    const { receivedAt, documents: documentMetas, transmit, ...data } = dto;
+    const {
+      receivedAt,
+      dueDate,
+      documents: documentMetas,
+      transmit,
+      ...data
+    } = dto;
     const dossierLinks = await this.projectOfDossier(dto.dossierId);
+    // An entrant always has its reception date: the registration date when
+    // none is given — the date it's listed, sorted and filtered by.
+    const received = receivedAt
+      ? new Date(receivedAt)
+      : dto.direction === CourrierDirection.ENTRANT
+        ? new Date()
+        : undefined;
+    // Its deadline: the one given, else its site's default delay.
+    const deadline = dueDate
+      ? new Date(dueDate)
+      : dto.direction === CourrierDirection.ENTRANT
+        ? await this.defaultDeadline(
+            siteId,
+            received ?? new Date(),
+            'defaultTreatmentDays',
+          )
+        : await this.defaultDeadline(siteId, new Date(), 'outgoingReplyDays');
     const courrier = await createWithUniqueReference('M', (number) =>
       this.database.courrier.create({
         data: {
           ...data,
           typeId,
           number,
-          // An entrant always has its reception date: the registration
-          // date when none is given — the date it's listed, sorted and
-          // filtered by.
-          receivedAt: receivedAt
-            ? new Date(receivedAt)
-            : dto.direction === CourrierDirection.ENTRANT
-              ? new Date()
-              : undefined,
+          receivedAt: received,
+          dueDate: deadline,
           ...dossierLinks,
           status:
             dto.direction === CourrierDirection.ENTRANT
@@ -456,6 +490,12 @@ export class MailService {
   // included, is completed through update() before submitForVerification().
   async createOutgoingDraft(dto: CreateOutgoingMailDto, createdById: string) {
     const typeId = await this.defaultEffetTypeId();
+    // To be sent within its site's reply delay (PA·8).
+    const dueDate = await this.defaultDeadline(
+      await this.siteOfEffet(null, createdById),
+      new Date(),
+      'outgoingReplyDays',
+    );
     const draft = await createWithUniqueReference('M', (number) =>
       this.database.courrier.create({
         data: {
@@ -465,6 +505,7 @@ export class MailService {
           direction: CourrierDirection.SORTANT,
           status: CourrierStatus.BROUILLON,
           createdById,
+          dueDate,
         },
         include: mailInclude,
       }),
@@ -844,13 +885,18 @@ export class MailService {
       },
       courrier,
     );
-    const { receivedAt, transmit, ...data } = dto;
+    const { receivedAt, dueDate, transmit, ...data } = dto;
     const updated = await this.database.courrier.update({
       where: { id: courrier.id },
       data: {
         ...data,
         typeId,
         receivedAt: receivedAt ? new Date(receivedAt) : undefined,
+        dueDate: dueDate ? new Date(dueDate) : undefined,
+        // A moved deadline: its reminders start over (PA·8).
+        ...(dueDate && !sameDay(new Date(dueDate), courrier.dueDate)
+          ? { dueReminderSentAt: null, overdueRemindedAt: null }
+          : {}),
         ...(dossierChanged ? await this.projectOfDossier(dto.dossierId) : {}),
       },
       include: mailInclude,
@@ -1169,6 +1215,9 @@ export class MailService {
       data: {
         supervisorId: dto.supervisorId,
         supervisorDueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+        // Its deadline may have moved: its reminders start over (PA·8).
+        dueReminderSentAt: null,
+        overdueRemindedAt: null,
         supervisorNote: dto.note ?? null,
       },
       include: mailInclude,
@@ -1774,6 +1823,12 @@ export class MailService {
       await this.siteOfEffet(sortant.dossierId, sortant.createdById),
     );
     const transmittedAt = new Date(dto.transmittedAt);
+    // Its discharge is expected within its site's delay (PA·8).
+    const dischargeDueDate = await this.defaultDeadline(
+      await this.siteOfEffet(sortant.dossierId, sortant.createdById),
+      transmittedAt,
+      'dischargeExpectedDays',
+    );
     const updated = await this.database.$transaction(async (tx) => {
       const { count } = await tx.courrier.updateMany({
         where: { id, status: { in: SENDABLE_STATUSES } },
@@ -1786,6 +1841,7 @@ export class MailService {
           transmittedAt,
           transmittedById: userId,
           sentAt: transmittedAt,
+          dischargeDueDate,
         },
       });
       if (count === 0) {
@@ -2682,9 +2738,16 @@ function visibleMailsWhere(
       // sees it, wherever it sits.
       { ownerId: userId },
       { supervisorId: userId },
-      ...(direction === CourrierDirection.ENTRANT
-        ? [{ dossierId: null, createdBy: sites.registrant }]
-        : []),
+      // Without a dossier: its registrant's site's effets — for a sortant,
+      // once submitted (its validator, e.g. a contract's responsible, must
+      // open it); a draft stays its author's own.
+      direction === CourrierDirection.ENTRANT
+        ? { dossierId: null, createdBy: sites.registrant }
+        : {
+            dossierId: null,
+            status: { not: CourrierStatus.BROUILLON },
+            createdBy: sites.registrant,
+          },
     ],
   };
 }
@@ -2768,4 +2831,8 @@ function searchWhere(search?: string): Prisma.CourrierWhereInput | undefined {
   return {
     OR: [{ subject: contains }, { number: contains }, { reference: contains }],
   };
+}
+
+function sameDay(a: Date, b: Date | null | undefined) {
+  return !!b && a.getTime() === b.getTime();
 }

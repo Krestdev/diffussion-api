@@ -25,6 +25,8 @@ export interface AnalysisSheetPdfContent {
   validator: { name: string | null; function: string | null };
   signedAt: Date | null;
   signatoryName: string | null;
+  /** The letterhead (PA·3): accent colour, and a PNG logo. */
+  identity?: { color: string; logo: Buffer | null };
 }
 
 const OPINION_LABEL: Record<string, string> = {
@@ -60,11 +62,31 @@ export function renderAnalysisSheetPdf(content: AnalysisSheetPdfContent) {
 
     const left = pdf.page.margins.left;
     const width = pdf.page.width - left - pdf.page.margins.right;
+    const accent = content.identity?.color ?? '#000000';
+
+    // Letterhead: the logo on the left, a rule in the accent colour.
+    if (content.identity?.logo) {
+      try {
+        pdf.image(content.identity.logo, left, pdf.y, { fit: [140, 48] });
+        pdf.moveDown(3.2);
+      } catch {
+        // An unreadable logo never blocks the PDF.
+      }
+    }
+    pdf
+      .moveTo(left, pdf.y)
+      .lineTo(left + width, pdf.y)
+      .lineWidth(2)
+      .strokeColor(accent)
+      .stroke();
+    pdf.moveDown(0.6);
 
     pdf
+      .fillColor(accent)
       .font('Helvetica-Bold')
       .fontSize(16)
       .text("FICHE D'ANALYSE", { width, align: 'center' });
+    pdf.fillColor('#000000');
     pdf
       .font('Helvetica')
       .fontSize(10)

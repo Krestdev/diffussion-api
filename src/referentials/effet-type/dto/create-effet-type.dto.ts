@@ -15,6 +15,12 @@ export class CreateEffetTypeDto {
   @MaxLength(100)
   name: string;
 
+  @ApiPropertyOptional({ example: 'Échantillon remis contre décharge' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
   @ApiPropertyOptional({
     description:
       'Physical object: quantity, condition, packaging, location and return can be recorded',

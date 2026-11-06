@@ -187,10 +187,19 @@ describe('ContractService', () => {
     });
   });
 
-  it('lists the contract types with their labels', () => {
-    expect(service.types()).toContainEqual({
+  it('lists the active contract types with their labels', async () => {
+    (database as unknown as Record<string, unknown>).contractTypeItem = {
+      findMany: jest
+        .fn()
+        .mockResolvedValue([
+          { code: 'TRAVAUX', label: 'Travaux', description: null },
+        ]),
+    };
+
+    await expect(service.types()).resolves.toContainEqual({
       value: 'TRAVAUX',
       label: 'Travaux',
+      description: null,
     });
   });
 });

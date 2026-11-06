@@ -32,6 +32,7 @@ import { visibleDossierWhere } from '../../common/utils/dossier-visibility';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { assertSiteActive } from '../../common/utils/referential-guards';
 import { assertProjectOfSite } from '../../common/utils/site-referentials';
+import { assertDossierTypeUsable } from '../../referentials/dossier-type/dossier-type.service';
 import { DatabaseService } from '../../database/database.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
 import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
@@ -104,6 +105,9 @@ export class DossierService {
     await assertSiteActive(this.database, dto.siteId);
     const responsibleId = dto.responsibleId ?? createdById;
     await this.assertEligibleResponsible(responsibleId, dto.siteId);
+    if (dto.typeId) {
+      await assertDossierTypeUsable(this.database, dto.typeId, dto.siteId);
+    }
 
     const projectId = await this.projectUnderContract(
       dto.contractId,
@@ -257,6 +261,10 @@ export class DossierService {
     }
 
     const targetSiteId = dto.siteId ?? dossier.siteId;
+    // Its kind stays one of its site's active types.
+    if (dto.typeId && (dto.typeId !== dossier.typeId || siteChanged)) {
+      await assertDossierTypeUsable(this.database, dto.typeId, targetSiteId);
+    }
     const targetResponsibleId = dto.responsibleId ?? dossier.responsibleId;
     if (
       targetResponsibleId &&

@@ -6,6 +6,7 @@ import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { AnalysisSheetService, sheetsAtSites } from './analysis-sheet.service';
 import { CriterionTemplateService } from './criterion-template.service';
+import { DocumentIdentityService } from '../administration/settings/document-identity.service';
 
 describe('AnalysisSheetService', () => {
   let service: AnalysisSheetService;
@@ -37,6 +38,7 @@ describe('AnalysisSheetService', () => {
         { provide: ActivityService, useValue: {} },
         { provide: StorageService, useValue: {} },
         { provide: CriterionTemplateService, useValue: {} },
+        { provide: DocumentIdentityService, useValue: {} },
       ],
     }).compile();
 

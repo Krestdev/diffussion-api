@@ -314,7 +314,7 @@ export class InstructionsService {
       PermissionCode.InstructionAssign,
       (siteId): Prisma.UserWhereInput => ({ siteId }),
     );
-    const [agents, counts, settings] = await Promise.all([
+    const [agents, counts] = await Promise.all([
       this.database.user.findMany({
         where: {
           AND: [sites, query.siteId ? { siteId: query.siteId } : {}],
@@ -331,15 +331,34 @@ export class InstructionsService {
         },
         _count: { _all: true },
       }),
-      this.settings.get(),
     ]);
     const inProgress = new Map(
       counts.map((row) => [row.userId, row._count._all]),
     );
-    const capacity = settings.maxActiveInstructionsPerAgent;
+    // Each agent's capacity is their site's setting.
+    const siteIds = [...new Set(agents.map((agent) => agent.siteId))];
+    const capacities = new Map(
+      await Promise.all(
+        siteIds.map(
+          async (siteId) =>
+            [
+              siteId,
+              (await this.settings.get(siteId)).maxActiveInstructionsPerAgent,
+            ] as const,
+        ),
+      ),
+    );
+    const capacity =
+      query.siteId !== undefined
+        ? (capacities.get(query.siteId) ??
+          (await this.settings.get(query.siteId)).maxActiveInstructionsPerAgent)
+        : siteIds.length === 1
+          ? (capacities.get(siteIds[0]) ?? null)
+          : null;
     const data = agents
       .map((agent) => {
         const active = inProgress.get(agent.id) ?? 0;
+        const capacity = capacities.get(agent.siteId) ?? null;
         return {
           user: agent,
           inProgress: active,
@@ -896,9 +915,14 @@ export class InstructionsService {
         ...data,
         dueDate: dueDate ? new Date(dueDate) : undefined,
         agentDueDate: agentDueDate ? new Date(agentDueDate) : undefined,
-        overdueNotifiedAt: sameDate(nextDue, instruction.dueDate)
-          ? undefined
-          : null,
+        ...(sameDate(nextDue, instruction.dueDate)
+          ? {}
+          : {
+              overdueNotifiedAt: null,
+              // PA·8 reminders start over with the new deadline.
+              dueReminderSentAt: null,
+              overdueRemindedAt: null,
+            }),
         agentOverdueNotifiedAt: sameDate(nextAgentDue, instruction.agentDueDate)
           ? undefined
           : null,

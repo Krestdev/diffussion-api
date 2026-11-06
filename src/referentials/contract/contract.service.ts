@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import {
   ContractStatus,
-  ContractType,
   Prisma,
   UserStatus,
 } from '../../../generated/prisma/client';
@@ -43,15 +42,6 @@ type ContractRow = Prisma.ContractGetPayload<{
   include: typeof contractInclude;
 }>;
 
-export const CONTRACT_TYPE_LABELS: Record<ContractType, string> = {
-  [ContractType.MOE]: "Maîtrise d'œuvre",
-  [ContractType.AMO]: "Assistance à maîtrise d'ouvrage",
-  [ContractType.TRAVAUX]: 'Travaux',
-  [ContractType.ETUDES]: 'Études',
-  [ContractType.CONTROLE]: 'Contrôle',
-  [ContractType.AUTRE]: 'Autre',
-};
-
 /**
  * Contracts (marchés): optionally part of a project, they contain dossiers
  * (Dossier.contractId). Each may list the users allowed to open it
@@ -67,11 +57,36 @@ export class ContractService {
     private readonly rbac: RbacService,
   ) {}
 
-  types() {
-    return Object.values(ContractType).map((value) => ({
-      value,
-      label: CONTRACT_TYPE_LABELS[value],
+  // The active contract types (PA·7), in their order — the form's choices.
+  async types() {
+    const types = await this.database.contractTypeItem.findMany({
+      where: { active: true },
+      orderBy: [{ order: 'asc' }, { label: 'asc' }],
+      select: { code: true, label: true, description: true },
+    });
+    return types.map((type) => ({
+      value: type.code,
+      label: type.label,
+      description: type.description,
     }));
+  }
+
+  // A contract's kind: an active type, checked when it changes.
+  private async assertTypeUsable(
+    code: string | undefined,
+    current?: string | null,
+  ) {
+    if (!code || code === current) return;
+    const type = await this.database.contractTypeItem.findUnique({
+      where: { code },
+      select: { active: true, label: true },
+    });
+    if (!type) throw new BadRequestException(`Unknown contract type ${code}`);
+    if (!type.active) {
+      throw new BadRequestException(
+        `The contract type « ${type.label} » is inactive and can no longer be chosen`,
+      );
+    }
   }
 
   @AuditLog({
@@ -81,6 +96,7 @@ export class ContractService {
   })
   async create(dto: CreateContractDto, actingUserId: string) {
     const { startDate, endDate, signedAt, authorizedUserIds, ...data } = dto;
+    await this.assertTypeUsable(dto.type);
     await this.assertManages(
       await this.siteOfProject(dto.projectId ?? null),
       actingUserId,
@@ -201,6 +217,7 @@ export class ContractService {
       );
     }
     const { startDate, endDate, signedAt, ...data } = dto;
+    await this.assertTypeUsable(dto.type, existing.type);
     await this.assertLinks(data, existing);
     const dates = toDates(startDate, endDate);
     assertDateOrder(

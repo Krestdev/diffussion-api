@@ -16,6 +16,7 @@ import {
 } from '../../../generated/prisma/client';
 import { StorageService } from '../../storage/storage.service';
 import { ActivityService } from '../../activity/activity.service';
+import { SettingsService } from '../../administration/settings/settings.service';
 
 // Global types, plus a type of site s-2.
 const EFFET_TYPES: Record<string, Record<string, unknown>> = {
@@ -82,7 +83,21 @@ describe('MailService', () => {
   let rbac: Record<string, jest.Mock>;
   let storage: { upload: jest.Mock; delete: jest.Mock };
 
+  // The site's settings (PA·8), as SettingsService.get gives them.
+  let settings: Record<string, unknown> & {
+    defaultTreatmentDays: number;
+    outgoingReplyDays: number;
+    dischargeExpectedDays: number;
+    businessDaysOnly: boolean;
+  };
+
   beforeEach(async () => {
+    settings = {
+      defaultTreatmentDays: 10,
+      outgoingReplyDays: 15,
+      dischargeExpectedDays: 8,
+      businessDaysOnly: true,
+    };
     database = {
       courrier: {
         create: jest.fn(),
@@ -151,6 +166,10 @@ describe('MailService', () => {
         {
           provide: ActivityService,
           useValue: { tryRecord: jest.fn().mockResolvedValue('log-1') },
+        },
+        {
+          provide: SettingsService,
+          useValue: { get: jest.fn().mockResolvedValue(settings) },
         },
       ],
     }).compile();
@@ -415,6 +434,64 @@ describe('MailService', () => {
       const { where } = database.courrier.findMany.mock.calls[0][0];
       expect(where.createdAt).toEqual({ lt: new Date('2026-10-01') });
       expect(where.AND).toEqual([]);
+    });
+  });
+
+  describe('default deadlines (PA·8)', () => {
+    beforeEach(() => {
+      database.courrier.create.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'c-1', ...data }),
+      );
+      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+    });
+
+    it("gives an entrant its site's treatment delay from its reception", async () => {
+      settings.defaultTreatmentDays = 10;
+      settings.businessDaysOnly = true;
+
+      await service.create(
+        {
+          direction: CourrierDirection.ENTRANT,
+          subject: 'Demande',
+          // A Friday: 10 business days later is the Friday two weeks on.
+          receivedAt: '2026-11-06T10:00:00.000Z',
+        },
+        'u-agent',
+      );
+
+      expect(database.courrier.create.mock.calls[0][0].data.dueDate).toEqual(
+        new Date('2026-11-20'),
+      );
+    });
+
+    it('keeps a deadline given at registration', async () => {
+      await service.create(
+        {
+          direction: CourrierDirection.ENTRANT,
+          subject: 'Demande',
+          dueDate: '2026-12-01',
+        },
+        'u-agent',
+      );
+
+      expect(database.courrier.create.mock.calls[0][0].data.dueDate).toEqual(
+        new Date('2026-12-01'),
+      );
+    });
+
+    it("gives a sortant draft its site's reply delay", async () => {
+      settings.outgoingReplyDays = 15;
+      settings.businessDaysOnly = false;
+
+      await service.createOutgoingDraft({ subject: 'Réponse' }, 'u-author');
+
+      const { dueDate } = database.courrier.create.mock.calls[0][0].data;
+      expect(dueDate).toBeInstanceOf(Date);
+      const days = Math.round(
+        ((dueDate as Date).getTime() - Date.now()) / (24 * 3600 * 1000),
+      );
+      expect(days).toBeGreaterThanOrEqual(14);
+      expect(days).toBeLessThanOrEqual(15);
     });
   });
 
@@ -1127,7 +1204,10 @@ describe('MailService', () => {
         database.courrier.findUnique.mockResolvedValue(
           courrier(CourrierStatus.SIGNE),
         );
-        database.canal.findUnique.mockResolvedValue({ name: 'Porteur' });
+        database.canal.findUnique.mockResolvedValue({
+          name: 'Porteur',
+          active: true,
+        });
 
         await service.send(
           'c-1',
@@ -1150,6 +1230,8 @@ describe('MailService', () => {
             transmittedAt: new Date('2026-11-03'),
             transmittedById: 'u-secretary',
             sentAt: new Date('2026-11-03'),
+            // Tue 3 + 8 business days (PA·8).
+            dischargeDueDate: new Date('2026-11-13'),
           },
         });
       });
@@ -1829,6 +1911,8 @@ describe('MailService', () => {
             supervisorId: 'u-sup',
             supervisorDueDate: null,
             supervisorNote: null,
+            dueReminderSentAt: null,
+            overdueRemindedAt: null,
           },
         }),
       );
@@ -1888,6 +1972,8 @@ describe('MailService', () => {
             supervisorId: 'u-sup',
             supervisorDueDate: new Date('2026-11-20'),
             supervisorNote: 'Consigne urgente',
+            dueReminderSentAt: null,
+            overdueRemindedAt: null,
           },
         }),
       );

@@ -170,19 +170,22 @@ model Site {
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  responsible      User?                       @relation("SiteManager", fields: [responsibleId], references: [id])
-  users            User[]                      @relation("SiteUsers")
-  roles            Role[]
-  effetTypes       EffetType[]
-  canals           Canal[]
-  projects         Project[]
-  analysisCriteria AnalysisCriterionTemplate[]
-  analysisSettings AnalysisSiteSettings?
-  correspondents   Correspondent[]
-  userRoles        UserRole[]
-  dossiers         Dossier[]
-  delegations      Delegation[]
-  invitations      Invitation[]
+  responsible        User?                       @relation("SiteManager", fields: [responsibleId], references: [id])
+  users              User[]                      @relation("SiteUsers")
+  roles              Role[]
+  effetTypes         EffetType[]
+  canals             Canal[]
+  projects           Project[]
+  analysisCriteria   AnalysisCriterionTemplate[]
+  analysisSettings   AnalysisSiteSettings?
+  settings           SiteSettings?
+  correspondents     Correspondent[]
+  userRoles          UserRole[]
+  dossiers           Dossier[]
+  delegations        Delegation[]
+  invitations        Invitation[]
+  correspondentTypes CorrespondentType[]
+  dossierTypes       DossierType[]
 
   @@map("site")
 }
@@ -321,6 +324,7 @@ model Category {
 model EffetType {
   id            String   @id @default(uuid())
   name          String   @db.VarChar(100)
+  description   String?
   /// Physical object: quantity, condition, packaging, location, return.
   isPhysical    Boolean  @default(false)
   /// Can list the effets it accompanies (a bordereau de transmission).
@@ -356,11 +360,15 @@ model CourrierNature {
 /// Communication channel referential (6.4), used by Courrier.
 /// Belongs to one site: only that site's effets use it (unique per site).
 model Canal {
-  id        String   @id @default(uuid())
-  name      String   @db.VarChar(100)
-  siteId    String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(uuid())
+  name        String   @db.VarChar(100)
+  description String?
+  /// An inactive canal is no longer offered for new effets (kept for the
+  /// effets that used it) — deactivated rather than deleted.
+  active      Boolean  @default(true)
+  siteId      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   site      Site       @relation(fields: [siteId], references: [id], onDelete: Restrict)
   courriers Courrier[]
@@ -369,15 +377,55 @@ model Canal {
   @@map("canal")
 }
 
+/// Belongs to one site, like canals: only that site's correspondents use it.
 model CorrespondentType {
-  id        String   @id @default(uuid())
-  name      String   @unique @db.VarChar(100)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(uuid())
+  name        String   @db.VarChar(100)
+  description String?
+  active      Boolean  @default(true)
+  siteId      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
+  site           Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
   correspondents Correspondent[]
 
+  @@unique([siteId, name])
   @@map("correspondent_type")
+}
+
+/// The kinds of contract (PA·7) — common to every site, managed by a
+/// platform administrator. A contract's `type` is one of their codes.
+model ContractTypeItem {
+  id          String   @id @default(uuid())
+  code        String   @unique @db.VarChar(30)
+  label       String   @db.VarChar(100)
+  description String?
+  active      Boolean  @default(true)
+  order       Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  contracts Contract[]
+
+  @@map("contract_type")
+}
+
+/// The kinds of dossier (PA·7) of a site.
+model DossierType {
+  id          String   @id @default(uuid())
+  name        String   @db.VarChar(100)
+  description String?
+  active      Boolean  @default(true)
+  siteId      String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  dossiers Dossier[]
+
+  @@unique([siteId, name])
+  @@map("dossier_type")
 }
 
 enum CorrespondentStatus {
@@ -446,6 +494,8 @@ model Dossier {
   title           String                 @db.VarChar(200)
   description     String?
   categoryId      String?
+  /// Its kind (PA·7): one of its site's dossier types.
+  typeId          String?
   /// Optional grouping of dossiers under a wider project/programme.
   projectId       String?
   /// The contract this dossier is carried out under, if any.
@@ -475,12 +525,13 @@ model Dossier {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  category    Category? @relation(fields: [categoryId], references: [id])
-  project     Project?  @relation(fields: [projectId], references: [id])
-  contract    Contract? @relation(fields: [contractId], references: [id], onDelete: Restrict)
-  site        Site      @relation(fields: [siteId], references: [id])
-  responsible User?     @relation("DossierResponsible", fields: [responsibleId], references: [id])
-  createdBy   User?     @relation("DossierCreatedBy", fields: [createdById], references: [id])
+  category    Category?    @relation(fields: [categoryId], references: [id])
+  type        DossierType? @relation(fields: [typeId], references: [id], onDelete: Restrict)
+  project     Project?     @relation(fields: [projectId], references: [id])
+  contract    Contract?    @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  site        Site         @relation(fields: [siteId], references: [id])
+  responsible User?        @relation("DossierResponsible", fields: [responsibleId], references: [id])
+  createdBy   User?        @relation("DossierCreatedBy", fields: [createdById], references: [id])
 
   courriers      Courrier[]
   instructions   Instruction[]
@@ -558,7 +609,8 @@ model Contract {
   description     String?
   projectId       String?
   status          ContractStatus @default(ACTIVE)
-  type            ContractType?
+  /// The code of its kind (ContractTypeItem.code).
+  type            String?        @db.VarChar(30)
   amount          Decimal?       @db.Decimal(15, 2)
   signedAt        DateTime?
   /// Reference of the tender (appel d'offres) the contract came from.
@@ -573,13 +625,14 @@ model Contract {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 
-  project        Project?         @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  client         Correspondent?   @relation("ContractClient", fields: [clientId], references: [id])
-  responsible    User?            @relation("ContractResponsible", fields: [responsibleId], references: [id], onDelete: SetNull)
+  project        Project?          @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  kind           ContractTypeItem? @relation(fields: [type], references: [code], onDelete: Restrict, onUpdate: Cascade)
+  client         Correspondent?    @relation("ContractClient", fields: [clientId], references: [id])
+  responsible    User?             @relation("ContractResponsible", fields: [responsibleId], references: [id], onDelete: SetNull)
   dossiers       Dossier[]
   courriers      Courrier[]
   documents      Document[]
-  instructions   Instruction[]    @relation("InstructionContract")
+  instructions   Instruction[]     @relation("InstructionContract")
   /// Who may open the contract; nobody listed = everyone (see ContractAccess).
   accesses       ContractAccess[]
   analysisSheets AnalysisSheet[]
@@ -592,15 +645,6 @@ model Contract {
 enum ContractStatus {
   ACTIVE
   ARCHIVED
-}
-
-enum ContractType {
-  MOE
-  AMO
-  TRAVAUX
-  ETUDES
-  CONTROLE
-  AUTRE
 }
 
 /// A user allowed to open a project. A project nobody is listed on is open
@@ -758,6 +802,18 @@ model Courrier {
   dispatchValidatedAt   DateTime?
   supervisorDueDate     DateTime?
   supervisorNote        String?
+  /// The effet's default deadline (PA·8): an entrant's treatment, a
+  /// sortant's sending — from its site's settings, unless one is given.
+  /// The supervisor's (supervisorDueDate) prevails once set.
+  dueDate               DateTime?
+  /// A sent sortant's discharge is expected by then (PA·8).
+  dischargeDueDate      DateTime?
+  /// PA·8 alerts already sent: the reminder before its deadline (once), the
+  /// last alert once overdue, the last alert once its discharge is late.
+  /// Cleared when the deadline moves.
+  dueReminderSentAt     DateTime?
+  overdueRemindedAt     DateTime?
+  dischargeRemindedAt   DateTime?
 
   /// Last submission for validation.
   submittedAt        DateTime?
@@ -939,6 +995,10 @@ model Instruction {
   /// Last reminder sent to its executants (POST /instructions/:id/remind).
   lastRemindedAt         DateTime?
   overdueNotifiedAt      DateTime?
+  /// PA·8: the reminder before its deadline, sent once; the last relaunch
+  /// once it is overdue. Cleared when the deadline moves.
+  dueReminderSentAt      DateTime?
+  overdueRemindedAt      DateTime?
   status                 InstructionStatus   @default(A_AFFECTER)
   /// Summary of the corrections last requested on its livrables. The
   /// motifs of non-subscriptions live in InstructionSubscription.
@@ -1290,10 +1350,31 @@ model ActivityLog {
 
   @@index([parentLogId])
   @@index([siteId, createdAt])
+  @@index([createdAt])
   @@index([entityType, entityId])
   @@index([userId, createdAt])
   @@index([source, createdAt])
   @@map("activity_log")
+}
+
+/// A batch of audit journal entries past their site's retention (PA·8),
+/// exported as CSV to the file storage before being deleted — the trace
+/// that stays. No foreign key: it outlives the site it mentions.
+model AuditArchive {
+  id             String   @id @default(uuid())
+  /// The site whose entries these were; null: the platform's own.
+  siteId         String?
+  storageKey     String
+  /// The oldest and newest entry of the batch.
+  fromDate       DateTime
+  toDate         DateTime
+  entries        Int
+  /// The retention in force then, in years.
+  retentionYears Int
+  createdAt      DateTime @default(now())
+
+  @@index([siteId, createdAt])
+  @@map("audit_archive")
 }
 
 // ---------------------------------------------------------------------------
@@ -1505,9 +1586,37 @@ model AppSettings {
   /// Most instructions in progress an agent should carry at once (null: no
   /// limit). An indicator for whoever assigns tasks.
   maxActiveInstructionsPerAgent Int?
+  /// The common values of the other settings (PA·5, PA·8), by key — a key
+  /// left out takes its default (see settings.defaults.ts).
+  values                        Json?
+  /// The module's notifications (PA·9): { [type]: { inApp, email } }.
+  notifications                 Json?
+  /// The documents' identity (PA·3): accent colour, module colour, logo.
+  accentColor                   String?  @db.VarChar(9)
+  useModuleColor                Boolean?
+  logoKey                       String?
+  logoMime                      String?  @db.VarChar(50)
   updatedAt                     DateTime @updatedAt
 
   @@map("app_settings")
+}
+
+/// A site's own settings, over the common ones (AppSettings): a key it
+/// doesn't set — a null column, a key absent from `values` /
+/// `notifications` — is inherited.
+model SiteSettings {
+  siteId         String   @id
+  values         Json?
+  notifications  Json?
+  accentColor    String?  @db.VarChar(9)
+  useModuleColor Boolean?
+  logoKey        String?
+  logoMime       String?  @db.VarChar(50)
+  updatedAt      DateTime @updatedAt
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@map("site_settings")
 }
 
 /// Settings of the fiches d'analyse: a single row (id 1).

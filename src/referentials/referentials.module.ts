@@ -10,6 +10,8 @@ import { ContractModule } from './contract/contract.module';
 import { EffetTypeModule } from './effet-type/effet-type.module';
 import { CorrespondentTypeModule } from './correspondent-type/correspondent-type.module';
 import { ProjectModule } from './project/project.module';
+import { ContractTypeModule } from './contract-type/contract-type.module';
+import { DossierTypeModule } from './dossier-type/dossier-type.module';
 
 @Module({
   controllers: [SiteController, CorrespondantController],
@@ -23,6 +25,8 @@ import { ProjectModule } from './project/project.module';
     ContractModule,
     CorrespondentTypeModule,
     ProjectModule,
+    ContractTypeModule,
+    DossierTypeModule,
   ],
 })
 export class ReferentialsModule {}

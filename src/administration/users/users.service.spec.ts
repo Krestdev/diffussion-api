@@ -5,6 +5,7 @@ import { DatabaseService } from '../../database/database.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { MailerService } from '../../mail/mailer.service';
 import { UsersService } from './users.service';
+import { ActivityService } from '../../activity/activity.service';
 
 const NEW_USER = {
   name: 'Paul',
@@ -81,6 +82,10 @@ describe('UsersService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         UsersService,
+        {
+          provide: ActivityService,
+          useValue: { tryRecord: jest.fn().mockResolvedValue(null) },
+        },
         { provide: DatabaseService, useValue: database },
         {
           provide: MailerService,
