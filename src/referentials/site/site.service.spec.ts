@@ -15,6 +15,8 @@ describe('SiteService', () => {
     userRole: Record<string, jest.Mock>;
     delegation: Record<string, jest.Mock>;
     analysisCriterionTemplate: Record<string, jest.Mock>;
+    permission: Record<string, jest.Mock>;
+    role: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
   let rbac: { administeredSites: jest.Mock };
@@ -39,7 +41,25 @@ describe('SiteService', () => {
         findUniqueOrThrow: jest.fn().mockResolvedValue({ siteId: 's-9' }),
         update: jest.fn(),
       },
-      userRole: { updateMany: jest.fn(), deleteMany: jest.fn() },
+      userRole: {
+        updateMany: jest.fn(),
+        deleteMany: jest.fn(),
+        createMany: jest.fn(),
+      },
+      // The default roles (Admin, Réceptionniste, Dispatcher, Admin
+      // dispatcher) and the permissions they are made of.
+      permission: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'p-read', code: 'COURRIER_READ' },
+          { id: 'p-dispatch', code: 'COURRIER_DISPATCH' },
+          { id: 'p-cat', code: 'ADMIN_MANAGE_CATEGORIES' },
+        ]),
+      },
+      role: {
+        create: jest.fn(({ data }: { data: { name: string } }) =>
+          Promise.resolve({ id: `r-${data.name}` }),
+        ),
+      },
       delegation: { deleteMany: jest.fn() },
       // The common model of analysis criteria, copied onto a new site.
       analysisCriterionTemplate: {
@@ -165,6 +185,38 @@ describe('SiteService', () => {
           siteId: 's-new',
         },
       ],
+    });
+  });
+
+  it('gives a new site its 4 default roles, Admin to its responsible', async () => {
+    await service.create({ name: 'Garoua', responsibleId: 'u-resp' });
+
+    const created = database.role.create.mock.calls.map(
+      ([args]) =>
+        args as {
+          data: {
+            name: string;
+            siteId: string;
+            rolePermissions: { create: { permissionId: string }[] };
+          };
+        },
+    );
+    expect(created.map((c) => c.data.name)).toEqual([
+      'Admin',
+      'Réceptionniste',
+      'Dispatcher',
+      'Admin dispatcher',
+    ]);
+    expect(created.every((c) => c.data.siteId === 's-new')).toBe(true);
+    // A site role never carries a platform-only permission.
+    const adminPermissions = created[0].data.rolePermissions.create.map(
+      (p) => p.permissionId,
+    );
+    expect(adminPermissions).toContain('p-read');
+    expect(adminPermissions).not.toContain('p-cat');
+    expect(database.userRole.createMany).toHaveBeenCalledWith({
+      data: [{ userId: 'u-resp', roleId: 'r-Admin', siteId: 's-new' }],
+      skipDuplicates: true,
     });
   });
 });

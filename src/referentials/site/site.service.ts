@@ -14,7 +14,11 @@ import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { assertInScope, RbacService } from '../../auth/rbac/rbac.service';
-import { createWithUniqueReference } from '../../common/utils/generate-reference';
+import {
+  createWithUniqueReference,
+  generateReference,
+} from '../../common/utils/generate-reference';
+import { DEFAULT_SITE_ROLES } from './default-site-roles';
 import { DatabaseService } from '../../database/database.service';
 import { CreateSiteDto } from './dto/create-site.dto';
 import { UpdateSiteDto } from './dto/update-site.dto';
@@ -66,6 +70,40 @@ export class SiteService {
           await tx.analysisCriterionTemplate.createMany({
             data: model.map((criterion) => ({ ...criterion, siteId: site.id })),
           });
+        }
+        // Its default roles (Admin, Réceptionniste, Dispatcher, Admin
+        // dispatcher); its responsible holds Admin.
+        const permissions = await tx.permission.findMany({
+          select: { id: true, code: true },
+        });
+        const idOf = new Map(permissions.map((p) => [p.code, p.id]));
+        for (const role of DEFAULT_SITE_ROLES) {
+          const created = await tx.role.create({
+            data: {
+              code: generateReference('RO'),
+              name: role.name,
+              description: role.description,
+              siteId: site.id,
+              rolePermissions: {
+                create: role.permissions
+                  .filter((code) => idOf.has(code))
+                  .map((code) => ({ permissionId: idOf.get(code)! })),
+              },
+            },
+            select: { id: true },
+          });
+          if (role.forResponsible && dto.responsibleId) {
+            await tx.userRole.createMany({
+              data: [
+                {
+                  userId: dto.responsibleId,
+                  roleId: created.id,
+                  siteId: site.id,
+                },
+              ],
+              skipDuplicates: true,
+            });
+          }
         }
         return site;
       }),
