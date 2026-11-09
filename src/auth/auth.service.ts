@@ -211,13 +211,8 @@ export class AuthService {
     const { password, refreshToken, userRoles, ...rest } = user;
     // One UserRole row per site: a role held at several sites is listed once.
     const roles = [...new Set(userRoles.map((ur) => ur.role.name))];
-    const permissions = [
-      ...new Set(
-        userRoles.flatMap((ur) =>
-          ur.role.rolePermissions.map((rp) => rp.permission.code),
-        ),
-      ),
-    ];
+    // Held somewhere, by a role or by being a site's responsible.
+    const permissions = await this.rbac.getPermissionCodes(userUuid);
 
     return {
       ...rest,

@@ -1,11 +1,13 @@
 import {
   CourrierDirection,
   CourrierStatus,
+  InstructionStatus,
 } from '../../generated/prisma/client';
 import {
   bucketsOf,
   computeAging,
   computeArbitration,
+  computeDelayBySteps,
   computeKpis,
   computeMonthly,
   overviewWhere,
@@ -28,7 +30,9 @@ function row(overrides: Partial<OverviewRow>): OverviewRow {
     receivedAt: daysAgo(1),
     sentAt: null,
     transmittedAt: null,
+    proposedAt: null,
     dispatchValidatedAt: null,
+    statusBeforeProjectClosure: null,
     submittedAt: null,
     approvedAt: null,
     signedAt: null,
@@ -37,6 +41,7 @@ function row(overrides: Partial<OverviewRow>): OverviewRow {
     cancelledAt: null,
     dueDate: null,
     type: null,
+    instructions: [],
     project: null,
     contract: null,
     dossier: null,
@@ -49,6 +54,69 @@ const current = { from: daysAgo(10), to: NOW };
 const previous = { from: daysAgo(20), to: daysAgo(10) };
 
 describe('dashboard overview', () => {
+  describe('delays by step', () => {
+    const treated = () =>
+      row({
+        receivedAt: daysAgo(9),
+        proposedAt: daysAgo(8),
+        dispatchValidatedAt: daysAgo(7),
+        transmittedAt: daysAgo(7),
+        closedAt: daysAgo(1),
+        status: CourrierStatus.CLOTURE,
+        instructions: [
+          {
+            status: InstructionStatus.TERMINEE,
+            assignedAt: daysAgo(5),
+            closedAt: daysAgo(2),
+            subscriptions: [{ decidedAt: daysAgo(4) }],
+          },
+        ],
+      });
+
+    it('follows an entrant through its six steps', () => {
+      expect(computeDelayBySteps([treated()], current)).toEqual([
+        { step: 'Réception → dispatching', days: 1 },
+        { step: 'Dispatch → transmission', days: 1 },
+        { step: 'Transmission → affectation', days: 2 },
+        { step: 'Affectation → souscription', days: 1 },
+        { step: 'Souscription → validation', days: 2 },
+        { step: 'Validation → clôture', days: 1 },
+      ]);
+    });
+
+    it('has no validation while a task is still open', () => {
+      const effet = treated();
+      effet.instructions.push({
+        status: InstructionStatus.EN_COURS,
+        assignedAt: daysAgo(5),
+        closedAt: null,
+        subscriptions: [],
+      });
+
+      const steps = computeDelayBySteps([effet], current);
+
+      expect(steps[4].days).toBe(0);
+      expect(steps[5].days).toBe(0);
+    });
+
+    it('leaves out a closure that came from its project closing', () => {
+      const effet = treated();
+      effet.statusBeforeProjectClosure = CourrierStatus.TRANSMIS;
+
+      expect(computeDelayBySteps([effet], current)[5].days).toBe(0);
+    });
+
+    it('keeps the writing steps for sortants', () => {
+      const steps = computeDelayBySteps(
+        [],
+        current,
+        CourrierDirection.SORTANT,
+      ).map(({ step }) => step);
+
+      expect(steps).toEqual(['Rédaction', 'Validation', 'Signature', 'Envoi']);
+    });
+  });
+
   it('counts what was received and sent, against the previous period', () => {
     const { received, sent } = computeKpis(
       [

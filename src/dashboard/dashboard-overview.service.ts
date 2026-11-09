@@ -6,6 +6,7 @@ import {
   InstructionPriority,
   InstructionStatus,
   Prisma,
+  SubscriptionDecision,
 } from '../../generated/prisma/client';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RbacService } from '../auth/rbac/rbac.service';
@@ -58,7 +59,9 @@ const rowSelect = {
   receivedAt: true,
   sentAt: true,
   transmittedAt: true,
+  proposedAt: true,
   dispatchValidatedAt: true,
+  statusBeforeProjectClosure: true,
   submittedAt: true,
   approvedAt: true,
   signedAt: true,
@@ -67,6 +70,18 @@ const rowSelect = {
   cancelledAt: true,
   dueDate: true,
   type: { select: { id: true, name: true } },
+  instructions: {
+    where: { status: { not: InstructionStatus.ANNULEE } },
+    select: {
+      status: true,
+      assignedAt: true,
+      closedAt: true,
+      subscriptions: {
+        where: { decision: SubscriptionDecision.SOUSCRITE },
+        select: { decidedAt: true },
+      },
+    },
+  },
   project: { select: { id: true, name: true, responsibleId: true } },
   contract: {
     select: {
@@ -327,6 +342,38 @@ export function computeAging(rows: OverviewRow[], now: Date) {
   }));
 }
 
+function earliest(dates: (Date | null)[]) {
+  const times = dates.flatMap((date) => (date ? [date.getTime()] : []));
+  return times.length ? new Date(Math.min(...times)) : null;
+}
+
+function firstAssignedAt(row: OverviewRow) {
+  return earliest(row.instructions.map((task) => task.assignedAt));
+}
+
+function firstSubscribedAt(row: OverviewRow) {
+  return earliest(
+    row.instructions.flatMap((task) =>
+      task.subscriptions.map((subscription) => subscription.decidedAt),
+    ),
+  );
+}
+
+/** When its last task was validated, once every one of them is. */
+function validatedAt(row: OverviewRow) {
+  const tasks = row.instructions;
+  if (
+    !tasks.length ||
+    tasks.some((task) => task.status !== InstructionStatus.TERMINEE)
+  ) {
+    return null;
+  }
+  const times = tasks.flatMap((task) =>
+    task.closedAt ? [task.closedAt.getTime()] : [],
+  );
+  return times.length ? new Date(Math.max(...times)) : null;
+}
+
 const STEPS: {
   step: string;
   direction: CourrierDirection;
@@ -337,13 +384,38 @@ const STEPS: {
     step: 'Réception → dispatching',
     direction: CourrierDirection.ENTRANT,
     from: startOf,
-    to: (row) => row.dispatchValidatedAt,
+    to: (row) => row.proposedAt ?? row.dispatchValidatedAt,
   },
   {
-    step: 'Dispatching → clôture',
+    step: 'Dispatch → transmission',
     direction: CourrierDirection.ENTRANT,
-    from: (row) => row.dispatchValidatedAt,
-    to: (row) => row.closedAt,
+    from: (row) => row.proposedAt ?? row.dispatchValidatedAt,
+    to: (row) => row.transmittedAt,
+  },
+  {
+    step: 'Transmission → affectation',
+    direction: CourrierDirection.ENTRANT,
+    from: (row) => row.transmittedAt,
+    to: firstAssignedAt,
+  },
+  {
+    step: 'Affectation → souscription',
+    direction: CourrierDirection.ENTRANT,
+    from: firstAssignedAt,
+    to: firstSubscribedAt,
+  },
+  {
+    step: 'Souscription → validation',
+    direction: CourrierDirection.ENTRANT,
+    from: firstSubscribedAt,
+    to: validatedAt,
+  },
+  {
+    step: 'Validation → clôture',
+    direction: CourrierDirection.ENTRANT,
+    from: validatedAt,
+    // A project's closing ends its effets; nobody treated them then.
+    to: (row) => (row.statusBeforeProjectClosure ? null : row.closedAt),
   },
   {
     step: 'Rédaction',
@@ -376,20 +448,19 @@ export function computeDelayBySteps(
   window: Window,
   direction?: CourrierDirection,
 ) {
-  return STEPS.filter((step) => !direction || step.direction === direction).map(
-    (step) => {
-      const delays = rows
-        .filter((row) => row.direction === step.direction)
-        .flatMap((row) => {
-          const from = step.from(row);
-          const to = step.to(row);
-          return from && to && inWindow(to, window)
-            ? [daysBetween(from, to)]
-            : [];
-        });
-      return { step: step.step, days: round1(mean(delays) ?? 0) };
-    },
-  );
+  const wanted = direction ?? CourrierDirection.ENTRANT;
+  return STEPS.filter((step) => step.direction === wanted).map((step) => {
+    const delays = rows
+      .filter((row) => row.direction === step.direction)
+      .flatMap((row) => {
+        const from = step.from(row);
+        const to = step.to(row);
+        return from && to && inWindow(to, window)
+          ? [daysBetween(from, to)]
+          : [];
+      });
+    return { step: step.step, days: round1(mean(delays) ?? 0) };
+  });
 }
 
 function projectOf(row: OverviewRow) {

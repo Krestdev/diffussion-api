@@ -29,6 +29,9 @@ export const DEFAULT_SITE_ROLES: {
       'Enregistre et corrige les effets entrants ; peut proposer un dispatching',
     permissions: [
       PermissionCode.CourrierRead,
+      PermissionCode.ContractRead,
+      PermissionCode.CorrespondentRead,
+      PermissionCode.ProjectRead,
       PermissionCode.CourrierRegisterEntrant,
       PermissionCode.CourrierUpdateDraft,
       PermissionCode.DossierRead,
@@ -39,6 +42,9 @@ export const DEFAULT_SITE_ROLES: {
     description: 'Dispatche les effets entrants (transmis directement)',
     permissions: [
       PermissionCode.CourrierRead,
+      PermissionCode.ContractRead,
+      PermissionCode.CorrespondentRead,
+      PermissionCode.ProjectRead,
       PermissionCode.DossierRead,
       PermissionCode.CourrierDispatch,
     ],
@@ -49,6 +55,9 @@ export const DEFAULT_SITE_ROLES: {
       'Dispatche, valide les dispatchings proposés et corrige les effets entrants',
     permissions: [
       PermissionCode.CourrierRead,
+      PermissionCode.ContractRead,
+      PermissionCode.CorrespondentRead,
+      PermissionCode.ProjectRead,
       PermissionCode.DossierRead,
       PermissionCode.CourrierDispatch,
       PermissionCode.CourrierDispatchValidate,

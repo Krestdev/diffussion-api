@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { ProjectStatus } from '../../../generated/prisma/client';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
@@ -76,9 +77,17 @@ export async function assertProjectOfSite(
 ) {
   const project = await db.project.findUnique({
     where: { id: projectId },
-    select: { name: true, siteId: true },
+    select: { name: true, siteId: true, status: true },
   });
   if (!project) throw new BadRequestException(`Project ${projectId} not found`);
+  if (
+    project.status === ProjectStatus.CLOSED ||
+    project.status === ProjectStatus.ARCHIVED
+  ) {
+    throw new BadRequestException(
+      `The project "${project.name}" is closed — nothing new can be added to it`,
+    );
+  }
   if (siteId && project.siteId !== siteId) {
     throw new BadRequestException(
       `The project "${project.name}" belongs to another site`,

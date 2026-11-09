@@ -153,13 +153,53 @@ async function grantAdminFullAccess(userId: string) {
 // The starting list of global effet types (see the effet_types migration).
 // Looked up rather than upserted: a nullable column can't be part of a
 // Prisma unique-key lookup.
+const referenceModel = (prefix: string) => ({
+  prefix,
+  separator: '-',
+  counterDigits: 6,
+  counterReset: 'YEARLY',
+  yearDigits: 4,
+  monthIncluded: false,
+  codes: [],
+});
+
 const EFFET_TYPES = [
-  { name: 'Courrier', isPhysical: false, canListEffets: false },
-  { name: 'Bordereau de transmission', isPhysical: false, canListEffets: true },
-  { name: 'Matière / spécimen', isPhysical: true, canListEffets: false },
-  { name: 'Document', isPhysical: false, canListEffets: false },
-  { name: 'Support numérique', isPhysical: true, canListEffets: false },
-  { name: 'Dossier complet', isPhysical: true, canListEffets: false },
+  {
+    name: 'Courrier',
+    isPhysical: false,
+    canListEffets: false,
+    referenceModel: referenceModel('LET'),
+  },
+  {
+    name: 'Bordereau de transmission',
+    isPhysical: false,
+    canListEffets: true,
+    referenceModel: referenceModel('BT'),
+  },
+  {
+    name: 'Matière / spécimen',
+    isPhysical: true,
+    canListEffets: false,
+    referenceModel: referenceModel('MAT'),
+  },
+  {
+    name: 'Document',
+    isPhysical: false,
+    canListEffets: false,
+    referenceModel: referenceModel('DOC'),
+  },
+  {
+    name: 'Support numérique',
+    isPhysical: true,
+    canListEffets: false,
+    referenceModel: referenceModel('SUP'),
+  },
+  {
+    name: 'Dossier complet',
+    isPhysical: true,
+    canListEffets: false,
+    referenceModel: referenceModel('DOS'),
+  },
 ];
 
 async function seedEffetTypes() {

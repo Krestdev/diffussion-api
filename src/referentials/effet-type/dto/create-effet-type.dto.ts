@@ -2,11 +2,15 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ReferenceModelDto } from './reference-model.dto';
 
 export class CreateEffetTypeDto {
   @ApiProperty({ example: 'Matière / spécimen' })
@@ -46,6 +50,15 @@ export class CreateEffetTypeDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
+
+  @ApiProperty({
+    type: ReferenceModelDto,
+    description: 'How the references of its sortants are built',
+  })
+  @IsObject()
+  @ValidateNested()
+  @Type(() => ReferenceModelDto)
+  referenceModel: ReferenceModelDto;
 
   @ApiPropertyOptional({
     description:

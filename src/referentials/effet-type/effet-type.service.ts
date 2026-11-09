@@ -16,8 +16,10 @@ import {
 } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { CreateEffetTypeDto } from './dto/create-effet-type.dto';
+import { ReferenceModelDto } from './dto/reference-model.dto';
 import { FindEffetTypesQueryDto } from './dto/find-effet-types.query.dto';
 import { UpdateEffetTypeDto } from './dto/update-effet-type.dto';
+import { assertReferenceModelCoherent } from './reference-model';
 
 const effetTypeInclude = {
   site: { select: { id: true, name: true } },
@@ -45,12 +47,13 @@ export class EffetTypeService {
   })
   async create(dto: CreateEffetTypeDto, actingUserId: string) {
     const scope = await this.adminScope(actingUserId);
-    const { siteId: requestedSiteId, ...data } = dto;
+    const { siteId: requestedSiteId, referenceModel, ...data } = dto;
     const siteId = this.siteForNewType(scope, requestedSiteId);
     assertInScope(scope, siteId);
     await this.assertNameAvailable(dto.name, siteId);
+    await this.assertModelUsable(referenceModel, siteId);
     return this.database.effetType.create({
-      data: { ...data, siteId },
+      data: { ...data, siteId, referenceModel: { ...referenceModel } },
       include: effetTypeInclude,
     });
   }
@@ -96,9 +99,21 @@ export class EffetTypeService {
     if (dto.name !== undefined && dto.name !== existing.name) {
       await this.assertNameAvailable(dto.name, existing.siteId);
     }
+    const { referenceModel, ...data } = dto;
+    if (referenceModel === null && existing.referenceModel) {
+      throw new BadRequestException(
+        'Un modèle de référence peut être modifié, pas retiré',
+      );
+    }
+    if (referenceModel) {
+      await this.assertModelUsable(referenceModel, existing.siteId, id);
+    }
     return this.database.effetType.update({
       where: { id },
-      data: dto,
+      data: {
+        ...data,
+        ...(referenceModel ? { referenceModel: { ...referenceModel } } : {}),
+      },
       include: effetTypeInclude,
     });
   }
@@ -183,6 +198,29 @@ export class EffetTypeService {
         ...(user?.siteId ? [{ siteId: user.siteId }] : []),
       ],
     };
+  }
+
+  // Each type counts on its own: two with one prefix would give the same
+  // references. A global type is usable everywhere, so it meets them all.
+  private async assertModelUsable(
+    model: ReferenceModelDto,
+    siteId: string | null,
+    ownId?: string,
+  ) {
+    assertReferenceModelCoherent(model);
+    const taken = await this.database.effetType.findFirst({
+      where: {
+        id: { not: ownId },
+        referenceModel: { path: ['prefix'], equals: model.prefix },
+        ...(siteId ? { OR: [{ siteId: null }, { siteId }] } : {}),
+      },
+      select: { name: true },
+    });
+    if (taken) {
+      throw new ConflictException(
+        `Le préfixe "${model.prefix}" est déjà utilisé par le type "${taken.name}"`,
+      );
+    }
   }
 
   private async assertNameAvailable(name: string, siteId: string | null) {

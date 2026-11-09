@@ -600,6 +600,7 @@ export class InstructionsService {
           // (subscribe());
           // without one yet, a superviseur still has to designate them.
           status: statusOnAssignment(executantIds),
+          assignedAt: executantIds?.length || superviseur ? new Date() : null,
           assignees: {
             createMany: {
               data: assignmentRows({
@@ -877,6 +878,24 @@ export class InstructionsService {
     return withOverdue(instruction);
   }
 
+  // Its site's users, whoever it is assigned to or was created by, and the
+  // platform's administrators. Anyone else: as if it didn't exist.
+  async assertVisible(id: string, userId: string) {
+    const ownSite = await ownSiteFilter(this.rbac, this.database, userId);
+    if (!ownSite) return;
+    const visible = await this.database.instruction.count({
+      where: {
+        id,
+        OR: [
+          taskOfSite(ownSite.siteId),
+          { createdById: userId },
+          { assignees: { some: { userId } } },
+        ],
+      },
+    });
+    if (!visible) throw new NotFoundException(`Instruction ${id} not found`);
+  }
+
   async historique(id: string, skip = 0, take = 20) {
     await this.findOne(id); // 404 if not found
     const where = { entityId: id, entityType: 'Instruction' };
@@ -1026,6 +1045,7 @@ export class InstructionsService {
         where: { id: instruction.id },
         data: {
           status: statusOnAssignment(mergedDto.executantIds),
+          assignedAt: instruction.assignedAt ?? new Date(),
           assignNote: dto.note ?? undefined,
           assignees: {
             deleteMany: {},

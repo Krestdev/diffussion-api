@@ -7,7 +7,6 @@ import {
 import {
   ContractStatus,
   CourrierDirection,
-  CourrierStatus,
   DossierStatus,
   Prisma,
   ProjectStatus,
@@ -34,6 +33,7 @@ import {
   findOrCreateCorrespondent,
 } from '../../common/utils/referential-guards';
 import { DatabaseService } from '../../database/database.service';
+import { cascadeProjectStatus, COURRIER_DONE } from './project-cascade';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { overdueWhere } from '../../instructions/instruction-overdue';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -57,14 +57,7 @@ const NEXT_STATUSES: Record<ProjectStatus, ProjectStatus[]> = {
   [ProjectStatus.ARCHIVED]: [ProjectStatus.CLOSED],
 };
 
-// A courrier in one of these is done with: neither in progress nor waiting.
-export const COURRIER_DONE: CourrierStatus[] = [
-  CourrierStatus.CLOTURE,
-  CourrierStatus.ARCHIVE,
-  CourrierStatus.ANNULE,
-  CourrierStatus.ENVOYE,
-  CourrierStatus.DECHARGE,
-];
+export { COURRIER_DONE };
 
 /**
  * Projects. Each belongs to one site: seen by that site's users only, and
@@ -97,7 +90,7 @@ export class ProjectService {
     } = dto;
     const scope = await this.rbac.managedSites(
       actingUserId,
-      PermissionCode.AdminManageReferentials,
+      PermissionCode.ProjectCreate,
     );
     assertAdministers(scope);
     let siteId = requestedSiteId;
@@ -111,7 +104,7 @@ export class ProjectService {
       scope,
       siteId,
       'Ce projet',
-      PermissionCode.AdminManageReferentials,
+      PermissionCode.ProjectCreate,
     );
     await assertSiteExists(this.database, siteId);
     await this.assertLinks(data, undefined, siteId);
@@ -257,20 +250,29 @@ export class ProjectService {
     ) {
       throw new BadRequestException('A note only goes with unarchiving');
     }
-    return this.database.project.update({
-      where: { id },
-      data: {
-        ...data,
-        ...dates,
-        maitreOuvrageId: await this.maitreOuvrageId(
-          data,
-          maitreOuvrageName,
-          project.siteId,
-        ),
-        ...(statusChanged ? statusChange(project.status, status, reason) : {}),
+    const change = statusChanged
+      ? statusChange(project.status, status, reason)
+      : undefined;
+    const maitreOuvrageId = await this.maitreOuvrageId(
+      data,
+      maitreOuvrageName,
+      project.siteId,
+    );
+    const save = (db: Prisma.TransactionClient) =>
+      db.project.update({
+        where: { id },
+        data: { ...data, ...dates, maitreOuvrageId, ...change },
+        include: projectInclude,
+      });
+    if (!change) return save(this.database);
+    // Everything in the project follows its status, or nothing does.
+    return this.database.$transaction(
+      async (tx) => {
+        await cascadeProjectStatus(tx, project, status!, change);
+        return save(tx);
       },
-      include: projectInclude,
-    });
+      { timeout: 60_000 },
+    );
   }
 
   @AuditLog({
@@ -280,7 +282,11 @@ export class ProjectService {
   })
   async remove(id: string, actingUserId: string) {
     const project = await this.findOne(id);
-    await this.assertManages(project.siteId, actingUserId);
+    await this.assertManages(
+      project.siteId,
+      actingUserId,
+      PermissionCode.ProjectArchive,
+    );
     try {
       await this.database.project.delete({ where: { id } });
     } catch (error) {
@@ -371,12 +377,12 @@ export class ProjectService {
     return site ? { ...site, ...visibleProjectWhere(userId) } : {};
   }
 
-  // A project is managed by its site's responsible, whoever holds
-  // ADMIN_MANAGE_REFERENTIALS at its site, or a platform administrator.
+  // A project is managed by its site's responsible, whoever holds the
+  // permission at its site, or a platform administrator.
   private async assertManages(
     siteId: string,
     userId: string,
-    permission = PermissionCode.AdminManageReferentials,
+    permission = PermissionCode.ProjectUpdate,
   ) {
     await this.rbac.assertManagesSite(userId, permission, siteId, 'Ce projet');
   }

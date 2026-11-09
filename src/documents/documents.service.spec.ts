@@ -37,7 +37,11 @@ describe('DocumentsService', () => {
       delete: jest.fn(),
       getSignedDownloadUrl: jest.fn(),
     };
-    rbac = { hasGlobalPermission: jest.fn().mockResolvedValue(false) };
+    rbac = {
+      hasGlobalPermission: jest.fn().mockResolvedValue(false),
+      resolveSiteId: jest.fn().mockResolvedValue('s-1'),
+      worksAtSite: jest.fn().mockResolvedValue(true),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [

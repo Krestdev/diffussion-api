@@ -18,6 +18,8 @@ import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { SetReferentialAccessDto } from '../project/dto/set-access.dto';
@@ -40,11 +42,13 @@ export class ContractController {
   // The responsible of its project's site, or a platform administrator —
   // checked in the service (also for the routes below).
   @Post()
+  @RequirePermission(PermissionCode.ContractCreate)
   create(@Body() dto: CreateContractDto, @CurrentUser() user: JwtPayload) {
     return this.contractService.create(dto, user.sub);
   }
 
   @Get()
+  @RequirePermission(PermissionCode.ContractRead)
   findAll(
     @Query() query: FindContractsQueryDto,
     @CurrentUser() user: JwtPayload,
@@ -54,12 +58,14 @@ export class ContractController {
 
   // Declared before ':id' so "types" isn't parsed as an id.
   @Get('types')
+  @RequirePermission(PermissionCode.ContractRead)
   types() {
     return this.contractService.types();
   }
 
   // A contract restricted to others answers 404.
   @Get(':id')
+  @RequirePermission(PermissionCode.ContractRead)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayload,
@@ -68,6 +74,7 @@ export class ContractController {
   }
 
   @Patch(':id')
+  @RequirePermission(PermissionCode.ContractUpdate)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateContractDto,
@@ -77,6 +84,7 @@ export class ContractController {
   }
 
   @Post(':id/archive')
+  @RequirePermission(PermissionCode.ContractArchive)
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
@@ -86,6 +94,7 @@ export class ContractController {
   }
 
   @Post(':id/unarchive')
+  @RequirePermission(PermissionCode.ContractArchive)
   unarchive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RestoreNoteDto,
@@ -95,6 +104,7 @@ export class ContractController {
   }
 
   @Delete(':id')
+  @RequirePermission(PermissionCode.ContractArchive)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,
@@ -104,6 +114,7 @@ export class ContractController {
   }
 
   @Get(':id/access')
+  @RequirePermission(PermissionCode.ContractRead)
   getAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayload,
@@ -123,6 +134,7 @@ export class ContractController {
   }
 
   @Get(':id/historique')
+  @RequirePermission(PermissionCode.ContractRead)
   history(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,

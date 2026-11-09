@@ -296,9 +296,47 @@ describe('MailService', () => {
       });
     });
 
+    describe('editing an effet', () => {
+      const entrant = {
+        direction: CourrierDirection.ENTRANT,
+        dossierId: null,
+        createdById: 'author',
+        ownerId: 'owner',
+        supervisorId: null,
+      };
+
+      beforeEach(() => {
+        database.courrier.findUnique.mockResolvedValue(entrant);
+        database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      });
+
+      it('is refused to someone who only sees it', async () => {
+        rbac.hasPermissionAtSite = jest.fn().mockResolvedValue(false);
+
+        await expect(service.assertMayEdit('c-1', 'u-1')).rejects.toThrow(
+          /COURRIER_UPDATE/,
+        );
+      });
+
+      it('is open to whoever has it in charge', async () => {
+        rbac.hasPermissionAtSite = jest.fn().mockResolvedValue(false);
+
+        await expect(
+          service.assertMayEdit('c-1', 'owner'),
+        ).resolves.toBeUndefined();
+      });
+
+      it('is open to the holder of the permission at its site', async () => {
+        rbac.hasPermissionAtSite = jest.fn().mockResolvedValue(true);
+
+        await expect(
+          service.assertMayEdit('c-1', 'u-1'),
+        ).resolves.toBeUndefined();
+      });
+    });
+
     it("gives nothing for a site the user doesn't work on, even an effet entrusted to them", async () => {
-      rbac.sitesWithPermission = jest.fn().mockResolvedValue(['s-A']);
-      database.user.findUnique.mockResolvedValue({ siteId: 's-A' });
+      rbac.worksAtSite = jest.fn().mockResolvedValue(false);
 
       await service.findIncoming({ siteId: 's-B' }, 'u-1');
 
@@ -312,7 +350,7 @@ describe('MailService', () => {
     });
 
     it('keeps the requested site when the user may read effets there', async () => {
-      rbac.sitesWithPermission = jest.fn().mockResolvedValue(['s-A']);
+      rbac.worksAtSite = jest.fn().mockResolvedValue(true);
 
       await service.findIncoming({ siteId: 's-A' }, 'u-1');
 
@@ -1460,6 +1498,7 @@ describe('MailService', () => {
             data: {
               status: CourrierStatus.EN_ATTENTE_VALIDATION,
               submittedAt: expect.any(Date) as Date,
+              reference: `SOR-${new Date().getFullYear()}-000007`,
             },
           }),
         );
@@ -1516,7 +1555,7 @@ describe('MailService', () => {
             approvedById: 'u-chef',
           },
         });
-        // An approved sortant gets the year's next outgoing reference.
+        // Submitted before references were given at submission.
         expect(database.courrier.update).toHaveBeenCalledWith({
           where: { id: 'c-1' },
           data: { reference: `SOR-${new Date().getFullYear()}-000007` },

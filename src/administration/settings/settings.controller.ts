@@ -15,6 +15,9 @@ import type { Response } from 'express';
 import { memoryStorage } from 'multer';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
 import {
   DocumentIdentityService,
@@ -28,7 +31,7 @@ import { SettingsService } from './settings.service';
 
 @ApiTags('settings')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 @Controller('settings')
 export class SettingsController {
   constructor(
@@ -54,6 +57,7 @@ export class SettingsController {
 
   // PA·9 — the module's notifications: every event, in-app / email.
   @Get('notifications')
+  @RequirePermission(PermissionCode.SettingsRead)
   getNotifications(
     @Query() query: SettingsQueryDto,
     @CurrentUser() user: JwtPayload,

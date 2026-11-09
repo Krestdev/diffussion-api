@@ -61,7 +61,11 @@ export class CorrespondantService {
     operation: 'CREATE',
   })
   async create(dto: CreateCorrespondentDto, actingUserId: string) {
-    await this.assertManages(dto.siteId, actingUserId);
+    await this.assertManages(
+      dto.siteId,
+      actingUserId,
+      PermissionCode.CorrespondentCreate,
+    );
     await assertSiteExists(this.database, dto.siteId);
     if (dto.typeId) await this.assertTypeUsable(dto.typeId, dto.siteId);
     return createWithUniqueReference('CP', (code) =>
@@ -150,7 +154,26 @@ export class CorrespondantService {
     actingUserId: string,
   ) {
     const existing = await this.findOne(uuid);
-    await this.assertManages(existing.siteId, actingUserId);
+    // Turning it off or on needs CORRESPONDENT_ARCHIVE, and only that.
+    const statusChanges =
+      dto.status !== undefined && dto.status !== existing.status;
+    if (statusChanges) {
+      await this.assertManages(
+        existing.siteId,
+        actingUserId,
+        PermissionCode.CorrespondentArchive,
+      );
+    }
+    const changesOtherFields = Object.entries(dto).some(
+      ([field, value]) => field !== 'status' && value !== undefined,
+    );
+    if (!statusChanges || changesOtherFields) {
+      await this.assertManages(
+        existing.siteId,
+        actingUserId,
+        PermissionCode.CorrespondentUpdate,
+      );
+    }
     if (dto.typeId && dto.typeId !== existing.typeId) {
       await this.assertTypeUsable(dto.typeId, existing.siteId);
     }
@@ -176,7 +199,11 @@ export class CorrespondantService {
   })
   async remove(uuid: string, actingUserId: string) {
     const existing = await this.findOne(uuid);
-    await this.assertManages(existing.siteId, actingUserId);
+    await this.assertManages(
+      existing.siteId,
+      actingUserId,
+      PermissionCode.CorrespondentArchive,
+    );
     try {
       await this.database.correspondent.delete({ where: { id: uuid } });
     } catch (error) {
@@ -305,10 +332,14 @@ export class CorrespondantService {
     });
   }
 
-  private async assertManages(siteId: string, userId: string) {
+  private async assertManages(
+    siteId: string,
+    userId: string,
+    permission: PermissionCode,
+  ) {
     await this.rbac.assertManagesSite(
       userId,
-      PermissionCode.AdminManageReferentials,
+      permission,
       siteId,
       'Cet expéditeur',
     );

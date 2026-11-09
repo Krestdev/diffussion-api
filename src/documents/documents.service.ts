@@ -51,6 +51,7 @@ export class DocumentsService {
     if (dto.contractId) {
       await this.assertContractOpen(dto.contractId);
     }
+    await this.assertOnCallersSite(dto, uploadedById);
 
     // Null only for a sortant draft not yet attached to its dossier: its
     // letter can be uploaded before the dossier is chosen.
@@ -173,6 +174,32 @@ export class DocumentsService {
     const document = await this.findOne(id, actingUserId);
     await this.storage.delete(document.storageKey);
     await this.database.document.delete({ where: { id } });
+  }
+
+  // Nothing is added to another site's dossier, effet, livrable or contract.
+  private async assertOnCallersSite(dto: UploadDocumentDto, userId: string) {
+    const siteId = dto.contractId
+      ? (
+          await this.database.contract.findUnique({
+            where: { id: dto.contractId },
+            select: { project: { select: { siteId: true } } },
+          })
+        )?.project?.siteId
+      : dto.dossierId
+        ? await this.rbac.resolveSiteId('dossier', dto.dossierId)
+        : dto.courrierId
+          ? await this.rbac.resolveSiteId('courrier', dto.courrierId)
+          : await this.rbac.resolveSiteId('livrable', dto.livrableId!);
+    if (
+      siteId &&
+      !(await this.rbac.worksAtSite(
+        userId,
+        PermissionCode.CourrierRead,
+        siteId,
+      ))
+    ) {
+      throw new ForbiddenException('Ce document relève d’un autre site');
+    }
   }
 
   // RG-DOC-003: Document read access is independent from the dossier.

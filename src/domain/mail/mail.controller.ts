@@ -244,17 +244,24 @@ export class MailController {
   }
 
   @Patch(':id')
-  update(
+  async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateMailDto,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
+    await this.mailService.assertVisible(id, user.sub);
+    await this.mailService.assertMayEdit(id, user.sub);
     return this.mailService.update(id, dto, user.sub);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    await this.mailService.assertVisible(id, user.sub);
+    await this.mailService.assertMayEdit(id, user.sub);
     return this.mailService.remove(id);
   }
 
@@ -368,7 +375,13 @@ export class MailController {
 
   // A sortant needs its reason ({ reason }, 10 characters at least).
   @Post(':id/cancel')
-  cancel(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CancelMailDto) {
+  async cancel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CancelMailDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    await this.mailService.assertVisible(id, user.sub);
+    await this.mailService.assertMayEdit(id, user.sub);
     return this.mailService.cancel(id, dto?.reason);
   }
 
@@ -440,12 +453,13 @@ export class MailController {
     },
   })
   @UseInterceptors(FileInterceptor('file', attachmentUploadOptions()))
-  discharge(
+  async discharge(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DischargeMailDto,
     @UploadedFile() file: Express.Multer.File | undefined,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
+    await this.mailService.assertVisible(id, user.sub);
     return this.mailService.discharge(id, user.sub, dto, file);
   }
 

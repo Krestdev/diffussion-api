@@ -42,13 +42,16 @@ export class SiteController {
   }
 
   @Get()
-  findAll(@Query() query: FindSitesQueryDto) {
-    return this.siteService.findAll(query);
+  findAll(@Query() query: FindSitesQueryDto, @CurrentUser() user: JwtPayload) {
+    return this.siteService.findAll(query, user.sub);
   }
 
   @Get(':uuid')
-  findOne(@Param('uuid', ParseUUIDPipe) uuid: string) {
-    return this.siteService.findOne(uuid);
+  findOne(
+    @Param('uuid', ParseUUIDPipe) uuid: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.siteService.findVisible(uuid, user.sub);
   }
 
   // A platform administrator, or the site's responsible for their own site

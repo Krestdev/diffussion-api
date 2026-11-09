@@ -105,7 +105,11 @@ export class InstructionsController {
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    await this.instructionsService.assertVisible(id, user.sub);
     return this.instructionsService.findOne(id);
   }
 
@@ -249,11 +253,13 @@ export class InstructionsController {
   }
 
   @Get(':id/historique')
-  historique(
+  async historique(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
     @Query('skip') skip?: string,
     @Query('take') take?: string,
   ) {
+    await this.instructionsService.assertVisible(id, user.sub);
     return this.instructionsService.historique(
       id,
       skip ? parseInt(skip, 10) : 0,

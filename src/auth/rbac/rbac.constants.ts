@@ -75,6 +75,9 @@ export enum PermissionCode {
   CorrespondentCreate = 'CORRESPONDENT_CREATE',
   CorrespondentUpdate = 'CORRESPONDENT_UPDATE',
   CorrespondentArchive = 'CORRESPONDENT_ARCHIVE',
+  ProjectRead = 'PROJECT_READ',
+  ProjectCreate = 'PROJECT_CREATE',
+  ProjectUpdate = 'PROJECT_UPDATE',
   ProjectArchive = 'PROJECT_ARCHIVE',
   CourrierUpdate = 'COURRIER_UPDATE',
   CourrierArchive = 'COURRIER_ARCHIVE',
@@ -149,6 +152,9 @@ export const PERMISSION_LABELS: Record<PermissionCode, string> = {
   [PermissionCode.CorrespondentCreate]: 'Créer un correspondant',
   [PermissionCode.CorrespondentUpdate]: 'Modifier un correspondant',
   [PermissionCode.CorrespondentArchive]: 'Archiver un correspondant',
+  [PermissionCode.ProjectRead]: 'Consulter les projets',
+  [PermissionCode.ProjectCreate]: 'Créer un projet',
+  [PermissionCode.ProjectUpdate]: 'Modifier un projet',
   [PermissionCode.ProjectArchive]: 'Archiver un projet',
   [PermissionCode.CourrierUpdate]: 'Modifier un effet entrant',
   [PermissionCode.CourrierArchive]: 'Archiver un effet',
@@ -182,3 +188,40 @@ export const PLATFORM_PERMISSIONS: ReadonlySet<PermissionCode> = new Set([
   PermissionCode.AdminManageCategories,
   PermissionCode.DashboardGlobalRead,
 ]);
+
+// Managing these includes reading them.
+const INCLUDED_READ = new Map<PermissionCode, PermissionCode>([
+  [PermissionCode.AdminManageRoles, PermissionCode.RolesRead],
+  [PermissionCode.AdminManageSettings, PermissionCode.SettingsRead],
+]);
+
+/** Adds to `codes` the read permissions their management permissions include. */
+export function addIncludedReads(codes: Set<string>) {
+  for (const [manage, read] of INCLUDED_READ) {
+    if (codes.has(manage)) codes.add(read);
+  }
+}
+
+/** `permission` and the permissions that include it. */
+export function permissionsGranting(
+  permission: PermissionCode,
+): PermissionCode[] {
+  return [
+    permission,
+    ...[...INCLUDED_READ]
+      .filter(([, read]) => read === permission)
+      .map(([manage]) => manage),
+  ];
+}
+
+/**
+ * What a site's responsible holds at that site, and only there, without any
+ * role: everything but the platform's own permissions and the creation of
+ * sites. A site's responsible is its administrator.
+ */
+export const SITE_RESPONSIBLE_PERMISSIONS: readonly PermissionCode[] =
+  Object.values(PermissionCode).filter(
+    (code) =>
+      !PLATFORM_PERMISSIONS.has(code) &&
+      code !== PermissionCode.AdminManageSites,
+  );

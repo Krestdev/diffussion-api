@@ -218,9 +218,30 @@ describe('UsersService', () => {
       ]);
     });
 
+    it('keeps a global grant still listed instead of tying it to the site', async () => {
+      database.user.findUnique.mockResolvedValue({ id: 'u-2', siteId: 's-1' });
+      database.userRole.findMany.mockImplementation(
+        ({ where }: { where: { siteId?: null } }) =>
+          Promise.resolve(where.siteId === null ? [{ roleId: 'r-g' }] : []),
+      );
+
+      await service.update('u-2', { roleIds: ['r-g', 'r-1'] }, 'super-admin');
+
+      const { data } = database.user.update.mock.calls[0][0] as {
+        data: { userRoles: { deleteMany: unknown; create: unknown } };
+      };
+      expect(data.userRoles.deleteMany).toEqual({
+        NOT: { siteId: null, roleId: { in: ['r-g'] } },
+      });
+      expect(data.userRoles.create).toEqual([{ roleId: 'r-1', siteId: 's-1' }]);
+    });
+
     it("moves a user's roles along when moving them to another site", async () => {
       database.user.findUnique.mockResolvedValue({ id: 'u-2', siteId: 's-1' });
-      database.userRole.findMany.mockResolvedValue([{ roleId: 'r-1' }]);
+      database.userRole.findMany.mockImplementation(
+        ({ where }: { where: { siteId?: null } }) =>
+          Promise.resolve(where.siteId === null ? [] : [{ roleId: 'r-1' }]),
+      );
 
       await service.update('u-2', { siteId: 's-2' }, 'super-admin');
 

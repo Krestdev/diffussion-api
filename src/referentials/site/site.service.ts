@@ -110,11 +110,38 @@ export class SiteService {
     );
   }
 
-  async findAll(query: FindSitesQueryDto = {}) {
+  // The whole list for the platform; otherwise the user's own site, the one
+  // they are responsible of, and those delegated to them.
+  private async visibleTo(userId: string): Promise<Prisma.SiteWhereInput> {
+    const [sites, dashboards] = await Promise.all([
+      this.rbac.hasGlobalPermission(userId, PermissionCode.AdminManageSites),
+      this.rbac.hasGlobalPermission(userId, PermissionCode.DashboardGlobalRead),
+    ]);
+    if (sites || dashboards) return {};
+    return {
+      OR: [
+        { users: { some: { id: userId } } },
+        { responsibleId: userId },
+        { delegations: { some: { delegataireId: userId } } },
+      ],
+    };
+  }
+
+  async findVisible(uuid: string, userId: string) {
+    const site = await this.database.site.findFirst({
+      where: { id: uuid, AND: [await this.visibleTo(userId)] },
+      include: includeResponsible,
+    });
+    if (!site) throw new NotFoundException(`Site ${uuid} not found`);
+    return site;
+  }
+
+  async findAll(query: FindSitesQueryDto = {}, userId?: string) {
     const contains = query.search
       ? { contains: query.search, mode: 'insensitive' as const }
       : undefined;
     const where: Prisma.SiteWhereInput = {
+      AND: userId ? [await this.visibleTo(userId)] : [],
       status: query.status,
       responsibleId: query.responsibleId,
       city: query.city

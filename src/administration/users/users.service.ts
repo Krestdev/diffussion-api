@@ -258,6 +258,25 @@ export class UsersService {
       .filter((name): name is string => Boolean(name))
       .sort();
 
+    // A global grant isn't turned into a grant at the user's site: it stays
+    // if the role is still listed, and always for a site administrator, who
+    // has no say on platform rights.
+    const keptGlobal = nextRoleIds
+      ? (
+          await this.database.userRole.findMany({
+            where: { userId: id, siteId: null },
+            select: { roleId: true },
+          })
+        )
+          .map((grant) => grant.roleId)
+          .filter(
+            (roleId) =>
+              siteId !== null &&
+              roleId !== undefined &&
+              (scope !== 'ALL' || nextRoleIds.includes(roleId)),
+          )
+      : [];
+
     // Guarded: replacing the role set may strip the last admin's rights.
     const user = await this.rbac.withAdminCoverage((tx) =>
       tx.user.update({
@@ -272,8 +291,15 @@ export class UsersService {
           refreshToken: hashedPassword ? null : undefined,
           userRoles: nextRoleIds
             ? {
-                deleteMany: {},
-                create: grantsAt([...new Set(nextRoleIds)], siteId),
+                deleteMany: keptGlobal.length
+                  ? { NOT: { siteId: null, roleId: { in: keptGlobal } } }
+                  : {},
+                create: grantsAt(
+                  [...new Set(nextRoleIds)].filter(
+                    (roleId) => !keptGlobal.includes(roleId),
+                  ),
+                  siteId,
+                ),
               }
             : undefined,
         },

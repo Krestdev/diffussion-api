@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -65,7 +66,22 @@ export class CriterionTemplateService {
 
   // The common criteria plus those of one site: `siteId`, else the caller's
   // own (every site's for a platform administrator).
+  private async assertReadsSite(siteId: string, userId: string) {
+    if (
+      !(await this.rbac.worksAtSite(
+        userId,
+        PermissionCode.AnalysisRead,
+        siteId,
+      ))
+    ) {
+      throw new ForbiddenException('Ces critères appartiennent à un autre site');
+    }
+  }
+
   async findAll(query: FindCriteriaQueryDto = {}, actingUserId?: string) {
+    if (query.siteId && actingUserId) {
+      await this.assertReadsSite(query.siteId, actingUserId);
+    }
     return this.database.analysisCriterionTemplate.findMany({
       where: await this.offeredAt(query.siteId, actingUserId),
       orderBy: [{ order: 'asc' }, { label: 'asc' }],
@@ -135,6 +151,26 @@ export class CriterionTemplateService {
    * ones — the defaults until an admin changes them. `inherited` says
    * whether a site uses the common settings.
    */
+  async getSettingsFor(siteId: string | undefined, userId: string) {
+    if (siteId) await this.assertReadsSite(siteId, userId);
+    return this.getSettings(siteId);
+  }
+
+  async findOneFor(id: string, userId: string) {
+    const template = await this.findOne(id);
+    if (
+      template.siteId &&
+      !(await this.rbac.worksAtSite(
+        userId,
+        PermissionCode.AnalysisRead,
+        template.siteId,
+      ))
+    ) {
+      throw new NotFoundException(`Criterion template ${id} not found`);
+    }
+    return template;
+  }
+
   async getSettings(siteId?: string | null) {
     if (siteId) {
       const own = await this.database.analysisSiteSettings.findUnique({

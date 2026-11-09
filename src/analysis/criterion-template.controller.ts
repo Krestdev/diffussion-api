@@ -60,8 +60,11 @@ export class CriterionTemplateController {
   // Declared before ':id' so "settings" isn't parsed as an id.
   @Get('settings')
   @RequirePermission(PermissionCode.AnalysisRead)
-  getSettings(@Query() query: AnalysisSettingsQueryDto) {
-    return this.templates.getSettings(query.siteId);
+  getSettings(
+    @Query() query: AnalysisSettingsQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.templates.getSettingsFor(query.siteId, user.sub);
   }
 
   @Patch('settings')
@@ -74,8 +77,11 @@ export class CriterionTemplateController {
 
   @Get(':id')
   @RequirePermission(PermissionCode.AnalysisRead)
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.templates.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.templates.findOneFor(id, user.sub);
   }
 
   @Patch(':id')

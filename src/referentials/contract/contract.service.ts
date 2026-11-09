@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   ContractStatus,
+  ProjectStatus,
   Prisma,
   UserStatus,
 } from '../../../generated/prisma/client';
@@ -99,9 +100,11 @@ export class ContractService {
   async create(dto: CreateContractDto, actingUserId: string) {
     const { startDate, endDate, signedAt, authorizedUserIds, ...data } = dto;
     await this.assertTypeUsable(dto.type);
+    await this.assertProjectOpen(dto.projectId);
     await this.assertManages(
       await this.siteOfProject(dto.projectId ?? null),
       actingUserId,
+      PermissionCode.ContractCreate,
     );
     await this.assertLinks(data);
     const dates = toDates(startDate, endDate);
@@ -225,7 +228,11 @@ export class ContractService {
   async update(id: string, dto: UpdateContractDto, actingUserId: string) {
     const existing = await this.findOne(id);
     const siteId = await this.siteOfProject(existing.projectId);
-    await this.assertManages(siteId, actingUserId);
+    await this.assertManages(
+      siteId,
+      actingUserId,
+      PermissionCode.ContractUpdate,
+    );
     // It stays on its site: moved to another project of the same site only.
     if (
       dto.projectId !== undefined &&
@@ -277,6 +284,7 @@ export class ContractService {
     await this.assertManages(
       await this.siteOfProject(contract.projectId),
       actingUserId,
+      PermissionCode.ContractArchive,
     );
     if (contract.status === ContractStatus.ARCHIVED) {
       throw new BadRequestException('This contract is already archived');
@@ -304,6 +312,7 @@ export class ContractService {
     await this.assertManages(
       await this.siteOfProject(contract.projectId),
       actingUserId,
+      PermissionCode.ContractArchive,
     );
     if (contract.status !== ContractStatus.ARCHIVED) {
       throw new BadRequestException('This contract is not archived');
@@ -329,6 +338,7 @@ export class ContractService {
     await this.assertManages(
       await this.siteOfProject(contract.projectId),
       actingUserId,
+      PermissionCode.ContractArchive,
     );
     if (contract._count.dossiers > 0) {
       throw new ConflictException(
@@ -450,6 +460,22 @@ export class ContractService {
     return site ? { project: site, ...visibleContractWhere(userId) } : {};
   }
 
+  private async assertProjectOpen(projectId?: string | null) {
+    if (!projectId) return;
+    const project = await this.database.project.findUnique({
+      where: { id: projectId },
+      select: { name: true, status: true },
+    });
+    if (
+      project?.status === ProjectStatus.CLOSED ||
+      project?.status === ProjectStatus.ARCHIVED
+    ) {
+      throw new BadRequestException(
+        `The project "${project.name}" is closed — nothing new can be added to it`,
+      );
+    }
+  }
+
   private async siteOfProject(projectId: string | null) {
     if (!projectId) return null;
     const project = await this.database.project.findUnique({
@@ -465,13 +491,12 @@ export class ContractService {
   // A contract is managed by the responsible of its project's site, whoever
   // holds ADMIN_MANAGE_REFERENTIALS there, or a platform administrator (the
   // only one for a contract without project).
-  private async assertManages(siteId: string | null, userId: string) {
-    await this.rbac.assertManagesSite(
-      userId,
-      PermissionCode.AdminManageReferentials,
-      siteId,
-      'Ce contrat',
-    );
+  private async assertManages(
+    siteId: string | null,
+    userId: string,
+    permission: PermissionCode,
+  ) {
+    await this.rbac.assertManagesSite(userId, permission, siteId, 'Ce contrat');
   }
 
   // A contract the user may not open is reported as not found.

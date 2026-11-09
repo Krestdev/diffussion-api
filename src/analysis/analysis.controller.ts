@@ -139,7 +139,7 @@ export class AnalysisController {
   }
 
   @Post(':id/archive')
-  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @RequirePermission(PermissionCode.AnalysisArchive)
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
@@ -148,7 +148,7 @@ export class AnalysisController {
   }
 
   @Post(':id/unarchive')
-  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @RequirePermission(PermissionCode.AnalysisArchive)
   unarchive(@Param('id', ParseUUIDPipe) id: string) {
     return this.sheets.unarchive(id);
   }

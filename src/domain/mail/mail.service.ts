@@ -19,6 +19,7 @@ import {
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { SetOwnerDto } from '../../common/dto/set-owner.dto';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
+import { newOutgoingReference } from './outgoing-reference';
 import {
   assertDossierOpenForActivity,
   markDossierInProgress,
@@ -315,22 +316,6 @@ const SUBMITTABLE_STATUSES: Record<CourrierDirection, CourrierStatus[]> = {
   ],
 };
 
-// The next outgoing reference of the year: SOR-AAAA-NNNNNN, numbered per
-// year by courrier_sequence (one atomic increment, inside the caller's
-// transaction).
-async function nextOutgoingReference(
-  tx: Prisma.TransactionClient,
-  now: Date,
-): Promise<string> {
-  const year = now.getFullYear();
-  const [{ last }] = await tx.$queryRaw<{ last: number }[]>`
-    INSERT INTO "courrier_sequence" ("year", "last") VALUES (${year}, 1)
-    ON CONFLICT ("year")
-    DO UPDATE SET "last" = "courrier_sequence"."last" + 1
-    RETURNING "last"`;
-  return `SOR-${year}-${String(last).padStart(6, '0')}`;
-}
-
 // The next bordereau de transmission number: BT-AAAA-NNNNNN, numbered per
 // year by bordereau_sequence, like the outgoing references.
 async function nextBordereauNumber(
@@ -445,6 +430,10 @@ export class MailService {
       this.database.courrier.create({
         data: {
           ...data,
+          // A sortant's reference is given by its type's model, never typed.
+          ...(dto.direction === CourrierDirection.SORTANT
+            ? { reference: undefined }
+            : {}),
           typeId,
           number,
           receivedAt: received,
@@ -910,6 +899,17 @@ export class MailService {
     if (dto.respondsToId && dto.respondsToId !== courrier.respondsToId) {
       await this.assertRespondsToValid(dto.respondsToId, id);
     }
+    const isSortant = courrier.direction === CourrierDirection.SORTANT;
+    if (
+      isSortant &&
+      courrier.reference &&
+      dto.typeId &&
+      dto.typeId !== courrier.typeId
+    ) {
+      throw new BadRequestException(
+        'Cet effet a déjà sa référence : son type ne peut plus changer',
+      );
+    }
     const typeId = await this.checkEffetFields(
       dto,
       {
@@ -924,6 +924,7 @@ export class MailService {
       where: { id: courrier.id },
       data: {
         ...data,
+        ...(isSortant ? { reference: undefined } : {}),
         typeId,
         receivedAt: receivedAt ? new Date(receivedAt) : undefined,
         dueDate: dueDate ? new Date(dueDate) : undefined,
@@ -1000,11 +1001,24 @@ export class MailService {
         'Nobody can validate this courrier: neither its dossier nor its site has a responsible — name one first',
       );
     }
-    const updated = await this.setStatus(
-      id,
-      CourrierStatus.EN_ATTENTE_VALIDATION,
-      { data: { submittedAt: new Date() } },
-    );
+    // Type, project and dossier are known by now: its reference is given
+    // here, once, with the submission or not at all.
+    const now = new Date();
+    const updated = await this.database.$transaction(async (tx) => {
+      const reference = await newOutgoingReference(tx, id, now);
+      return tx.courrier.update({
+        where: { id },
+        data: {
+          status: CourrierStatus.EN_ATTENTE_VALIDATION,
+          submittedAt: now,
+          ...(reference ? { reference } : {}),
+        },
+        include: mailInclude,
+      });
+    });
+    this.recordCourrierEvent(id, 'COURRIER_EN_ATTENTE_VALIDATION', {
+      reference: updated.reference,
+    });
     this.notify(courrier, [validatorId], userId, {
       type: 'COURRIER_VALIDATION_PENDING',
       message: `« ${courrier.subject} » attend votre validation.`,
@@ -1462,13 +1476,13 @@ export class MailService {
           'This courrier was decided on meanwhile — refresh and try again',
         );
       }
-      // An approved sortant gets its outgoing reference — rolled back with
-      // the rest if anything below fails.
-      if (approved && courrier.direction === CourrierDirection.SORTANT) {
-        await tx.courrier.update({
-          where: { id },
-          data: { reference: await nextOutgoingReference(tx, now) },
-        });
+      // A sortant submitted before references were given at submission
+      // gets its own now — rolled back with the rest if anything fails.
+      const reference = approved
+        ? await newOutgoingReference(tx, id, now)
+        : null;
+      if (reference) {
+        await tx.courrier.update({ where: { id }, data: { reference } });
       }
       await tx.validation.create({
         data: { courrierId: id, validatorId: userId, decision, motif },
@@ -2462,9 +2476,47 @@ export class MailService {
 
   // The sites where the caller may read courriers: as dossiers, and as
   // registrants (for entrants not yet attached to a dossier).
+  // Editing, removing or cancelling: whoever made it or has it in charge, or
+  // the permission at its site. Seeing it is not enough.
+  async assertMayEdit(id: string, userId: string) {
+    const courrier = await this.database.courrier.findUnique({
+      where: { id },
+      select: {
+        direction: true,
+        dossierId: true,
+        createdById: true,
+        ownerId: true,
+        supervisorId: true,
+      },
+    });
+    if (!courrier) throw new NotFoundException(`Courrier ${id} not found`);
+    if (
+      [courrier.createdById, courrier.ownerId, courrier.supervisorId].includes(
+        userId,
+      )
+    ) {
+      return;
+    }
+    const codes = [
+      PermissionCode.CourrierUpdate,
+      PermissionCode.CourrierUpdateDraft,
+      ...(courrier.direction === CourrierDirection.SORTANT
+        ? [PermissionCode.CourrierWriteSortant]
+        : []),
+    ];
+    for (const code of codes) {
+      if (await this.hasPermissionAtCourrierSite(userId, code, courrier)) {
+        return;
+      }
+    }
+    throw new ForbiddenException(
+      `Missing permission at this site: ${PermissionCode.CourrierUpdate}`,
+    );
+  }
+
   // An effet the user may not see (visibleMailsWhere) is reported as not
   // found, like one that doesn't exist.
-  private async assertVisible(id: string, userId: string) {
+  async assertVisible(id: string, userId: string) {
     const courrier = await this.database.courrier.findUnique({
       where: { id },
       select: { direction: true },
@@ -2491,16 +2543,13 @@ export class MailService {
   // personally — that one stays in their lists without the filter.
   private async siteScope(userId: string, siteId?: string) {
     if (!siteId) return undefined;
-    const sites = await this.rbac.sitesWithPermission(
+    return (await this.rbac.worksAtSite(
       userId,
       PermissionCode.CourrierRead,
-    );
-    if (sites === 'ALL' || sites.includes(siteId)) return siteId;
-    const user = await this.database.user.findUnique({
-      where: { id: userId },
-      select: { siteId: true },
-    });
-    return user?.siteId === siteId ? siteId : { in: [] };
+      siteId,
+    ))
+      ? siteId
+      : { in: [] };
   }
 
   private async readableSites(userId: string): Promise<ReadableSites> {

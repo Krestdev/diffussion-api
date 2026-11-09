@@ -16,6 +16,8 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
@@ -35,11 +37,13 @@ export class ProjectController {
   // A site's responsible (their site's) or a platform administrator —
   // checked in the service.
   @Post()
+  @RequirePermission(PermissionCode.ProjectCreate)
   create(@Body() dto: CreateProjectDto, @CurrentUser() user: JwtPayload) {
     return this.projectService.create(dto, user.sub);
   }
 
   @Get()
+  @RequirePermission(PermissionCode.ProjectRead)
   findAll(
     @Query() query: FindProjectsQueryDto,
     @CurrentUser() user: JwtPayload,
@@ -49,6 +53,7 @@ export class ProjectController {
 
   // A project restricted to others answers 404.
   @Get(':id')
+  @RequirePermission(PermissionCode.ProjectRead)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayload,
@@ -57,6 +62,7 @@ export class ProjectController {
   }
 
   @Get(':id/access')
+  @RequirePermission(PermissionCode.ProjectRead)
   getAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: JwtPayload,
@@ -76,6 +82,7 @@ export class ProjectController {
   }
 
   @Get(':id/historique')
+  @RequirePermission(PermissionCode.ProjectRead)
   history(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
@@ -94,6 +101,7 @@ export class ProjectController {
   }
 
   @Delete(':id')
+  @RequirePermission(PermissionCode.ProjectArchive)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,

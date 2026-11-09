@@ -5,7 +5,12 @@ import {
 } from '@nestjs/common';
 import { Prisma, UserStatus } from '../../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
-import { PermissionCode } from './rbac.constants';
+import {
+  addIncludedReads,
+  PermissionCode,
+  permissionsGranting,
+  SITE_RESPONSIBLE_PERMISSIONS,
+} from './rbac.constants';
 import { SiteEntity } from './site-scope.decorator';
 
 // Permissions that must always be held by at least one active user,
@@ -94,6 +99,7 @@ export class RbacService {
    *   PermissionGuard checks ("allowed somewhere").
    * - With `siteId`: only what applies there — global grants, grants at that
    *   site, and delegations at that site.
+   * Either way, what being a site's responsible gives.
    */
   async getPermissionCodes(
     userUuid: string,
@@ -108,7 +114,7 @@ export class RbacService {
         },
       },
     } as const;
-    const [grants, delegated] = await Promise.all([
+    const [grants, delegated, responsibleOf] = await Promise.all([
       this.database.userRole.findMany({
         where: {
           userId: userUuid,
@@ -124,14 +130,20 @@ export class RbacService {
         },
         select: permissionsSelect,
       }),
+      this.database.site.count({
+        where: { responsibleId: userUuid, id: siteId },
+      }),
     ]);
 
-    const codes = new Set<string>();
+    const codes = new Set<string>(
+      responsibleOf > 0 ? SITE_RESPONSIBLE_PERMISSIONS : [],
+    );
     for (const { role } of [...grants, ...delegated]) {
       for (const rolePermission of role.rolePermissions) {
         codes.add(rolePermission.permission.code);
       }
     }
+    addIncludedReads(codes);
     return [...codes];
   }
 
@@ -162,7 +174,7 @@ export class RbacService {
         },
       },
     } as const;
-    const [grants, delegated] = await Promise.all([
+    const [grants, delegated, responsibleOf] = await Promise.all([
       this.database.userRole.findMany({
         where: { userId: userUuid },
         select: permissionsSelect,
@@ -171,10 +183,19 @@ export class RbacService {
         where: { delegataireId: userUuid, ...this.activeDelegationsFilter() },
         select: permissionsSelect,
       }),
+      this.database.site.findMany({
+        where: { responsibleId: userUuid },
+        select: { id: true },
+      }),
     ]);
 
     const global = new Set<string>();
-    const bySite = new Map<string, Set<string>>();
+    const bySite = new Map<string, Set<string>>(
+      responsibleOf.map((site) => [
+        site.id,
+        new Set<string>(SITE_RESPONSIBLE_PERMISSIONS),
+      ]),
+    );
     for (const { siteId, role } of [...grants, ...delegated]) {
       const codes = role.rolePermissions.map((rp) => rp.permission.code);
       const target = siteId
@@ -182,6 +203,8 @@ export class RbacService {
         : global;
       codes.forEach((code) => target.add(code));
     }
+    addIncludedReads(global);
+    bySite.forEach(addIncludedReads);
     return {
       global: [...global],
       bySite: Object.fromEntries(
@@ -289,7 +312,11 @@ export class RbacService {
         userId: userUuid,
         siteId: null,
         role: {
-          rolePermissions: { some: { permission: { code: permission } } },
+          rolePermissions: {
+            some: {
+              permission: { code: { in: permissionsGranting(permission) } },
+            },
+          },
         },
       },
       select: { id: true },
@@ -308,8 +335,8 @@ export class RbacService {
 
   /**
    * Where the user holds `permission`: 'ALL' through a global grant,
-   * otherwise the sites of their site grants and active delegations —
-   * meant for filtering lists by site.
+   * otherwise the sites of their site grants and active delegations, and
+   * those they are the responsible of — meant for filtering lists by site.
    */
   async sitesWithPermission(
     userUuid: string,
@@ -317,10 +344,14 @@ export class RbacService {
   ): Promise<'ALL' | string[]> {
     const grantsPermission = {
       role: {
-        rolePermissions: { some: { permission: { code: permission } } },
+        rolePermissions: {
+          some: {
+            permission: { code: { in: permissionsGranting(permission) } },
+          },
+        },
       },
     };
-    const [grants, delegated] = await Promise.all([
+    const [grants, delegated, responsibleOf] = await Promise.all([
       this.database.userRole.findMany({
         where: { userId: userUuid, ...grantsPermission },
         select: { siteId: true },
@@ -333,14 +364,36 @@ export class RbacService {
         },
         select: { siteId: true },
       }),
+      SITE_RESPONSIBLE_PERMISSIONS.includes(permission)
+        ? this.database.site.findMany({
+            where: { responsibleId: userUuid },
+            select: { id: true },
+          })
+        : Promise.resolve<{ id: string }[]>([]),
     ]);
     if (grants.some((grant) => grant.siteId === null)) return 'ALL';
     return [
       ...new Set([
         ...grants.map((grant) => grant.siteId!),
         ...delegated.map((d) => d.siteId),
+        ...responsibleOf.map((site) => site.id),
       ]),
     ];
+  }
+
+  /** Whether `siteId` is the user's own site, or one where they hold `permission`. */
+  async worksAtSite(
+    userUuid: string,
+    permission: PermissionCode,
+    siteId: string,
+  ): Promise<boolean> {
+    const sites = await this.sitesWithPermission(userUuid, permission);
+    if (sites === 'ALL' || sites.includes(siteId)) return true;
+    const user = await this.database.user.findUnique({
+      where: { id: userUuid },
+      select: { siteId: true },
+    });
+    return user?.siteId === siteId;
   }
 
   /**

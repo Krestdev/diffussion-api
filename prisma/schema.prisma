@@ -336,12 +336,15 @@ model EffetType {
   canListEffets Boolean  @default(false)
   /// An inactive type is no longer offered for new effets.
   active        Boolean  @default(true)
+  /// How its sortants' references are built (see reference-model.ts).
+  referenceModel Json?
   siteId        String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  site      Site?      @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  courriers Courrier[]
+  site               Site?                    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  courriers          Courrier[]
+  referenceSequences EffetReferenceSequence[]
 
   /// A name is unique among the global types and within each site (NULLS
   /// NOT DISTINCT, see the migration).
@@ -934,6 +937,8 @@ model Courrier {
   archiveReason      String?
   /// The status it was archived from, given back by unarchive.
   archivedFromStatus CourrierStatus?
+  /// The status its project's closing took it from; back to it on reopening.
+  statusBeforeProjectClosure CourrierStatus?
 
   /// An entrant handed to its responsible, a sortant sent: when, by whom.
   transmittedAt   DateTime?
@@ -1010,6 +1015,21 @@ model CourrierSequence {
   last Int @default(0)
 
   @@map("courrier_sequence")
+}
+
+/// Last number given to the sortants of a type, per site and period.
+/// `siteKey` is the site's id, "NONE" without a site.
+model EffetReferenceSequence {
+  effetTypeId String
+  siteKey     String @db.VarChar(36)
+  /// "ALL", "2026" or "2026-11", from the type's counterReset.
+  period      String @db.VarChar(7)
+  last        Int    @default(0)
+
+  effetType EffetType @relation(fields: [effetTypeId], references: [id], onDelete: Cascade)
+
+  @@id([effetTypeId, siteKey, period])
+  @@map("effet_reference_sequence")
 }
 
 /// Last bordereau de transmission number (BT-AAAA-NNNNNN) given each year.
@@ -1111,10 +1131,14 @@ model Instruction {
   /// Summary of the corrections last requested on its livrables. The
   /// motifs of non-subscriptions live in InstructionSubscription.
   refusalReason          String?
+  /// Its first assignment; a reassignment leaves it.
+  assignedAt             DateTime?
   /// Free-text note recorded when the task is (re)assigned.
   assignNote             String?
   /// Reason provided when the task is cancelled.
   cancellationReason     String?
+  /// The status its project's closing took it from; back to it on reopening.
+  statusBeforeProjectClosure InstructionStatus?
   /// Comment recorded when the task is closed (TERMINEE).
   closingComment         String?
   createdById            String?

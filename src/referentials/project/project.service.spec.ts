@@ -20,6 +20,7 @@ describe('ProjectService', () => {
     user: Record<string, jest.Mock>;
     contract: Record<string, jest.Mock>;
     dossier: Record<string, jest.Mock>;
+    analysisSheet: Record<string, jest.Mock>;
     courrier: Record<string, jest.Mock>;
     instruction: Record<string, jest.Mock>;
     $transaction: jest.Mock;
@@ -65,14 +66,36 @@ describe('ProjectService', () => {
         findMany: jest.fn().mockResolvedValue([]),
         findUnique: jest.fn().mockResolvedValue({ siteId: 's-1' }),
       },
-      contract: { count: jest.fn().mockResolvedValue(0) },
-      dossier: { count: jest.fn().mockResolvedValue(0) },
-      courrier: { count: jest.fn().mockResolvedValue(0) },
+      contract: {
+        count: jest.fn().mockResolvedValue(0),
+        updateMany: jest.fn(),
+      },
+      dossier: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+        updateMany: jest.fn(),
+      },
+      courrier: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn(),
+      },
       instruction: {
         count: jest.fn().mockResolvedValue(0),
         findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn(),
       },
-      $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
+      analysisSheet: {
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn(),
+      },
+      $transaction: jest.fn((work: unknown) =>
+        typeof work === 'function'
+          ? (work as (tx: unknown) => unknown)(database)
+          : Promise.all(work as unknown[]),
+      ),
     };
     rbac = {
       hasGlobalPermission: jest.fn().mockResolvedValue(false),
@@ -201,6 +224,75 @@ describe('ProjectService', () => {
         status: 'CLOSED',
         archivedAt: null,
         archiveReason: null,
+      });
+    });
+
+    it('closes what the project holds, keeping what each task was', async () => {
+      database.instruction.findMany.mockResolvedValue([
+        { id: 'i-1', status: 'EN_COURS' },
+      ]);
+
+      await service.update('p-1', { status: 'CLOSED' }, 'u-admin');
+
+      expect(database.instruction.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['i-1'] } },
+        data: expect.objectContaining({
+          status: 'ANNULEE',
+          statusBeforeProjectClosure: 'EN_COURS',
+        }),
+      });
+      expect(database.dossier.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'CLOSED' }),
+        }),
+      );
+    });
+
+    it('gives a task back its status on reopening', async () => {
+      database.project.findUnique.mockResolvedValue(
+        project({ status: 'CLOSED', closedAt: new Date() }),
+      );
+      database.instruction.findMany.mockResolvedValue([
+        {
+          id: 'i-1',
+          status: 'ANNULEE',
+          statusBeforeProjectClosure: 'EN_COURS',
+        },
+      ]);
+
+      await service.update('p-1', { status: 'ACTIVE' }, 'u-admin');
+
+      expect(database.instruction.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['i-1'] } },
+        data: {
+          status: 'EN_COURS',
+          cancellationReason: null,
+          statusBeforeProjectClosure: null,
+        },
+      });
+    });
+
+    it('archives its contracts and fiches with it', async () => {
+      database.project.findUnique.mockResolvedValue(
+        project({ status: 'CLOSED' }),
+      );
+      database.analysisSheet.findMany.mockResolvedValue([
+        { id: 'a-1', status: 'SIGNEE' },
+      ]);
+
+      await service.update('p-1', { status: 'ARCHIVED' }, 'u-admin');
+
+      expect(database.contract.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: 'ARCHIVED' }),
+        }),
+      );
+      expect(database.analysisSheet.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['a-1'] } },
+        data: expect.objectContaining({
+          status: 'ARCHIVEE',
+          archivedFromStatus: 'SIGNEE',
+        }),
       });
     });
 

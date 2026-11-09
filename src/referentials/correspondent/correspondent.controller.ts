@@ -17,6 +17,8 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { CorrespondantService } from './correspondent.service';
 import {
@@ -35,6 +37,7 @@ export class CorrespondantController {
   constructor(private readonly correspondentService: CorrespondantService) {}
 
   @Post()
+  @RequirePermission(PermissionCode.CorrespondentCreate)
   create(@Body() dto: CreateCorrespondentDto, @CurrentUser() user: JwtPayload) {
     return this.correspondentService.create(dto, user.sub);
   }
@@ -42,6 +45,7 @@ export class CorrespondantController {
   // The caller's own site's correspondents — every site's for a platform
   // administrator (optionally ?siteId=).
   @Get()
+  @RequirePermission(PermissionCode.CorrespondentRead)
   findAll(
     @Query() query: FindCorrespondantsQueryDto,
     @CurrentUser() user: JwtPayload,
@@ -50,6 +54,7 @@ export class CorrespondantController {
   }
 
   @Get(':uuid')
+  @RequirePermission(PermissionCode.CorrespondentRead)
   findOne(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @CurrentUser() user: JwtPayload,
@@ -67,6 +72,7 @@ export class CorrespondantController {
   }
 
   @Get(':uuid/contacts')
+  @RequirePermission(PermissionCode.CorrespondentRead)
   findContacts(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Query() query: PaginationQueryDto,
@@ -76,6 +82,7 @@ export class CorrespondantController {
   }
 
   @Post(':uuid/contacts')
+  @RequirePermission(PermissionCode.CorrespondentUpdate)
   createContact(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: CreateCorrespondentContactDto,
@@ -85,6 +92,7 @@ export class CorrespondantController {
   }
 
   @Patch(':uuid/contacts/:contactId')
+  @RequirePermission(PermissionCode.CorrespondentUpdate)
   updateContact(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Param('contactId', ParseUUIDPipe) contactId: string,
@@ -100,6 +108,7 @@ export class CorrespondantController {
   }
 
   @Delete(':uuid/contacts/:contactId')
+  @RequirePermission(PermissionCode.CorrespondentUpdate)
   @HttpCode(HttpStatus.NO_CONTENT)
   removeContact(
     @Param('uuid', ParseUUIDPipe) uuid: string,
@@ -110,6 +119,7 @@ export class CorrespondantController {
   }
 
   @Delete(':uuid')
+  @RequirePermission(PermissionCode.CorrespondentArchive)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('uuid', ParseUUIDPipe) uuid: string,

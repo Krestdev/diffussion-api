@@ -74,7 +74,16 @@ export class DocumentIdentityService {
 
   /** Readable by every signed-in user: their own site's by default. */
   async getFor(siteId: string | undefined, userId: string) {
-    return this.get(siteId ?? (await this.ownSite(userId)));
+    const own = await this.ownSite(userId);
+    if (siteId && siteId !== own) {
+      await this.rbac.assertManagesSite(
+        userId,
+        PermissionCode.AdminManageSettings,
+        siteId,
+        'Ce réglage',
+      );
+    }
+    return this.get(siteId ?? own);
   }
 
   /** The logo file in force at `siteId`. */

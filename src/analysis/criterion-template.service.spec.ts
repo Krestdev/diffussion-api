@@ -14,7 +14,11 @@ describe('CriterionTemplateService', () => {
     analysisSiteSettings: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
   };
-  let rbac: { managedSites: jest.Mock; hasGlobalPermission: jest.Mock };
+  let rbac: {
+    managedSites: jest.Mock;
+    hasGlobalPermission: jest.Mock;
+    worksAtSite: jest.Mock;
+  };
 
   const createdData = () =>
     (
@@ -50,6 +54,7 @@ describe('CriterionTemplateService', () => {
     rbac = {
       managedSites: jest.fn().mockResolvedValue(['s-1']),
       hasGlobalPermission: jest.fn().mockResolvedValue(false),
+      worksAtSite: jest.fn().mockResolvedValue(true),
     };
 
     const module: TestingModule = await Test.createTestingModule({
