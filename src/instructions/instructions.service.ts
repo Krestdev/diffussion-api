@@ -50,6 +50,8 @@ import { UpdateInstructionDto } from './dto/update-instruction.dto';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RbacService } from '../auth/rbac/rbac.service';
 import { visibleContractWhere } from '../common/utils/referential-access';
+import { ownSiteFilter } from '../common/utils/site-referentials';
+import { taskOfSite } from '../common/utils/site-where';
 import { StorageService } from '../storage/storage.service';
 import { DeposerLivrablesDto } from './dto/deposer-livrables.dto';
 
@@ -649,8 +651,13 @@ export class InstructionsService {
     return instruction;
   }
 
-  async findAll(query: FindInstructionsQueryDto) {
+  async findAll(query: FindInstructionsQueryDto, userId: string) {
+    const ownSite = await ownSiteFilter(this.rbac, this.database, userId);
     const where: Prisma.InstructionWhereInput = {
+      AND: [
+        ownSite ? taskOfSite(ownSite.siteId) : {},
+        query.siteId ? taskOfSite(query.siteId) : {},
+      ],
       dossierId: query.dossierId,
       courrierId: query.courrierId,
       status: query.status,

@@ -34,6 +34,7 @@ import { assertSiteActive } from '../../common/utils/referential-guards';
 import { assertProjectOfSite } from '../../common/utils/site-referentials';
 import { assertDossierTypeUsable } from '../../referentials/dossier-type/dossier-type.service';
 import { DatabaseService } from '../../database/database.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
 import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
 import { UpdateDossierDto } from './dto/update-dossier.dto';
@@ -94,6 +95,7 @@ export class DossierService {
     private readonly rbac: RbacService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   @AuditLog({
@@ -161,6 +163,9 @@ export class DossierService {
       responsibleId: query.responsibleId,
       projectId: query.projectId,
       contractId: query.contractId,
+      courriers: query.correspondentId
+        ? { some: { correspondentId: query.correspondentId } }
+        : undefined,
       OR: query.search
         ? [
             { title: { contains: query.search, mode: 'insensitive' } },
@@ -406,8 +411,10 @@ export class DossierService {
     action: 'dossier.unarchived',
     entityType: 'dossier',
     operation: 'UPDATE',
+    metadata: (args) => (args[1] ? { note: args[1] } : undefined),
   })
-  async unarchive(id: string) {
+  async unarchive(id: string, note?: string) {
+    void note; // Read by @AuditLog.
     const dossier = await this.findOne(id);
     if (dossier.status !== DossierStatus.ARCHIVED) {
       throw new BadRequestException('Only an archived dossier can be restored');
@@ -541,8 +548,8 @@ export class DossierService {
 
   // Full-replace: the entries given become the complete grant set for this
   // dossier — any existing grant for a user not listed is dropped.
-  async setAccess(id: string, dto: SetAccessDto) {
-    await this.findOne(id);
+  async setAccess(id: string, dto: SetAccessDto, actingUserId: string) {
+    const dossier = await this.findOne(id);
 
     const inconsistent = dto.entries.filter((e) => e.canEdit && !e.canView);
     if (inconsistent.length) {
@@ -584,6 +591,17 @@ export class DossierService {
     ]);
 
     const after = await this.getAccess(id);
+    const couldView = new Set(
+      before.filter((grant) => grant.canView).map((grant) => grant.userId),
+    );
+    await this.notifications.notifyAccessChanged(
+      dto.entries
+        .filter((entry) => entry.canView && !couldView.has(entry.userId))
+        .map((entry) => entry.userId),
+      actingUserId,
+      `Vous avez désormais accès au dossier « ${dossier.title} ».`,
+      id,
+    );
     const summarize = (grants: typeof before) =>
       grants.map((g) => ({
         userId: g.userId,

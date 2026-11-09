@@ -201,7 +201,11 @@ describe('RoleService', () => {
       });
       expect(t.role.update).toHaveBeenCalledWith({
         where: { id: 'r-1' },
-        data: { archivedAt: expect.any(Date), archivedById: 'resp-s1' },
+        data: {
+          archivedAt: expect.any(Date),
+          archivedById: 'resp-s1',
+          formerUsersCount: expect.any(Number),
+        },
       });
       expect(res.holders).toBe(2);
     });
@@ -256,7 +260,7 @@ describe('RoleService', () => {
       await service.restore('r-1', 'resp-s1');
       expect(database.role.update).toHaveBeenCalledWith({
         where: { id: 'r-1' },
-        data: { archivedAt: null, archivedById: null },
+        data: { archivedAt: null, archivedById: null, formerUsersCount: 0 },
       });
     });
   });

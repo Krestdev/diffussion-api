@@ -1,10 +1,26 @@
 import { COURRIER_STATUS_DOC } from './courrier-status.doc';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsUUID } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, IsUUID } from 'class-validator';
 import { CourrierDirection, CourrierStatus } from 'generated/prisma/enums';
 
 export class FindMailsQueryDto {
+  @ApiPropertyOptional({
+    description:
+      'Search in the subject, number, printed reference or correspondent name',
+  })
+  @IsOptional()
+  @IsString()
+  search?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Only this site's effets — within those the caller may already see",
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()

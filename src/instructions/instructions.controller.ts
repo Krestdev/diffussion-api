@@ -75,8 +75,11 @@ export class InstructionsController {
   }
 
   @Get()
-  findAll(@Query() query: FindInstructionsQueryDto) {
-    return this.instructionsService.findAll(query);
+  findAll(
+    @Query() query: FindInstructionsQueryDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.instructionsService.findAll(query, user.sub);
   }
 
   // The "Tâches" page in one call: the caller's own tasks (no permission

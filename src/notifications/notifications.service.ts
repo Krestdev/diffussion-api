@@ -1,5 +1,9 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { NotificationStatus, Prisma } from '../../generated/prisma/client';
+import {
+  NotificationCanal,
+  NotificationStatus,
+  Prisma,
+} from '../../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
 import { ModuleNotificationsService } from '../administration/settings/module-notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
@@ -42,6 +46,31 @@ export class NotificationsService {
       id: notification.id,
     });
     return notification;
+  }
+
+  // A role or an access list changed. Never fails the change itself, and
+  // nobody is told about their own action.
+  async notifyAccessChanged(
+    userIds: string[],
+    actingUserId: string,
+    message: string,
+    dossierId?: string,
+  ) {
+    const recipientIds = [...new Set(userIds)].filter(
+      (id) => id !== actingUserId,
+    );
+    if (recipientIds.length === 0) return;
+    try {
+      await this.create({
+        recipientIds,
+        type: 'ACCESS_CHANGED',
+        message,
+        canal: NotificationCanal.IN_APP,
+        dossierId,
+      });
+    } catch (error) {
+      console.error('Failed to notify an access change', error);
+    }
   }
 
   // Every type a user can turn off, with whether they receive it.

@@ -54,7 +54,7 @@ function zoneOffset(at: number, timeZone: string): number {
 
 // The instant of local midnight, in `timeZone`, of the calendar day
 // (year, month 0-11, day — overflow allowed, e.g. day 0 or month -1).
-function zonedMidnight(
+export function zonedMidnight(
   year: number,
   month: number,
   day: number,
@@ -66,7 +66,7 @@ function zonedMidnight(
 }
 
 // Today's calendar date in `timeZone`, and its weekday (0 = Monday).
-function localToday(now: number, timeZone: string) {
+export function localToday(now: number, timeZone: string) {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat('en-US', {
       timeZone,

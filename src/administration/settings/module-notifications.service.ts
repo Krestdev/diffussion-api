@@ -4,7 +4,11 @@ import { ActivityService } from '../../activity/activity.service';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RbacService, SiteScopeList } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
-import { NOTIFICATION_TYPES } from '../../notifications/notification-types';
+import {
+  NOTIFICATION_DESCRIPTIONS,
+  NOTIFICATION_TYPES,
+  NotificationType,
+} from '../../notifications/notification-types';
 import { UpdateModuleNotificationsDto } from './dto/module-notifications.dto';
 
 const SETTINGS_ID = 1;
@@ -42,6 +46,7 @@ export class ModuleNotificationsService {
     return Object.entries(NOTIFICATION_TYPES).map(([type, label]) => ({
       type,
       label,
+      description: NOTIFICATION_DESCRIPTIONS[type as NotificationType],
       ...DEFAULT_CHANNELS,
       ...common[type],
       ...(siteId ? own[type] : {}),

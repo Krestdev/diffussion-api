@@ -3,6 +3,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import { ActivityService } from '../../activity/activity.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { ContractService } from './contract.service';
 import { withScopeChecks } from '../../auth/rbac/rbac.testing-spec';
 
@@ -48,6 +49,10 @@ describe('ContractService', () => {
         {
           provide: ActivityService,
           useValue: { tryRecord: jest.fn().mockResolvedValue('log-1') },
+        },
+        {
+          provide: NotificationsService,
+          useValue: { notifyAccessChanged: jest.fn() },
         },
         {
           provide: RbacService,

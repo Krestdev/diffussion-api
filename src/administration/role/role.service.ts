@@ -285,11 +285,13 @@ export class RoleService {
         where: { roleId: id, acceptedAt: null, revokedAt: null },
         data: { roleId: replacementId ?? null },
       });
+      const formerUsersCount = new Set(grants.map((grant) => grant.userId))
+        .size;
       await tx.role.update({
         where: { id },
-        data: { archivedAt: now, archivedById: actingUserId },
+        data: { archivedAt: now, archivedById: actingUserId, formerUsersCount },
       });
-      return new Set(grants.map((grant) => grant.userId)).size;
+      return formerUsersCount;
     });
     await this.journal('role.archived', id, {
       metadata: { holders, reassignedToRoleId: replacementId ?? null },
@@ -302,7 +304,7 @@ export class RoleService {
   }
 
   // Back in use, held by nobody: its former holders are not given it back.
-  async restore(id: string, actingUserId: string) {
+  async restore(id: string, actingUserId: string, note?: string) {
     const scope = await this.adminScope(actingUserId);
     const role = await this.ensureExists(id);
     assertInScope(scope, role.siteId);
@@ -311,9 +313,11 @@ export class RoleService {
     }
     await this.database.role.update({
       where: { id },
-      data: { archivedAt: null, archivedById: null },
+      data: { archivedAt: null, archivedById: null, formerUsersCount: 0 },
     });
-    await this.journal('role.restored', id);
+    await this.journal('role.restored', id, {
+      metadata: note ? { note } : undefined,
+    });
     return this.findOne(id, actingUserId);
   }
 

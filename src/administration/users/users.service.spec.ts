@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { MailerService } from '../../mail/mailer.service';
 import { UsersService } from './users.service';
@@ -96,6 +97,10 @@ describe('UsersService', () => {
           useValue: { emitToUsers: jest.fn(), broadcast: jest.fn() },
         },
         { provide: RbacService, useValue: rbac },
+        {
+          provide: NotificationsService,
+          useValue: { notifyAccessChanged: jest.fn() },
+        },
       ],
     }).compile();
 

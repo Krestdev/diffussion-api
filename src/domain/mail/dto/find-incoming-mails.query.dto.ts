@@ -129,6 +129,14 @@ export enum IncomingMailSort {
 export class FindIncomingMailsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     description:
+      "Only this site's effets — within those the caller may already see",
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
+
+  @ApiPropertyOptional({
+    description:
       'Tab: all · toDispatch (RECU, ENREGISTRE) · dispatchPending (EN_ATTENTE_TRANSMISSION) · affected (AFFECTE) · assigned (TRANSMIS) · inTreatment (EN_TRAITEMENT) · closed (CLOTURE) · archived (ARCHIVE) · others (every other status: EN_ATTENTE_VALIDATION, A_CORRIGER, VALIDE, ANNULE...) · dispatched (AFFECTE, TRANSMIS, EN_TRAITEMENT, whose dossier — or contract — is still open: the effets a fiche d’analyse can be opened on)',
   })
   @IsOptional()

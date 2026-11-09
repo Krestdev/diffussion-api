@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { DossierService } from './dossier.service';
 import { DatabaseService } from '../../database/database.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { ActivityService } from '../../activity/activity.service';
 import { DossierStatus } from '../../../generated/prisma/client';
@@ -50,6 +51,10 @@ describe('DossierService', () => {
         DossierService,
         { provide: DatabaseService, useValue: database },
         { provide: RbacService, useValue: rbac },
+        {
+          provide: NotificationsService,
+          useValue: { notifyAccessChanged: jest.fn() },
+        },
         {
           provide: ActivityService,
           useValue: {

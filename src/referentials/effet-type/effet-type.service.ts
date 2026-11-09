@@ -60,7 +60,10 @@ export class EffetTypeService {
       where: {
         AND: [
           await this.visibleTo(actingUserId),
-          query.siteId ? { siteId: query.siteId } : {},
+          // A site's types are its own and the common ones.
+          query.siteId
+            ? { OR: [{ siteId: null }, { siteId: query.siteId }] }
+            : {},
           query.active === undefined ? {} : { active: query.active },
         ],
       },

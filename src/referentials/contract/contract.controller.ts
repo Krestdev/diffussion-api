@@ -14,6 +14,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
@@ -87,9 +88,10 @@ export class ContractController {
   @Post(':id/unarchive')
   unarchive(
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RestoreNoteDto,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.contractService.unarchive(id, user.sub);
+    return this.contractService.unarchive(id, user.sub, dto.note);
   }
 
   @Delete(':id')

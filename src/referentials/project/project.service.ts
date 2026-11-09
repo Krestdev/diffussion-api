@@ -34,6 +34,7 @@ import {
   findOrCreateCorrespondent,
 } from '../../common/utils/referential-guards';
 import { DatabaseService } from '../../database/database.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { overdueWhere } from '../../instructions/instruction-overdue';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { FindProjectsQueryDto } from './dto/find-projects.query.dto';
@@ -78,6 +79,7 @@ export class ProjectService {
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
     private readonly rbac: RbacService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   @AuditLog({
@@ -198,12 +200,44 @@ export class ProjectService {
     action: 'project.updated',
     entityType: 'project',
     operation: 'UPDATE',
+    metadata: (args) => {
+      const { note } = args[1] as UpdateProjectDto;
+      return note ? { note } : undefined;
+    },
   })
   async update(id: string, dto: UpdateProjectDto, actingUserId: string) {
     const project = await this.findOne(id);
-    await this.assertManages(project.siteId, actingUserId);
-    const { startDate, endDate, status, reason, maitreOuvrageName, ...data } =
-      dto;
+    const {
+      startDate,
+      endDate,
+      status,
+      reason,
+      note,
+      maitreOuvrageName,
+      ...data
+    } = dto;
+    const archiving =
+      status !== undefined &&
+      status !== project.status &&
+      (status === ProjectStatus.ARCHIVED ||
+        project.status === ProjectStatus.ARCHIVED);
+    if (archiving) {
+      await this.assertManages(
+        project.siteId,
+        actingUserId,
+        PermissionCode.ProjectArchive,
+      );
+    }
+    // Archiving alone needs PROJECT_ARCHIVE only.
+    const changesOtherFields = Object.values({
+      ...data,
+      startDate,
+      endDate,
+      maitreOuvrageName,
+    }).some((value) => value !== undefined);
+    if (!archiving || changesOtherFields) {
+      await this.assertManages(project.siteId, actingUserId);
+    }
     await this.assertLinks(data, project, project.siteId);
     const dates = toDates(startDate, endDate);
     assertDateOrder(
@@ -216,6 +250,12 @@ export class ProjectService {
       !(statusChanged && status === ProjectStatus.ARCHIVED)
     ) {
       throw new BadRequestException('A reason only goes with archiving');
+    }
+    if (
+      note !== undefined &&
+      !(statusChanged && project.status === ProjectStatus.ARCHIVED)
+    ) {
+      throw new BadRequestException('A note only goes with unarchiving');
     }
     return this.database.project.update({
       where: { id },
@@ -287,6 +327,11 @@ export class ProjectService {
       entityId: id,
       changes: { authorized: [before, allowed] },
     });
+    await this.notifications.notifyAccessChanged(
+      allowed.filter((userId) => !before.includes(userId)),
+      actingUserId,
+      `Vous avez désormais accès au projet « ${project.name} ».`,
+    );
     return this.accessList(id);
   }
 
@@ -328,13 +373,12 @@ export class ProjectService {
 
   // A project is managed by its site's responsible, whoever holds
   // ADMIN_MANAGE_REFERENTIALS at its site, or a platform administrator.
-  private async assertManages(siteId: string, userId: string) {
-    await this.rbac.assertManagesSite(
-      userId,
-      PermissionCode.AdminManageReferentials,
-      siteId,
-      'Ce projet',
-    );
+  private async assertManages(
+    siteId: string,
+    userId: string,
+    permission = PermissionCode.AdminManageReferentials,
+  ) {
+    await this.rbac.assertManagesSite(userId, permission, siteId, 'Ce projet');
   }
 
   // A project the user may not open is reported as not found.

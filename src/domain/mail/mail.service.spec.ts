@@ -296,6 +296,32 @@ describe('MailService', () => {
       });
     });
 
+    it("gives nothing for a site the user doesn't work on, even an effet entrusted to them", async () => {
+      rbac.sitesWithPermission = jest.fn().mockResolvedValue(['s-A']);
+      database.user.findUnique.mockResolvedValue({ siteId: 's-A' });
+
+      await service.findIncoming({ siteId: 's-B' }, 'u-1');
+
+      const { where } = database.courrier.findMany.mock.calls[0][0];
+      expect(where.OR[0].AND[1]).toEqual({
+        OR: [
+          { dossier: { siteId: { in: [] } } },
+          { dossierId: null, createdBy: { siteId: { in: [] } } },
+        ],
+      });
+    });
+
+    it('keeps the requested site when the user may read effets there', async () => {
+      rbac.sitesWithPermission = jest.fn().mockResolvedValue(['s-A']);
+
+      await service.findIncoming({ siteId: 's-A' }, 'u-1');
+
+      const { where } = database.courrier.findMany.mock.calls[0][0];
+      expect(where.OR[0].AND[1].OR[0]).toEqual({
+        dossier: { siteId: 's-A' },
+      });
+    });
+
     it('searches subject, number and reference, and includes the whole "to" day', async () => {
       await service.findIncoming(
         {
@@ -308,7 +334,7 @@ describe('MailService', () => {
 
       const { where } = database.courrier.findMany.mock.calls[0][0];
       const [search, received] = where.AND;
-      expect(search.OR).toHaveLength(3);
+      expect(search.OR).toHaveLength(4);
       expect(received.OR[0].receivedAt).toEqual({
         gte: new Date('2026-09-01'),
         lt: new Date('2026-10-01'),
@@ -462,6 +488,21 @@ describe('MailService', () => {
       expect(database.courrier.create.mock.calls[0][0].data.dueDate).toEqual(
         new Date('2026-11-20'),
       );
+    });
+
+    it('refuses a reception date in the future', async () => {
+      const tomorrow = new Date(Date.now() + 86_400_000).toISOString();
+      await expect(
+        service.create(
+          {
+            direction: CourrierDirection.ENTRANT,
+            subject: 'Demande',
+            receivedAt: tomorrow,
+          },
+          'u-agent',
+        ),
+      ).rejects.toThrow('ne peut pas être dans le futur');
+      expect(database.courrier.create).not.toHaveBeenCalled();
     });
 
     it('keeps a deadline given at registration', async () => {

@@ -29,6 +29,7 @@ import {
 } from '../../auth/rbac/rbac.service';
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
 import { DatabaseService } from '../../database/database.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { CreateUserDto } from './dto/create-user.dto';
 import { FindDirectoryQueryDto } from './dto/find-directory.query.dto';
@@ -99,6 +100,7 @@ export class UsersService {
     private readonly realtime: RealtimeGateway,
     private readonly mailer: MailerService,
     private readonly activity: ActivityService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // The audit journal (AU·1): account changes, role grants and profiles.
@@ -281,6 +283,21 @@ export class UsersService {
     this.realtime.broadcast('user:update', { id: user.id });
     const view = toView(user);
     await this.journalUpdate(existing, user, rolesBefore, view, !!password);
+    const rolesAfter = view.roles.map((role) => role.name);
+    const added = rolesAfter.filter((name) => !rolesBefore.includes(name));
+    const removed = rolesBefore.filter((name) => !rolesAfter.includes(name));
+    if (added.length || removed.length) {
+      await this.notifications.notifyAccessChanged(
+        [id],
+        actingUserId,
+        [
+          added.length ? `Rôle attribué : ${added.join(', ')}.` : '',
+          removed.length ? `Rôle retiré : ${removed.join(', ')}.` : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+      );
+    }
     return view;
   }
 

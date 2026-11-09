@@ -1,3 +1,4 @@
+import { NotificationsService } from '../../notifications/notifications.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { RbacService } from '../../auth/rbac/rbac.service';
@@ -14,6 +15,7 @@ describe('ProjectController', () => {
       controllers: [ProjectController],
       providers: [
         ProjectService,
+        { provide: NotificationsService, useValue: {} },
         { provide: DatabaseService, useValue: {} },
         { provide: ActivityService, useValue: {} },
         { provide: RbacService, useValue: {} },

@@ -182,7 +182,7 @@ export class ActivityService {
    * entry belongs to its object's site, else its author's.
    */
   async findAll(query: FindActivityLogsQueryDto, siteIds: 'ALL' | string[]) {
-    const where = this.journalWhere(query, siteIds);
+    const where = await this.journalWhere(query, siteIds);
     const skip = query.skip ?? 0;
     const take = query.take ?? 20;
     const [data, total] = await this.db.$transaction([
@@ -200,7 +200,7 @@ export class ActivityService {
   /** The same entries as findAll, every page, as CSV (`;`-separated). */
   async exportCsv(query: FindActivityLogsQueryDto, siteIds: 'ALL' | string[]) {
     const rows = await this.db.activityLog.findMany({
-      where: this.journalWhere(query, siteIds),
+      where: await this.journalWhere(query, siteIds),
       orderBy: { createdAt: 'desc' },
       take: MAX_EXPORT,
     });
@@ -433,15 +433,36 @@ export class ActivityService {
 
   // ----------------------------------------------------------------- where
 
-  private journalWhere(
+  private async journalWhere(
     query: FindActivityLogsQueryDto,
     siteIds: 'ALL' | string[],
-  ): Prisma.ActivityLogWhereInput {
+  ): Promise<Prisma.ActivityLogWhereInput> {
     const to = query.to ? endOf(query.to) : undefined;
+    // A correspondent's history includes its effets' events.
+    const correspondentId =
+      query.correspondentId ??
+      (query.entityType === 'correspondent' ? query.entityId : undefined);
+    const effets = correspondentId
+      ? await this.db.courrier.findMany({
+          where: { correspondentId },
+          select: { id: true },
+        })
+      : [];
     return {
       AND: [
         USER_ACTIONS,
         sitesWhere(siteIds),
+        correspondentId
+          ? {
+              OR: [
+                { entityType: 'correspondent', entityId: correspondentId },
+                {
+                  entityType: 'Courrier',
+                  entityId: { in: effets.map((effet) => effet.id) },
+                },
+              ],
+            }
+          : {},
         query.siteId ? { siteId: query.siteId } : {},
         query.category?.length ? categoriesWhere(query.category) : {},
         query.action?.length ? { action: { in: query.action } } : {},
@@ -456,8 +477,8 @@ export class ActivityService {
       ],
       parentLogId: null,
       level: query.level,
-      entityType: query.entityType,
-      entityId: query.entityId,
+      entityType: correspondentId ? undefined : query.entityType,
+      entityId: correspondentId ? undefined : query.entityId,
       userId: query.userId,
       createdAt:
         query.from || to

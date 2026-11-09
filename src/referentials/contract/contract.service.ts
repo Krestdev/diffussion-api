@@ -26,6 +26,7 @@ import {
 } from '../../common/utils/referential-access';
 import { assertCorrespondentActive } from '../../common/utils/referential-guards';
 import { DatabaseService } from '../../database/database.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { endingWithin } from '../project/project.service';
 import { CreateContractDto } from './dto/create-contract.dto';
 import { FindContractsQueryDto } from './dto/find-contracts.query.dto';
@@ -55,6 +56,7 @@ export class ContractService {
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
     private readonly rbac: RbacService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // The active contract types (PA·7), in their order — the form's choices.
@@ -132,6 +134,7 @@ export class ContractService {
     const now = new Date();
     const where: Prisma.ContractWhereInput = {
       projectId: query.projectId,
+      project: query.siteId ? { siteId: query.siteId } : undefined,
       status: query.status,
       type: query.type,
       endDate:
@@ -147,7 +150,30 @@ export class ContractService {
         { reference: contains },
         { tenderReference: contains },
       ],
-      AND: [await this.visibleTo(userId)],
+      AND: [
+        await this.visibleTo(userId),
+        query.correspondentId
+          ? {
+              OR: [
+                { clientId: query.correspondentId },
+                {
+                  courriers: {
+                    some: { correspondentId: query.correspondentId },
+                  },
+                },
+                {
+                  dossiers: {
+                    some: {
+                      courriers: {
+                        some: { correspondentId: query.correspondentId },
+                      },
+                    },
+                  },
+                },
+              ],
+            }
+          : {},
+      ],
     };
     const skip = query.skip ?? 0;
     const take = query.take ?? DEFAULT_TAKE;
@@ -270,8 +296,10 @@ export class ContractService {
     action: 'contract.unarchived',
     entityType: 'contract',
     operation: 'UPDATE',
+    metadata: (args) => (args[2] ? { note: args[2] } : undefined),
   })
-  async unarchive(id: string, actingUserId: string) {
+  async unarchive(id: string, actingUserId: string, note?: string) {
+    void note; // Read by @AuditLog.
     const contract = await this.findOne(id);
     await this.assertManages(
       await this.siteOfProject(contract.projectId),
@@ -349,6 +377,11 @@ export class ContractService {
       entityId: id,
       changes: { authorized: [before, allowed] },
     });
+    await this.notifications.notifyAccessChanged(
+      allowed.filter((userId) => !before.includes(userId)),
+      actingUserId,
+      `Vous avez désormais accès au contrat « ${contract.title} ».`,
+    );
     return this.accessList(id);
   }
 

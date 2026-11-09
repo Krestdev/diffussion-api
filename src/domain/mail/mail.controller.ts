@@ -26,6 +26,7 @@ import {
   ATTACHMENT_RULE,
   attachmentUploadOptions,
 } from '../../common/utils/attachment-upload';
+import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
@@ -401,9 +402,10 @@ export class MailController {
   @RequirePermission(PermissionCode.CourrierRead)
   unarchive(
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RestoreNoteDto,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
-    return this.mailService.unarchive(id, user.sub);
+    return this.mailService.unarchive(id, user.sub, dto.note);
   }
 
   // A physical effet expected back is handed back — physical custody is the

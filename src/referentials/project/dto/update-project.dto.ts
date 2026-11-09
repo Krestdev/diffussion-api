@@ -21,4 +21,13 @@ export class UpdateProjectDto extends PartialType(
   @IsString()
   @MaxLength(1000)
   reason?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Why the project is unarchived (ARCHIVED -> CLOSED) — kept in its history',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  note?: string;
 }

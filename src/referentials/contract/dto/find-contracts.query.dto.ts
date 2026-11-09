@@ -15,6 +15,21 @@ import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 
 // `search` (inherited) matches the contract's number, title or reference.
 export class FindContractsQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({
+    description: 'Only the contracts of this site (through their project)',
+  })
+  @IsOptional()
+  @IsUUID()
+  siteId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Only the contracts whose client is this correspondent, or holding its effets',
+  })
+  @IsOptional()
+  @IsUUID()
+  correspondentId?: string;
+
   @ApiPropertyOptional({ description: 'Only the contracts of this project' })
   @IsOptional()
   @IsUUID()

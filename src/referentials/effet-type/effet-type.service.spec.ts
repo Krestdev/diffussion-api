@@ -86,6 +86,22 @@ describe('EffetTypeService', () => {
       );
     });
 
+    it('keeps the common types when filtering by site', async () => {
+      await service.findAll({ siteId: 's-1' }, 'resp-s1');
+
+      expect(database.effetType.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            AND: [
+              { OR: [{ siteId: null }, { siteId: 's-1' }] },
+              { OR: [{ siteId: null }, { siteId: 's-1' }] },
+              {},
+            ],
+          },
+        }),
+      );
+    });
+
     it('sees the global types and its own site’s', async () => {
       await service.findAll({}, 'resp-s1');
 

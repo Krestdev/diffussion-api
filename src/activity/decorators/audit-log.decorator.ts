@@ -18,6 +18,8 @@ export interface AuditLogOptions {
   operation: 'CREATE' | 'UPDATE' | 'DELETE';
   idParamIndex?: number; // Index of the ID in the arguments array (default: 0)
   findMethod?: string; // Name of the method used to fetch the entity (default: 'findOne')
+  /** Extra details for the entry, from the method's arguments. */
+  metadata?: (args: unknown[]) => Record<string, unknown> | undefined;
 }
 
 /**
@@ -90,6 +92,7 @@ export function AuditLog(options: AuditLogOptions) {
         entityType: options.entityType,
         entityId,
         changes: changes ?? undefined,
+        metadata: options.metadata?.(args),
       });
 
       return result;

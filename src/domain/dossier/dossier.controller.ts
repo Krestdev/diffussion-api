@@ -28,6 +28,7 @@ import {
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { ArchiveReasonDto } from '../../common/dto/archive-reason.dto';
+import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { DossierService } from './dossier.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
 import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
@@ -104,8 +105,11 @@ export class DossierController {
 
   @Post(':id/unarchive')
   @RequirePermission(PermissionCode.DossierArchive)
-  unarchive(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierService.unarchive(id);
+  unarchive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RestoreNoteDto,
+  ) {
+    return this.dossierService.unarchive(id, dto.note);
   }
 
   @Get(':id/courriers')
@@ -167,7 +171,11 @@ export class DossierController {
 
   @Put(':id/access')
   @RequirePermission(PermissionCode.DossierUpdate)
-  setAccess(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetAccessDto) {
-    return this.dossierService.setAccess(id, dto);
+  setAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetAccessDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.dossierService.setAccess(id, dto, user.sub);
   }
 }

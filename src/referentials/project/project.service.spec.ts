@@ -7,6 +7,7 @@ import {
 import { ActivityService } from '../../activity/activity.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 import { ProjectService } from './project.service';
 import { withScopeChecks } from '../../auth/rbac/rbac.testing-spec';
 
@@ -83,6 +84,10 @@ describe('ProjectService', () => {
         ProjectService,
         { provide: DatabaseService, useValue: database },
         { provide: RbacService, useValue: withScopeChecks(rbac) },
+        {
+          provide: NotificationsService,
+          useValue: { notifyAccessChanged: jest.fn() },
+        },
         {
           provide: ActivityService,
           useValue: { tryRecord: jest.fn(), findAll: jest.fn() },

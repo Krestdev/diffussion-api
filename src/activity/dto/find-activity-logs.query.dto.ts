@@ -44,6 +44,14 @@ export class FindActivityLogsQueryDto {
   @IsUUID()
   entityId?: string;
 
+  @ApiPropertyOptional({
+    description:
+      "A correspondent's history: what was done on it and on its effets (also what entityType=correspondent&entityId= returns)",
+  })
+  @IsOptional()
+  @IsUUID()
+  correspondentId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()

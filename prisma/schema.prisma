@@ -105,12 +105,15 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Restrict: a site can't be deleted while users still belong to it.
-  site               Site?        @relation("SiteUsers", fields: [siteId], references: [id], onDelete: Restrict)
-  deactivatedBy      User?        @relation("UserDeactivatedBy", fields: [deactivatedById], references: [id], onDelete: SetNull)
-  deactivatedUsers   User[]       @relation("UserDeactivatedBy")
-  archivedRoles      Role[]       @relation("RoleArchivedBy")
-  invitationsSent    Invitation[] @relation("InvitationInvitedBy")
-  invitationAccepted Invitation?  @relation("InvitationUser")
+  site               Site?            @relation("SiteUsers", fields: [siteId], references: [id], onDelete: Restrict)
+  deactivatedBy      User?            @relation("UserDeactivatedBy", fields: [deactivatedById], references: [id], onDelete: SetNull)
+  deactivatedUsers   User[]           @relation("UserDeactivatedBy")
+  archivedRoles      Role[]           @relation("RoleArchivedBy")
+  invitationsSent    Invitation[]     @relation("InvitationInvitedBy")
+  invitationAccepted Invitation?      @relation("InvitationUser")
+  supportTickets     SupportTicket[]  @relation("SupportTicketRequester")
+  supportMessages    SupportMessage[] @relation("SupportMessageAuthor")
+  helpFeedback       HelpFeedback[]
 
   userRoles               UserRole[]
   userInstructions        UserInstructions[]
@@ -196,17 +199,19 @@ model Site {
 /// every site. Otherwise a role of that site only, made and managed by the
 /// site's responsible, and held by that site's users only.
 model Role {
-  id           String    @id @default(uuid())
-  code         String    @unique @db.VarChar(30)
-  name         String    @db.VarChar(50)
-  description  String?
-  siteId       String?
+  id               String    @id @default(uuid())
+  code             String    @unique @db.VarChar(30)
+  name             String    @db.VarChar(50)
+  description      String?
+  siteId           String?
   /// Archived (A·9): held by nobody any more, never offered, restorable.
   /// A role is never deleted.
-  archivedAt   DateTime?
-  archivedById String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  archivedAt       DateTime?
+  archivedById     String?
+  /// How many users held it when it was archived; 0 once restored.
+  formerUsersCount Int       @default(0)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   site            Site?            @relation(fields: [siteId], references: [id], onDelete: Restrict)
   archivedBy      User?            @relation("RoleArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
@@ -451,14 +456,117 @@ model Correspondent {
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
-  site            Site               @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  type            CorrespondentType? @relation(fields: [typeId], references: [id])
+  site            Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  type            CorrespondentType?     @relation(fields: [typeId], references: [id])
   courriers       Courrier[]
-  maitreOuvrageOf Project[]          @relation("ProjectMaitreOuvrage")
-  clientOf        Contract[]         @relation("ContractClient")
+  maitreOuvrageOf Project[]              @relation("ProjectMaitreOuvrage")
+  clientOf        Contract[]             @relation("ContractClient")
+  contacts        CorrespondentContact[]
 
   @@index([siteId])
   @@map("correspondent")
+}
+
+/// A person to reach at a correspondent.
+model CorrespondentContact {
+  id              String   @id @default(uuid())
+  correspondentId String
+  name            String   @db.VarChar(150)
+  position        String?  @db.VarChar(150)
+  phone           String?  @db.VarChar(30)
+  email           String?  @db.VarChar(150)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  correspondent Correspondent @relation(fields: [correspondentId], references: [id], onDelete: Cascade)
+
+  @@index([correspondentId])
+  @@map("correspondent_contact")
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+/// A request sent to the support team from the Centre d'aide.
+model SupportTicket {
+  id            String              @id @default(uuid())
+  /// SUP-AAAA-NNNN.
+  number        String              @unique @db.VarChar(30)
+  type          String              @db.VarChar(50)
+  subject       String              @db.VarChar(255)
+  priority      String              @db.VarChar(30)
+  page          String?             @db.VarChar(500)
+  description   String
+  technicalInfo Json?
+  status        SupportTicketStatus @default(OPEN)
+  /// Null once the account is gone.
+  requesterId   String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  requester   User?               @relation("SupportTicketRequester", fields: [requesterId], references: [id], onDelete: SetNull)
+  messages    SupportMessage[]
+  attachments SupportAttachment[]
+
+  @@index([requesterId])
+  @@map("support_ticket")
+}
+
+model SupportMessage {
+  id          String   @id @default(uuid())
+  ticketId    String
+  authorId    String?
+  fromSupport Boolean  @default(false)
+  body        String
+  createdAt   DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User?         @relation("SupportMessageAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId])
+  @@map("support_message")
+}
+
+model SupportAttachment {
+  id         String   @id @default(uuid())
+  ticketId   String
+  filename   String   @db.VarChar(255)
+  mimeType   String   @db.VarChar(150)
+  size       Int
+  storageKey String   @db.VarChar(500)
+  createdAt  DateTime @default(now())
+
+  ticket SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+  @@map("support_attachment")
+}
+
+/// Last support ticket number (SUP-AAAA-NNNN) given each year.
+model SupportSequence {
+  year Int @id
+  last Int @default(0)
+
+  @@map("support_sequence")
+}
+
+/// "Cet article vous a-t-il aidé ?": one answer per user and article.
+model HelpFeedback {
+  id        String   @id @default(uuid())
+  slug      String   @db.VarChar(200)
+  userId    String
+  helpful   Boolean
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([slug, userId])
+  @@map("help_feedback")
 }
 
 // ---------------------------------------------------------------------------

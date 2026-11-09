@@ -1,3 +1,4 @@
+import { NotificationsService } from '../../notifications/notifications.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { RbacService } from '../../auth/rbac/rbac.service';
@@ -16,6 +17,7 @@ describe('UsersController', () => {
       controllers: [UsersController],
       providers: [
         UsersService,
+        { provide: NotificationsService, useValue: {} },
         {
           provide: ActivityService,
           useValue: { tryRecord: jest.fn().mockResolvedValue(null) },

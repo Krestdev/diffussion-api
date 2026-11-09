@@ -56,6 +56,7 @@ import { SignMailDto } from './dto/sign-mail.dto';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { NotificationsService } from '../../notifications/notifications.service';
+import { courrierOfSite } from '../../common/utils/site-where';
 import { CreateMailDto } from './dto/create-mail.dto';
 import { CreateOutgoingMailDto } from './dto/create-outgoing-mail.dto';
 import { StorageService } from '../../storage/storage.service';
@@ -191,6 +192,19 @@ export function formatCourrier<T extends Record<string, any>>(courrier: T) {
   return {
     ...courrier,
     ...(siteId !== undefined ? { siteId } : {}),
+    // The status unarchive() gives back; same fallback for an effet archived
+    // before that was recorded.
+    ...(courrier.archivedFromStatus !== undefined
+      ? {
+          statusBeforeArchive:
+            courrier.archivedFromStatus ??
+            (courrier.status === CourrierStatus.ARCHIVE
+              ? courrier.direction === CourrierDirection.SORTANT
+                ? CourrierStatus.VALIDE
+                : CourrierStatus.CLOTURE
+              : null),
+        }
+      : {}),
     ...(supervisor !== undefined ? { supervisor } : {}),
     ...(courrier.supervisorDueDate !== undefined ||
     courrier.dueDate !== undefined
@@ -408,6 +422,7 @@ export class MailService {
       transmit,
       ...data
     } = dto;
+    assertReceivedNotFuture(receivedAt);
     const dossierLinks = await this.projectOfDossier(dto.dossierId);
     // An entrant always has its reception date: the registration date when
     // none is given — the date it's listed, sorted and filtered by.
@@ -477,6 +492,9 @@ export class MailService {
     }
 
     this.recordCourrierEvent(courrier.id, 'COURRIER_ENREGISTRE');
+    if (dto.direction === CourrierDirection.ENTRANT) {
+      await this.notifyRegistered(courrier, createdById);
+    }
 
     if (files && files.length > 0) {
       return this.findOne(courrier.id);
@@ -518,12 +536,23 @@ export class MailService {
 
   async findAll(query: FindMailsQueryDto, userId: string) {
     const sites = await this.readableSites(userId);
+    const siteId = await this.siteScope(userId, query.siteId);
     const visible: Prisma.CourrierWhereInput = query.direction
-      ? visibleMailsWhere(query.direction, userId, sites)
+      ? visibleMailsWhere(query.direction, userId, sites, siteId)
       : {
           OR: [
-            visibleMailsWhere(CourrierDirection.ENTRANT, userId, sites),
-            visibleMailsWhere(CourrierDirection.SORTANT, userId, sites),
+            visibleMailsWhere(
+              CourrierDirection.ENTRANT,
+              userId,
+              sites,
+              siteId,
+            ),
+            visibleMailsWhere(
+              CourrierDirection.SORTANT,
+              userId,
+              sites,
+              siteId,
+            ),
           ],
         };
     const where: Prisma.CourrierWhereInput = {
@@ -533,9 +562,11 @@ export class MailService {
       correspondentId: query.correspondentId,
       ownerId: query.ownerId,
       typeId: query.typeId,
-      AND: [visible, projectOrContractWhere(query)].filter(
-        (filter) => filter !== undefined,
-      ),
+      AND: [
+        visible,
+        projectOrContractWhere(query),
+        searchWhere(query.search),
+      ].filter((filter) => filter !== undefined),
     };
 
     const [data, total] = await this.database.$transaction([
@@ -571,6 +602,7 @@ export class MailService {
       CourrierDirection.ENTRANT,
       userId,
       await this.readableSites(userId),
+      await this.siteScope(userId, query.siteId),
     );
     const where = incomingWhere(query, visible);
 
@@ -744,6 +776,7 @@ export class MailService {
       CourrierDirection.SORTANT,
       userId,
       await this.readableSites(userId),
+      await this.siteScope(userId, query.siteId),
     );
     const where: Prisma.CourrierWhereInput = {
       ...visible,
@@ -886,6 +919,7 @@ export class MailService {
       courrier,
     );
     const { receivedAt, dueDate, transmit, ...data } = dto;
+    assertReceivedNotFuture(receivedAt);
     const updated = await this.database.courrier.update({
       where: { id: courrier.id },
       data: {
@@ -1157,7 +1191,7 @@ export class MailService {
       });
 
       this.notify(courrier, await this.dispatchValidatorsOf(courrier), userId, {
-        type: 'COURRIER_VALIDATION_PENDING',
+        type: 'COURRIER_DISPATCH_PROPOSED',
         message: `Une proposition de dispatch pour « ${courrier.subject} » est en attente de validation.`,
       });
 
@@ -1333,6 +1367,10 @@ export class MailService {
 
     this.recordCourrierEvent(id, 'COURRIER_DISPATCH_VALIDE');
     await this.notifyTransmitted(updated, userId);
+    this.notify(updated, [updated.proposedById], userId, {
+      type: 'COURRIER_DISPATCH_VALIDATED',
+      message: `Le dispatching proposé pour « ${updated.subject} » est validé.`,
+    });
     return formatCourrier(updated);
   }
 
@@ -1713,6 +1751,30 @@ export class MailService {
 
   // Fire-and-forget: a notification failing to write must never fail the
   // transition that triggered it. Nobody is told about their own action.
+  private async notifyRegistered(
+    courrier: {
+      id: string;
+      dossierId: string | null;
+      createdById: string | null;
+      subject: string;
+    },
+    actingUserId: string,
+  ) {
+    try {
+      this.notify(
+        courrier,
+        await this.dispatchValidatorsOf(courrier),
+        actingUserId,
+        {
+          type: 'COURRIER_REGISTERED',
+          message: `L'effet entrant « ${courrier.subject} » vient d'être enregistré.`,
+        },
+      );
+    } catch (error) {
+      console.error('Failed to notify a registered courrier', error);
+    }
+  }
+
   private notify(
     courrier: { id: string; dossierId: string | null },
     recipients: (string | null)[],
@@ -2010,7 +2072,7 @@ export class MailService {
 
   // Inverse of archive(): back to the status it was archived from (an
   // entrant archived before that was recorded: CLOTURE).
-  async unarchive(id: string, userId?: string) {
+  async unarchive(id: string, userId?: string, note?: string) {
     const courrier = await this.requireStatus(id, [CourrierStatus.ARCHIVE]);
     if (userId) {
       await this.assertMayConclude(
@@ -2032,7 +2094,7 @@ export class MailService {
           archivedFromStatus: null,
         },
         action: 'COURRIER_DESARCHIVE',
-        metadata: { to: status },
+        metadata: { to: status, ...(note ? { note } : {}) },
       }),
     );
   }
@@ -2424,6 +2486,23 @@ export class MailService {
     }
   }
 
+  // `?siteId=` on the lists: the caller's own site or one where they may read
+  // effets. Any other site gives nothing, even an effet entrusted to them
+  // personally — that one stays in their lists without the filter.
+  private async siteScope(userId: string, siteId?: string) {
+    if (!siteId) return undefined;
+    const sites = await this.rbac.sitesWithPermission(
+      userId,
+      PermissionCode.CourrierRead,
+    );
+    if (sites === 'ALL' || sites.includes(siteId)) return siteId;
+    const user = await this.database.user.findUnique({
+      where: { id: userId },
+      select: { siteId: true },
+    });
+    return user?.siteId === siteId ? siteId : { in: [] };
+  }
+
   private async readableSites(userId: string): Promise<ReadableSites> {
     const [dossier, registrant] = await Promise.all([
       this.rbac.siteFilter(
@@ -2612,6 +2691,7 @@ export class MailService {
       CourrierDirection.ENTRANT,
       userId,
       await this.readableSites(userId),
+      await this.siteScope(userId, query.siteId),
     );
     const where = incomingWhere(query, visible);
 
@@ -2727,28 +2807,34 @@ function visibleMailsWhere(
   direction: CourrierDirection,
   userId: string,
   sites: ReadableSites,
+  siteId?: string | { in: string[] },
 ): Prisma.CourrierWhereInput {
+  const branches: Prisma.CourrierWhereInput[] = [
+    { dossier: { AND: [visibleDossierWhere(userId), sites.dossier] } },
+    { dossierId: null, createdById: userId },
+    // Whoever it is entrusted to — its designated responsible (e.g. a
+    // contract's, when dispatched to a contract) and its supervisor —
+    // sees it, wherever it sits.
+    { ownerId: userId },
+    { supervisorId: userId },
+    // Without a dossier: its registrant's site's effets — for a sortant,
+    // once submitted (its validator, e.g. a contract's responsible, must
+    // open it); a draft stays its author's own.
+    direction === CourrierDirection.ENTRANT
+      ? { dossierId: null, createdBy: sites.registrant }
+      : {
+          dossierId: null,
+          status: { not: CourrierStatus.BROUILLON },
+          createdBy: sites.registrant,
+        },
+  ];
+  // Kept as a single OR at the top level: callers spread this next to their
+  // own AND. `siteId` only narrows what the caller may already see.
   return {
     direction,
-    OR: [
-      { dossier: { AND: [visibleDossierWhere(userId), sites.dossier] } },
-      { dossierId: null, createdById: userId },
-      // Whoever it is entrusted to — its designated responsible (e.g. a
-      // contract's, when dispatched to a contract) and its supervisor —
-      // sees it, wherever it sits.
-      { ownerId: userId },
-      { supervisorId: userId },
-      // Without a dossier: its registrant's site's effets — for a sortant,
-      // once submitted (its validator, e.g. a contract's responsible, must
-      // open it); a draft stays its author's own.
-      direction === CourrierDirection.ENTRANT
-        ? { dossierId: null, createdBy: sites.registrant }
-        : {
-            dossierId: null,
-            status: { not: CourrierStatus.BROUILLON },
-            createdBy: sites.registrant,
-          },
-    ],
+    OR: siteId
+      ? [{ AND: [{ OR: branches }, courrierOfSite(siteId)] }]
+      : branches,
   };
 }
 
@@ -2824,15 +2910,35 @@ function incomingWhere(
   };
 }
 
-// Free text against the subject, internal number or printed reference.
+// Free text against the subject, internal number, printed reference or
+// correspondent's name.
 function searchWhere(search?: string): Prisma.CourrierWhereInput | undefined {
   if (!search) return undefined;
   const contains = { contains: search, mode: 'insensitive' as const };
   return {
-    OR: [{ subject: contains }, { number: contains }, { reference: contains }],
+    OR: [
+      { subject: contains },
+      { number: contains },
+      { reference: contains },
+      { correspondent: { name: contains } },
+    ],
   };
 }
 
 function sameDay(a: Date, b: Date | null | undefined) {
   return !!b && a.getTime() === b.getTime();
+}
+
+// A reception date is today or earlier — a later one is a typing mistake
+// (it would skew the period filters and the deadline computed from it).
+// Compared by calendar day: the front sends the chosen day at 10:00 UTC.
+function assertReceivedNotFuture(receivedAt?: string) {
+  if (!receivedAt) return;
+  const day = new Date(receivedAt).toISOString().slice(0, 10);
+  const today = new Date().toISOString().slice(0, 10);
+  if (day > today) {
+    throw new BadRequestException(
+      `La date de réception (${day}) ne peut pas être dans le futur`,
+    );
+  }
 }

@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
@@ -68,8 +69,9 @@ export class RoleController {
   @Post(':id/restore')
   restore(
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RestoreNoteDto,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.roleService.restore(id, user.sub);
+    return this.roleService.restore(id, user.sub, dto.note);
   }
 }

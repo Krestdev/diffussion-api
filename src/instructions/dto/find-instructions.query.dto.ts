@@ -4,6 +4,14 @@ import { IsBoolean, IsEnum, IsInt, IsOptional, IsUUID } from 'class-validator';
 import { InstructionStatus } from 'generated/prisma/enums';
 
 export class FindInstructionsQueryDto {
+  @ApiPropertyOptional({
+    description:
+      "Only this site's tasks — a user only ever sees their own site's",
+  })
+  @IsOptional()
+  @IsUUID()
+  siteId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()

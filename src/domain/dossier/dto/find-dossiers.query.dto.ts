@@ -34,6 +34,13 @@ export class FindDossiersQueryDto {
   @IsUUID()
   projectId?: string;
 
+  @ApiPropertyOptional({
+    description: 'Only the dossiers holding effets of this correspondent',
+  })
+  @IsOptional()
+  @IsUUID()
+  correspondentId?: string;
+
   @ApiPropertyOptional({ description: 'Only the dossiers of this contract' })
   @IsOptional()
   @IsUUID()

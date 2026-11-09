@@ -24,6 +24,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ReferentialsModule } from './referentials/referentials.module';
 import { StorageModule } from './storage/storage.module';
+import { SupportModule } from './support/support.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { StorageModule } from './storage/storage.module';
     StorageModule,
     AnalysisModule,
     DashboardModule,
+    SupportModule,
     RealtimeModule,
   ],
   controllers: [AppController],

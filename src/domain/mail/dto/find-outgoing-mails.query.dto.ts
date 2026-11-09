@@ -55,6 +55,14 @@ const GROUPS = Object.keys(OUTGOING_STATUS_GROUPS) as OutgoingStatusGroup[];
  */
 export class FindOutgoingMailsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({
+    description:
+      "Only this site's effets — within those the caller may already see",
+  })
+  @IsOptional()
+  @IsUUID('4')
+  siteId?: string;
+
+  @ApiPropertyOptional({
     enum: GROUPS,
     description:
       'Tab: drafts = BROUILLON · submitted = EN_ATTENTE_VALIDATION · corrections = A_CORRIGER · authorized = VALIDE, SIGNE, PRET_A_ENVOYER, ENVOYE, DECHARGE · cancelled = ANNULE · archived = ARCHIVE. Also: pending = BROUILLON, EN_ATTENTE_VALIDATION · approved = authorized · rejected = A_CORRIGER, ANNULE',
