@@ -89,6 +89,9 @@ model User {
 
   status          UserStatus    @default(ACTIVE)
   accessProfile   AccessProfile @default(USER)
+  /// Has to choose their own password before doing anything else: only
+  /// POST /auth/change-password, /auth/me and /auth/logout are open until then.
+  mustChangePassword Boolean    @default(false)
   /// When and by whom the account was last suspended (A·13); cleared when
   /// it is reactivated.
   deactivatedAt   DateTime?
@@ -660,7 +663,7 @@ model Dossier {
 /// purely organisational, carries no workflow of its own.
 model Project {
   id              String        @id @default(uuid())
-  name            String        @unique @db.VarChar(200)
+  name            String        @unique
   /// "Réf Projet" on an analysis sheet.
   reference       String?       @db.VarChar(50)
   /// "Mode" (ex. marché public, gré à gré...).
@@ -674,6 +677,9 @@ model Project {
   /// platform administrator), seen by that site's users only. Its dossiers
   /// and effets are on that site; its contracts follow it.
   siteId          String
+  /// What it holds, chosen at its creation: dossiers directly, or contracts
+  /// (with their dossiers under them).
+  contentType     ProjectContentType
   /// ACTIVE -> CLOSED -> ARCHIVED; closedAt / archivedAt record when.
   status          ProjectStatus @default(ACTIVE)
   startDate       DateTime?
@@ -705,6 +711,11 @@ enum ProjectStatus {
   ACTIVE
   CLOSED
   ARCHIVED
+}
+
+enum ProjectContentType {
+  DOSSIERS
+  CONTRATS
 }
 
 /// A contract (marché) a set of dossiers is carried out under. Optionally
@@ -1156,6 +1167,7 @@ model Instruction {
   validations   Validation[]
   /// Every executant's decision to subscribe or not, with its motif.
   subscriptions InstructionSubscription[]
+  notifications Notification[]
 
   // RG-LIV-006: an instruction may depend on several others, and several
   // others may depend on it — modeled as a self many-to-many.
@@ -1395,13 +1407,16 @@ model Notification {
   id         String            @id @default(uuid())
   dossierId  String?
   courrierId String?
+  /// The task a TASK_* notification is about.
+  instructionId String?
   type       String            @db.VarChar(50)
   message    String?
   canal      NotificationCanal
   createdAt  DateTime          @default(now())
 
-  dossier  Dossier?  @relation(fields: [dossierId], references: [id])
-  courrier Courrier? @relation(fields: [courrierId], references: [id])
+  dossier     Dossier?     @relation(fields: [dossierId], references: [id])
+  courrier    Courrier?    @relation(fields: [courrierId], references: [id])
+  instruction Instruction? @relation(fields: [instructionId], references: [id], onDelete: SetNull)
 
   recipients UserNotification[]
 

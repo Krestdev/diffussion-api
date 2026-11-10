@@ -11,6 +11,8 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { AllowPendingPasswordChange } from './decorators/allow-pending-password-change.decorator';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -61,7 +63,22 @@ export class AuthController {
     return this.authService.refreshTokens(user.sub, user.refreshToken);
   }
 
+  // Open while a password change is pending: it is how it gets done.
   @UseGuards(JwtAuthGuard)
+  @AllowPendingPasswordChange()
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiBearerAuth()
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  changePassword(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(user.sub, dto);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @AllowPendingPasswordChange()
   @ApiBearerAuth()
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -70,6 +87,7 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @AllowPendingPasswordChange()
   @ApiBearerAuth()
   @Get('me')
   me(@CurrentUser() user: JwtPayload) {

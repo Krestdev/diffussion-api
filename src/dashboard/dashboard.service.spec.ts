@@ -1,3 +1,4 @@
+import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { CourrierStatus } from '../../generated/prisma/client';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
@@ -14,6 +15,7 @@ describe('DashboardService', () => {
   };
   const rbac = {
     getPermissionCodes: jest.fn(),
+    managedSites: jest.fn(),
     // Global grant: no site restriction.
     siteFilter: jest.fn().mockResolvedValue({}),
   };
@@ -48,6 +50,45 @@ describe('DashboardService', () => {
   });
 
   afterEach(() => jest.useRealTimers());
+
+  describe('global scope', () => {
+    const scoped = () =>
+      [
+        ...database.courrier.count.mock.calls,
+        ...database.courrier.findMany.mock.calls,
+      ]
+        .map(([args]) => JSON.stringify((args as { where: unknown }).where))
+        .filter((where) => where.includes('ENTRANT'));
+
+    beforeEach(() => database.courrier.findMany.mockResolvedValue([]));
+
+    it("keeps a site's administrator to their site in every query", async () => {
+      rbac.managedSites.mockResolvedValue(['s-1']);
+
+      const stats = await service.getStats('u1', { scope: 'global' });
+
+      expect(stats.scope).toBe('global');
+      expect(scoped().length).toBeGreaterThanOrEqual(8);
+      for (const where of scoped()) expect(where).toContain('s-1');
+    });
+
+    it('counts every site for a global grant', async () => {
+      rbac.managedSites.mockResolvedValue('ALL');
+
+      await service.getStats('u1', { scope: 'global' });
+
+      for (const where of scoped()) expect(where).not.toContain('siteId');
+    });
+
+    it('is refused without the permission anywhere', async () => {
+      rbac.managedSites.mockResolvedValue([]);
+
+      await expect(
+        service.getStats('u1', { scope: 'global' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(database.courrier.findMany).not.toHaveBeenCalled();
+    });
+  });
 
   it('hides courrier sections without COURRIER_READ', async () => {
     rbac.getPermissionCodes.mockResolvedValue([]);

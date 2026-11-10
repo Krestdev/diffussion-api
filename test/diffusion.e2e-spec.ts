@@ -928,12 +928,20 @@ describe('Diffusion, end to end', () => {
   describe('7. Contrats', () => {
     it("only its site's responsible or a platform administrator creates a contract", async () => {
       const project = await db.project.create({
-        data: { name: 'Port de Kribi', siteId: id.siteA },
+        data: {
+          name: 'Port de Kribi',
+          siteId: id.siteA,
+          contentType: 'CONTRATS',
+        },
       });
       id.project = project.id;
       id.otherProject = (
         await db.project.create({
-          data: { name: 'Route Douala', siteId: id.siteA },
+          data: {
+            name: 'Route Douala',
+            siteId: id.siteA,
+            contentType: 'CONTRATS',
+          },
         })
       ).id;
       const body = { title: 'Marché des quais', projectId: id.project };
@@ -1025,14 +1033,23 @@ describe('Diffusion, end to end', () => {
   describe('7b. Projets', () => {
     it('belong to a site: managed by its responsible, seen by its users only', async () => {
       const own = await as('respA')
-        .post('/projects', { name: 'Digue de Bonabéri' })
+        .post('/projects', {
+          name: 'Digue de Bonabéri',
+          contentType: 'DOSSIERS',
+        })
         .expect(201);
       expect(own.body.site).toMatchObject({ id: id.siteA });
       // Not on another site.
       await as('respA')
-        .post('/projects', { name: 'Pont de Mbalmayo', siteId: id.siteB })
+        .post('/projects', {
+          name: 'Pont de Mbalmayo',
+          siteId: id.siteB,
+          contentType: 'DOSSIERS',
+        })
         .expect(403);
-      await as('chefA').post('/projects', { name: 'Hors droits' }).expect(403);
+      await as('chefA')
+        .post('/projects', { name: 'Hors droits', contentType: 'DOSSIERS' })
+        .expect(403);
 
       const seenA = await as('chefA').get('/projects?take=100').expect(200);
       expect(seenA.body.data.map((p: any) => p.id)).toContain(own.body.id);

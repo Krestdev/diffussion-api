@@ -44,10 +44,15 @@ describe("RbacService: a site's responsible", () => {
     ).resolves.toBe(false);
   });
 
+  it("holds the global dashboards of the site they're responsible of", async () => {
+    const codes = await service.getPermissionCodes('u-1', 's-1');
+
+    expect(codes).toContain(PermissionCode.DashboardGlobalRead);
+  });
+
   it("doesn't get the platform's own permissions", async () => {
     const codes = await service.getPermissionCodes('u-1', 's-1');
 
-    expect(codes).not.toContain(PermissionCode.DashboardGlobalRead);
     expect(codes).not.toContain(PermissionCode.AdminManageCategories);
     expect(codes).not.toContain(PermissionCode.AdminManageSites);
   });

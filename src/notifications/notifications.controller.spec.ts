@@ -14,7 +14,12 @@ describe('NotificationsController', () => {
   let service: Record<string, jest.Mock>;
 
   beforeEach(async () => {
-    service = { create: jest.fn(), findMine: jest.fn(), markStatus: jest.fn() };
+    service = {
+      create: jest.fn(),
+      findMine: jest.fn(),
+      markStatus: jest.fn(),
+      markAllRead: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [NotificationsController],
@@ -43,7 +48,12 @@ describe('NotificationsController', () => {
   });
 
   it('leaves the inbox routes open to every user', () => {
-    for (const route of ['findMine', 'markRead', 'archive'] as const) {
+    for (const route of [
+      'findMine',
+      'markRead',
+      'markAllRead',
+      'archive',
+    ] as const) {
       const handler = Object.getOwnPropertyDescriptor(
         NotificationsController.prototype,
         route,

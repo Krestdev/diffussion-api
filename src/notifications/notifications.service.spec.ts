@@ -28,6 +28,7 @@ describe('NotificationsService', () => {
         findMany: jest.fn(),
         findUnique: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn(),
       },
       notificationPreference: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -164,6 +165,47 @@ describe('NotificationsService', () => {
         where: { userId_type: { userId: 'u-1', type: 'TASK_OVERDUE' } },
         create: { userId: 'u-1', type: 'TASK_OVERDUE', enabled: false },
         update: { enabled: false },
+      });
+    });
+  });
+
+  describe('the inbox', () => {
+    it("gives each notification its effet's direction", async () => {
+      database.userNotification.findMany.mockResolvedValue([
+        {
+          userId: 'u-1',
+          status: NotificationStatus.NOT_READ,
+          notification: {
+            id: 'n-1',
+            courrierId: 'c-1',
+            courrier: { direction: 'SORTANT' },
+          },
+        },
+        {
+          userId: 'u-1',
+          status: NotificationStatus.NOT_READ,
+          notification: { id: 'n-2', courrierId: null, courrier: null },
+        },
+      ]);
+
+      const [withEffet, without] = await service.findMine('u-1');
+
+      expect(withEffet.notification).toEqual({
+        id: 'n-1',
+        courrierId: 'c-1',
+        courrierDirection: 'SORTANT',
+      });
+      expect(without.notification.courrierDirection).toBeNull();
+    });
+
+    it("marks only the user's unread notifications as read", async () => {
+      database.userNotification.updateMany.mockResolvedValue({ count: 3 });
+
+      await expect(service.markAllRead('u-1')).resolves.toEqual({ count: 3 });
+
+      expect(database.userNotification.updateMany).toHaveBeenCalledWith({
+        where: { userId: 'u-1', status: NotificationStatus.NOT_READ },
+        data: { status: NotificationStatus.READ },
       });
     });
   });

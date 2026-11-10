@@ -31,7 +31,10 @@ import {
 import { visibleDossierWhere } from '../../common/utils/dossier-visibility';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { assertSiteActive } from '../../common/utils/referential-guards';
-import { assertProjectOfSite } from '../../common/utils/site-referentials';
+import {
+  assertProjectOfSite,
+  assertProjectTakesDossiers,
+} from '../../common/utils/site-referentials';
 import { assertDossierTypeUsable } from '../../referentials/dossier-type/dossier-type.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
@@ -117,6 +120,9 @@ export class DossierService {
     );
     if (projectId) {
       await assertProjectOfSite(this.database, projectId, dto.siteId);
+      if (!dto.contractId) {
+        await assertProjectTakesDossiers(this.database, projectId);
+      }
     }
     const { keywords, dueDate: rawDueDate, number: givenNumber, ...data } = dto;
     const openedAt = new Date();
@@ -295,6 +301,11 @@ export class DossierService {
       projectId !== undefined ? projectId : dossier.projectId;
     if (targetProjectId && (projectId !== undefined || siteChanged)) {
       await assertProjectOfSite(this.database, targetProjectId, targetSiteId);
+    }
+    const targetContractId =
+      dto.contractId !== undefined ? dto.contractId : dossier.contractId;
+    if (targetProjectId && projectId !== undefined && !targetContractId) {
+      await assertProjectTakesDossiers(this.database, targetProjectId);
     }
     const { keywords, dueDate: rawDueDate, ...data } = dto;
     const dueDateChanged = 'dueDate' in dto;

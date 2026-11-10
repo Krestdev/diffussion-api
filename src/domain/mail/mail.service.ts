@@ -530,18 +530,8 @@ export class MailService {
       ? visibleMailsWhere(query.direction, userId, sites, siteId)
       : {
           OR: [
-            visibleMailsWhere(
-              CourrierDirection.ENTRANT,
-              userId,
-              sites,
-              siteId,
-            ),
-            visibleMailsWhere(
-              CourrierDirection.SORTANT,
-              userId,
-              sites,
-              siteId,
-            ),
+            visibleMailsWhere(CourrierDirection.ENTRANT, userId, sites, siteId),
+            visibleMailsWhere(CourrierDirection.SORTANT, userId, sites, siteId),
           ],
         };
     const where: Prisma.CourrierWhereInput = {
@@ -1506,7 +1496,7 @@ export class MailService {
           ? 'COURRIER_VALIDATED'
           : 'COURRIER_CORRECTIONS_REQUESTED',
         message: approved
-          ? `« ${courrier.subject} » a été validé.`
+          ? `« ${courrier.subject} » est validé : signature à enregistrer.`
           : `« ${courrier.subject} » doit être corrigé : ${motif}`,
       },
     );
@@ -1886,6 +1876,15 @@ export class MailService {
       signatoryId: dto.signatoryId,
       signedAt: dto.signedAt,
     });
+    this.notify(
+      courrier,
+      [courrier.createdById, courrier.approvedById],
+      userId,
+      {
+        type: 'COURRIER_SIGNED',
+        message: `« ${courrier.subject} » est signé : à transmettre.`,
+      },
+    );
     return formatCourrier(updated);
   }
 
@@ -1934,6 +1933,10 @@ export class MailService {
       reference: updated.bordereauNumber,
       recipient: dto.recipient,
       mode: canal.name,
+    });
+    this.notify(sortant, [sortant.createdById], userId, {
+      type: 'COURRIER_SENT',
+      message: `« ${sortant.subject} » est transmis : décharge attendue.`,
     });
     return formatCourrier(updated);
   }

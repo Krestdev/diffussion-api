@@ -54,6 +54,7 @@ describe('InstructionLatenessService', () => {
       expect.objectContaining({
         type: 'TASK_OVERDUE_AGENT',
         recipientIds: ['u-exec', 'u-sup'],
+        instructionId: 'i-1',
       }),
     );
   });

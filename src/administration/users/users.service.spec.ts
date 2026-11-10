@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { UserStatus } from '../../../generated/prisma/enums';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
@@ -134,6 +135,34 @@ describe('UsersService', () => {
         service.create({ ...NEW_USER, roleIds: ['r-2'] }, 'admin-s1'),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(database.user.create).not.toHaveBeenCalled();
+    });
+
+    it('keeps the password obligation and a suspended status', async () => {
+      await service.create(
+        { ...NEW_USER, mustChangePassword: true, status: UserStatus.SUSPENDED },
+        'admin-s1',
+      );
+
+      expect(database.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            mustChangePassword: true,
+            status: UserStatus.SUSPENDED,
+            deactivatedById: 'admin-s1',
+            deactivatedAt: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it('creates an active account by default', async () => {
+      await service.create(NEW_USER, 'admin-s1');
+
+      const { data } = created() as unknown as {
+        data: Record<string, unknown>;
+      };
+      expect(data.status).toBe(UserStatus.ACTIVE);
+      expect(data.deactivatedAt).toBeUndefined();
     });
 
     it('cannot create a user in another site', async () => {

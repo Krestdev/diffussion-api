@@ -6,7 +6,7 @@ import {
   Prisma,
 } from '../../generated/prisma/client';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { RbacService, SiteScopeList } from '../auth/rbac/rbac.service';
 import { awaitingValidationBy } from '../common/utils/courrier-validation';
 import { overdueWhere } from '../instructions/instruction-overdue';
 import { visibleDossierWhere } from '../common/utils/dossier-visibility';
@@ -126,15 +126,14 @@ export class DashboardService {
     const days = query.days ?? 7;
     const timeZone = query.tz ?? 'UTC';
     const global = query.scope === 'global';
-    if (
-      global &&
-      !(await this.rbac.hasGlobalPermission(
-        userId,
-        PermissionCode.DashboardGlobalRead,
-      ))
-    ) {
+    // Held globally: every site. Held at a site, or as its responsible: that
+    // site only.
+    const sites = global
+      ? await this.rbac.managedSites(userId, PermissionCode.DashboardGlobalRead)
+      : null;
+    if (sites?.length === 0) {
       throw new ForbiddenException(
-        'The dashboard of every site requires DASHBOARD_GLOBAL_READ',
+        'The global dashboard requires DASHBOARD_GLOBAL_READ',
       );
     }
     const permissions = global
@@ -143,7 +142,7 @@ export class DashboardService {
     const canReadCourriers =
       global || permissions.includes(PermissionCode.CourrierRead);
     const incoming = canReadCourriers
-      ? await this.incomingScope(userId, global)
+      ? await this.incomingScope(userId, sites)
       : null;
 
     const [tasks, approvals, courriers, trend, activity] = await Promise.all([
@@ -166,18 +165,25 @@ export class DashboardService {
     };
   }
 
-  // The entrants counted: every one (global), or those in the dossiers the
-  // caller sees.
+  // The entrants counted: every one or those of some sites (global, `sites`
+  // given), else those in the dossiers the caller sees. An entrant without a
+  // dossier yet is on its registrant's site.
   private async incomingScope(
     userId: string,
-    global: boolean,
+    sites: SiteScopeList | null,
   ): Promise<Prisma.CourrierWhereInput> {
-    return global
-      ? { direction: CourrierDirection.ENTRANT }
-      : {
-          direction: CourrierDirection.ENTRANT,
-          dossier: await this.courrierDossiers(userId),
-        };
+    const direction = CourrierDirection.ENTRANT;
+    if (sites === 'ALL') return { direction };
+    if (sites) {
+      return {
+        direction,
+        OR: [
+          { dossier: { siteId: { in: sites } } },
+          { dossierId: null, createdBy: { siteId: { in: sites } } },
+        ],
+      };
+    }
+    return { direction, dossier: await this.courrierDossiers(userId) };
   }
 
   private async getIncomingActivity(
@@ -208,8 +214,8 @@ export class DashboardService {
 
     // Received before `at` and not yet closed, archived or cancelled then.
     const inProgressAt = (at: Date): Prisma.CourrierWhereInput => ({
-      ...incoming,
       AND: [
+        incoming,
         {
           OR: [
             { receivedAt: { lt: at } },
@@ -352,10 +358,14 @@ export class DashboardService {
     const since = new Date(now - (days + 1) * DAY_MS);
     const rows = await this.database.courrier.findMany({
       where: {
-        ...incoming,
-        OR: [
-          { receivedAt: { gte: since } },
-          { receivedAt: null, createdAt: { gte: since } },
+        AND: [
+          incoming,
+          {
+            OR: [
+              { receivedAt: { gte: since } },
+              { receivedAt: null, createdAt: { gte: since } },
+            ],
+          },
         ],
       },
       select: { receivedAt: true, createdAt: true },

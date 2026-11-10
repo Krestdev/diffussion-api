@@ -1,17 +1,26 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
+  IsEnum,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
 } from 'class-validator';
+import { ProjectContentType } from '../../../../generated/prisma/client';
 
 export class CreateProjectDto {
   @ApiProperty({ example: 'Construction du Viaduc sur la Sanaga' })
   @IsString()
-  @MaxLength(200)
   name: string;
+
+  @ApiProperty({
+    enum: ProjectContentType,
+    description:
+      'What the project holds: dossiers directly, or contracts (with their dossiers under them)',
+  })
+  @IsEnum(ProjectContentType)
+  contentType: ProjectContentType;
 
   @ApiPropertyOptional({
     description:

@@ -10,6 +10,8 @@ export const NOTIFICATION_TYPES = {
   COURRIER_TRANSMITTED: 'Un effet vous est transmis',
   COURRIER_VALIDATION_PENDING: 'Un effet attend votre validation',
   COURRIER_VALIDATED: 'Un effet que vous suivez est validé',
+  COURRIER_SIGNED: 'Un effet sortant signé est à transmettre',
+  COURRIER_SENT: 'Un effet sortant est transmis, décharge attendue',
   COURRIER_CORRECTIONS_REQUESTED: 'Un effet que vous suivez doit être corrigé',
   COURRIER_SUPERVISOR_ASSIGNED: 'Vous êtes désigné superviseur d’un effet',
   TASK_ASSIGNED: 'Une tâche vous est affectée',
@@ -18,6 +20,7 @@ export const NOTIFICATION_TYPES = {
   TASK_AGENT_DUE_DATE_SET: "La date limite d'exécution d'une tâche est fixée",
   TASK_LIVRABLES_DEPOSITED: 'Des livrables sont déposés sur une tâche',
   TASK_VALIDATION_PENDING: 'Des livrables attendent votre validation',
+  TASK_LIVRABLE_REJECTED: 'Un livrable est rejeté',
   TASK_CORRECTIONS_REQUESTED: 'Des corrections sont demandées sur une tâche',
   TASK_COMPLETED: 'Une tâche est terminée',
   TASK_OVERDUE_AGENT: "La date limite d'exécution d'une tâche est dépassée",
@@ -45,6 +48,8 @@ export const NOTIFICATION_DESCRIPTIONS: Record<NotificationType, string> = {
     "Le responsable désigné de l'effet, sinon le validateur de son dossier ou de son contrat.",
   COURRIER_VALIDATION_PENDING: "Le validateur de l'effet sortant.",
   COURRIER_VALIDATED: "L'auteur de l'effet et son responsable désigné.",
+  COURRIER_SIGNED: "L'auteur de l'effet et celui qui l'a approuvé.",
+  COURRIER_SENT: "L'auteur de l'effet.",
   COURRIER_CORRECTIONS_REQUESTED:
     "L'auteur de l'effet et son responsable désigné.",
   COURRIER_SUPERVISOR_ASSIGNED: 'Le superviseur désigné.',
@@ -55,6 +60,7 @@ export const NOTIFICATION_DESCRIPTIONS: Record<NotificationType, string> = {
   TASK_LIVRABLES_DEPOSITED:
     'Le validateur de la tâche, sinon celui qui décide.',
   TASK_VALIDATION_PENDING: 'Celui qui décide de la validation des livrables.',
+  TASK_LIVRABLE_REJECTED: 'Toutes les personnes affectées à la tâche.',
   TASK_CORRECTIONS_REQUESTED: 'Toutes les personnes affectées à la tâche.',
   TASK_COMPLETED: 'Toutes les personnes affectées à la tâche.',
   TASK_OVERDUE_AGENT: 'Toutes les personnes affectées à la tâche.',

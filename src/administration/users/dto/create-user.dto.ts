@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsEmail,
   IsEnum,
   IsOptional,
@@ -9,7 +10,7 @@ import {
   IsUUID,
   MinLength,
 } from 'class-validator';
-import { AccessProfile } from '../../../../generated/prisma/client';
+import { AccessProfile, UserStatus } from '../../../../generated/prisma/client';
 import { NormalizeEmail } from '../../../common/transforms/normalize-email.transform';
 
 export class CreateUserDto {
@@ -68,4 +69,22 @@ export class CreateUserDto {
   @IsOptional()
   @IsEnum(AccessProfile)
   accessProfile?: AccessProfile;
+
+  @ApiPropertyOptional({
+    default: false,
+    description:
+      'The user has to change their password at their first login: until then, every route but POST /auth/change-password, GET /auth/me and POST /auth/logout answers 403.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  mustChangePassword?: boolean;
+
+  @ApiPropertyOptional({
+    enum: UserStatus,
+    default: UserStatus.ACTIVE,
+    description: 'At creation only: afterwards, POST /users/:id/toggle-status.',
+  })
+  @IsOptional()
+  @IsEnum(UserStatus)
+  status?: UserStatus;
 }

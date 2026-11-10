@@ -512,6 +512,7 @@ export class InstructionsService {
         canal: NotificationCanal.IN_APP,
         dossierId: instruction.dossierId ?? undefined,
         courrierId: instruction.courrierId ?? undefined,
+        instructionId: instruction.id,
       })
       .catch((error: unknown) => {
         console.error('Failed to create instruction notification', error);

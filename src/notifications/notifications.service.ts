@@ -11,6 +11,29 @@ import { CreateNotificationDto } from './dto/create-notification.dto';
 import { NotificationPreferenceDto } from './dto/set-notification-preferences.dto';
 import { isNotificationType, NOTIFICATION_TYPES } from './notification-types';
 
+// What the inbox returns: the front picks the effet's page by its direction.
+const inboxInclude = {
+  notification: {
+    include: { courrier: { select: { direction: true } } },
+  },
+} satisfies Prisma.UserNotificationInclude;
+type InboxRow = Prisma.UserNotificationGetPayload<{
+  include: typeof inboxInclude;
+}>;
+
+function toInboxEntry({
+  notification: { courrier, ...notification },
+  ...entry
+}: InboxRow) {
+  return {
+    ...entry,
+    notification: {
+      ...notification,
+      courrierDirection: courrier?.direction ?? null,
+    },
+  };
+}
+
 @Injectable()
 export class NotificationsService {
   constructor(
@@ -116,13 +139,23 @@ export class NotificationsService {
 
   // A user's own inbox: every notification they were fanned out to, with
   // their individual read/archived status.
-  findMine(userId: string, status?: NotificationStatus) {
+  async findMine(userId: string, status?: NotificationStatus) {
     const where: Prisma.UserNotificationWhereInput = { userId, status };
-    return this.database.userNotification.findMany({
+    const rows = await this.database.userNotification.findMany({
       where,
-      include: { notification: true },
+      include: inboxInclude,
       orderBy: { notification: { createdAt: 'desc' } },
     });
+    return rows.map(toInboxEntry);
+  }
+
+  // Archived ones stay archived.
+  async markAllRead(userId: string) {
+    const { count } = await this.database.userNotification.updateMany({
+      where: { userId, status: NotificationStatus.NOT_READ },
+      data: { status: NotificationStatus.READ },
+    });
+    return { count };
   }
 
   async markStatus(id: string, userId: string, status: NotificationStatus) {
@@ -132,10 +165,12 @@ export class NotificationsService {
     if (!link) {
       throw new NotFoundException(`Notification ${id} not found for this user`);
     }
-    return this.database.userNotification.update({
-      where: { userId_notificationId: { userId, notificationId: id } },
-      data: { status },
-      include: { notification: true },
-    });
+    return toInboxEntry(
+      await this.database.userNotification.update({
+        where: { userId_notificationId: { userId, notificationId: id } },
+        data: { status },
+        include: inboxInclude,
+      }),
+    );
   }
 }

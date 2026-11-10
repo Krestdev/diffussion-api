@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -9,6 +10,7 @@ import {
   CourrierDirection,
   DossierStatus,
   Prisma,
+  ProjectContentType,
   ProjectStatus,
   UserStatus,
 } from '../../../generated/prisma/client';
@@ -232,6 +234,7 @@ export class ProjectService {
       await this.assertManages(project.siteId, actingUserId);
     }
     await this.assertLinks(data, project, project.siteId);
+    await this.assertContentFits(project, data.contentType);
     const dates = toDates(startDate, endDate);
     assertDateOrder(
       dates.startDate !== undefined ? dates.startDate : project.startDate,
@@ -523,6 +526,33 @@ export class ProjectService {
       courriers,
       authorized,
     };
+  }
+
+  // Its kind only changes when what it already holds fits the new one.
+  private async assertContentFits(
+    project: { id: string; contentType: ProjectContentType },
+    wanted?: ProjectContentType,
+  ) {
+    if (!wanted || wanted === project.contentType) return;
+    if (wanted === ProjectContentType.CONTRATS) {
+      const dossiers = await this.database.dossier.count({
+        where: { projectId: project.id, contractId: null },
+      });
+      if (dossiers > 0) {
+        throw new ConflictException(
+          'Ce projet contient des dossiers hors contrat : rattachez-les à un contrat ou déplacez-les avant de changer son type',
+        );
+      }
+      return;
+    }
+    const contracts = await this.database.contract.count({
+      where: { projectId: project.id },
+    });
+    if (contracts > 0) {
+      throw new ConflictException(
+        'Ce projet contient des contrats : déplacez-les avant de changer son type',
+      );
+    }
   }
 
   // The maître d'ouvrage given by name: found or created — on the

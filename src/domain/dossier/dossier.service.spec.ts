@@ -237,6 +237,54 @@ describe('DossierService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    describe('in a project made of contracts', () => {
+      beforeEach(() => {
+        database.project.findUnique.mockResolvedValue({
+          name: 'P',
+          siteId: 's-1',
+          contentType: 'CONTRATS',
+        });
+      });
+
+      it('refuses a dossier outside any contract', async () => {
+        database.dossier.findUnique.mockResolvedValue(openDossier);
+
+        await expect(
+          service.update('d-1', { projectId: 'p-1' }, 'u-1'),
+        ).rejects.toThrow('ne contient que des contrats');
+        expect(database.dossier.update).not.toHaveBeenCalled();
+      });
+
+      it('refuses to take a dossier out of its contract', async () => {
+        database.dossier.findUnique.mockResolvedValue({
+          ...openDossier,
+          projectId: 'p-1',
+          contractId: 'c-1',
+        });
+
+        await expect(
+          service.update(
+            'd-1',
+            { contractId: null as unknown as string },
+            'u-1',
+          ),
+        ).rejects.toThrow('ne contient que des contrats');
+      });
+
+      it('accepts a dossier under one of its contracts', async () => {
+        database.dossier.findUnique.mockResolvedValue(openDossier);
+        database.contract.findUnique.mockResolvedValue({
+          number: 'CT-1',
+          projectId: 'p-1',
+        });
+        database.dossier.update.mockResolvedValue({ id: 'd-1' });
+
+        await service.update('d-1', { contractId: 'c-1' }, 'u-1');
+
+        expect(updatedData().projectId).toBe('p-1');
+      });
+    });
+
     it('refuses an unknown contract', async () => {
       database.dossier.findUnique.mockResolvedValue(openDossier);
       database.contract.findUnique.mockResolvedValue(null);

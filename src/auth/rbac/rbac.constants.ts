@@ -143,7 +143,7 @@ export const PERMISSION_LABELS: Record<PermissionCode, string> = {
   [PermissionCode.AdminManageAnalysisCriteria]: "Gérer les critères d'analyse",
   [PermissionCode.AuditRead]: "Consulter le journal d'audit",
   [PermissionCode.DashboardGlobalRead]:
-    'Consulter le tableau de bord de tous les sites (Direction)',
+    'Consulter les tableaux de bord de son site (de tous les sites avec un rôle global)',
   [PermissionCode.ContractRead]: 'Consulter les contrats',
   [PermissionCode.ContractCreate]: 'Créer un contrat',
   [PermissionCode.ContractUpdate]: 'Modifier un contrat',
@@ -186,7 +186,6 @@ export const PERMISSION_METADATA_KEY = 'rbac:permission';
 // site's own criteria and settings (the common catalogue needs it globally).
 export const PLATFORM_PERMISSIONS: ReadonlySet<PermissionCode> = new Set([
   PermissionCode.AdminManageCategories,
-  PermissionCode.DashboardGlobalRead,
 ]);
 
 // Managing these includes reading them.

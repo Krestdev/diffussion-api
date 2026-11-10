@@ -33,7 +33,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     }
     const user = await this.database.user.findUnique({
       where: { id: payload.sub },
-      select: { status: true },
+      select: { status: true, mustChangePassword: true },
     });
     if (!user || user.status !== UserStatus.ACTIVE) {
       throw new UnauthorizedException('Account is no longer active');
@@ -41,6 +41,6 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     this.cls.set('userId', payload.sub);
     this.cls.set('actorLabel', payload.email);
-    return payload;
+    return { ...payload, mustChangePassword: user.mustChangePassword };
   }
 }

@@ -283,6 +283,7 @@ export class DeadlineReminderService
         {
           type: 'TASK_DUE_SOON',
           message: `L'échéance de la tâche « ${row.title} » arrive le ${day(row.dueDate)}.`,
+          instructionId: row.id,
           courrierId: row.courrierId,
           dossierId: row.dossierId,
         },
@@ -328,6 +329,7 @@ export class DeadlineReminderService
         {
           type: 'TASK_OVERDUE',
           message: `Relance : la date limite de la tâche « ${row.title} » est dépassée (${day(row.dueDate)}).`,
+          instructionId: row.id,
           courrierId: row.courrierId,
           dossierId: row.dossierId,
         },
@@ -348,6 +350,7 @@ export class DeadlineReminderService
       message: string;
       courrierId: string | null;
       dossierId: string | null;
+      instructionId?: string;
     },
   ) {
     const recipientIds = [
@@ -362,6 +365,7 @@ export class DeadlineReminderService
         canal: NotificationCanal.IN_APP,
         courrierId: content.courrierId ?? undefined,
         dossierId: content.dossierId ?? undefined,
+        instructionId: content.instructionId,
       })
       .catch((error: unknown) => {
         this.logger.error('Failed to send a reminder', error as Error);

@@ -702,7 +702,7 @@ export function overviewWhere(
 
 /**
  * The global dashboards (T·1, T·4, T·5), for one site: whoever holds
- * DASHBOARD_GLOBAL_READ globally, or that site's responsible.
+ * DASHBOARD_GLOBAL_READ globally or at that site, or that site's responsible.
  */
 @Injectable()
 export class DashboardOverviewService {

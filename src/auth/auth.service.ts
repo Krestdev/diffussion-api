@@ -9,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
 import { RbacService } from './rbac/rbac.service';
 import { DatabaseService } from '../database/database.service';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -124,6 +125,7 @@ export class AuthService {
         where: { id: grant.userId },
         data: {
           password: hashedPassword,
+          mustChangePassword: false,
           refreshToken: null,
           isConnected: false,
         },
@@ -138,7 +140,9 @@ export class AuthService {
     ]);
   }
 
-  async login(dto: LoginDto): Promise<AuthTokens> {
+  async login(
+    dto: LoginDto,
+  ): Promise<AuthTokens & { mustChangePassword: boolean }> {
     const user = await this.database.user.findUnique({
       where: { email: dto.email },
     });
@@ -155,10 +159,40 @@ export class AuthService {
     // disclosed to someone who doesn't know its credentials.
     this.assertActive(user.status);
 
-    return this.issueTokens(user.id, user.email, {
+    const tokens = await this.issueTokens(user.id, user.email, {
       lastLogin: new Date(),
       isConnected: true,
     });
+    return { ...tokens, mustChangePassword: user.mustChangePassword };
+  }
+
+  /**
+   * The signed-in user's own password. New tokens come back: the refresh
+   * token is replaced, which ends the account's other sessions.
+   */
+  async changePassword(
+    userUuid: string,
+    dto: ChangePasswordDto,
+  ): Promise<AuthTokens> {
+    const user = await this.database.user.findUniqueOrThrow({
+      where: { id: userUuid },
+    });
+    if (!(await bcrypt.compare(dto.currentPassword, user.password))) {
+      throw new BadRequestException('Le mot de passe actuel est incorrect');
+    }
+    if (dto.newPassword === dto.currentPassword) {
+      throw new BadRequestException(
+        "Le nouveau mot de passe doit être différent de l'actuel",
+      );
+    }
+    await this.database.user.update({
+      where: { id: user.id },
+      data: {
+        password: await bcrypt.hash(dto.newPassword, SALT_ROUNDS),
+        mustChangePassword: false,
+      },
+    });
+    return this.issueTokens(user.id, user.email);
   }
 
   async refreshTokens(

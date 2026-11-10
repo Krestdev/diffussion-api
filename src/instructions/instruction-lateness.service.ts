@@ -135,6 +135,7 @@ export class InstructionLatenessService
         canal: NotificationCanal.IN_APP,
         dossierId: task.dossierId ?? undefined,
         courrierId: task.courrierId ?? undefined,
+        instructionId: task.id,
       })
       .catch((error: unknown) => {
         this.logger.error('Failed to send an overdue alert', error as Error);

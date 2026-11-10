@@ -24,7 +24,8 @@ export class DashboardController {
     private readonly overviewService: DashboardOverviewService,
   ) {}
 
-  // One site's global dashboards: DASHBOARD_GLOBAL_READ, or its responsible.
+  // One site's global dashboards: DASHBOARD_GLOBAL_READ globally or at that
+  // site, or its responsible.
   @Get('overview')
   overview(
     @Query() query: DashboardOverviewQueryDto,

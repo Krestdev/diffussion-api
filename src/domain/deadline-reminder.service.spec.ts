@@ -98,6 +98,33 @@ describe('DeadlineReminderService', () => {
     service = module.get(DeadlineReminderService);
   });
 
+  it('names the task in its reminders', async () => {
+    database.instruction.findMany.mockResolvedValueOnce([
+      {
+        id: 't-1',
+        title: 'Rapport',
+        dossierId: null,
+        courrierId: null,
+        createdById: 'u-creator',
+        dueDate: new Date(NOW.getTime() + DAY),
+        overdueRemindedAt: null,
+        overdueNotifiedAt: null,
+        assignees: [{ userId: 'u-exec', role: 'EXECUTANT' }],
+        courrier: null,
+      },
+    ]);
+
+    await service.sweep(NOW);
+
+    expect(sent()).toEqual([
+      expect.objectContaining({
+        type: 'TASK_DUE_SOON',
+        recipientIds: ['u-exec'],
+        instructionId: 't-1',
+      }),
+    ]);
+  });
+
   it('reminds an effet whose deadline is within the reminder delay', async () => {
     courriers.dueSoon = [
       effet({ dueDate: new Date(NOW.getTime() + 1.5 * DAY) }),

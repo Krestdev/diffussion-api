@@ -475,6 +475,7 @@ describe('InstructionsService', () => {
         expect.objectContaining({
           type: 'TASK_NOT_SUBSCRIBED',
           recipientIds: ['u-sup'],
+          instructionId: expect.any(String) as unknown,
         }),
       );
     });

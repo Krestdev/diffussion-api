@@ -1273,6 +1273,48 @@ describe('MailService', () => {
         });
       });
 
+      it('tells the author and the approver a signed sortant is to transmit', async () => {
+        database.courrier.findUnique.mockResolvedValue({
+          ...courrier(CourrierStatus.VALIDE),
+          approvedById: 'u-chef',
+        });
+        database.user.findUnique.mockResolvedValue({ status: 'ACTIVE' });
+
+        await service.sign(
+          'c-1',
+          { signatoryId: 'u-dg', signedAt: '2026-11-02' },
+          scan,
+          'u-secretary',
+        );
+
+        expect(notifications.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            recipientIds: ['u-author', 'u-chef'],
+            type: 'COURRIER_SIGNED',
+            courrierId: 'c-1',
+          }),
+        );
+      });
+
+      it("doesn't tell whoever records the signature", async () => {
+        database.courrier.findUnique.mockResolvedValue({
+          ...courrier(CourrierStatus.VALIDE),
+          approvedById: 'u-chef',
+        });
+        database.user.findUnique.mockResolvedValue({ status: 'ACTIVE' });
+
+        await service.sign(
+          'c-1',
+          { signatoryId: 'u-dg', signedAt: '2026-11-02' },
+          scan,
+          'u-author',
+        );
+
+        expect(notifications.create).toHaveBeenCalledWith(
+          expect.objectContaining({ recipientIds: ['u-chef'] }),
+        );
+      });
+
       it('refuses to sign without the scan', async () => {
         database.courrier.findUnique.mockResolvedValue(
           courrier(CourrierStatus.VALIDE),
@@ -1340,6 +1382,35 @@ describe('MailService', () => {
             dischargeDueDate: new Date('2026-11-13'),
           },
         });
+        expect(notifications.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            recipientIds: ['u-author'],
+            type: 'COURRIER_SENT',
+            courrierId: 'c-1',
+          }),
+        );
+      });
+
+      it("doesn't tell the author they sent it themselves", async () => {
+        database.courrier.findUnique.mockResolvedValue(
+          courrier(CourrierStatus.SIGNE),
+        );
+        database.canal.findUnique.mockResolvedValue({
+          name: 'Porteur',
+          active: true,
+        });
+
+        await service.send(
+          'c-1',
+          {
+            canalId: 'canal-1',
+            recipient: 'M. Diallo',
+            transmittedAt: '2026-11-03',
+          },
+          'u-author',
+        );
+
+        expect(notifications.create).not.toHaveBeenCalled();
       });
 
       it('refuses to send a sortant not yet signed', async () => {
@@ -1603,6 +1674,9 @@ describe('MailService', () => {
           expect.objectContaining({
             recipientIds: ['u-author'],
             type: 'COURRIER_VALIDATED',
+            message: expect.stringContaining(
+              'signature à enregistrer',
+            ) as unknown,
           }),
         );
       });

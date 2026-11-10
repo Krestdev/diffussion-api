@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -306,6 +307,43 @@ describe('ProjectService', () => {
       await expect(
         service.update('p-1', { status: 'ARCHIVED' }, 'u-admin'),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('its content type', () => {
+    const ofType = (contentType: 'DOSSIERS' | 'CONTRATS') =>
+      database.project.findUnique.mockResolvedValue({
+        ...project(),
+        contentType,
+      });
+
+    it('refuses CONTRATS while it holds dossiers outside any contract', async () => {
+      ofType('DOSSIERS');
+      database.dossier.count.mockResolvedValue(2);
+
+      await expect(
+        service.update('p-1', { contentType: 'CONTRATS' }, 'u-admin'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(database.dossier.count).toHaveBeenCalledWith({
+        where: { projectId: 'p-1', contractId: null },
+      });
+    });
+
+    it('refuses DOSSIERS while it holds contracts', async () => {
+      ofType('CONTRATS');
+      database.contract.count.mockResolvedValue(1);
+
+      await expect(
+        service.update('p-1', { contentType: 'DOSSIERS' }, 'u-admin'),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('changes when nothing is in the way', async () => {
+      ofType('DOSSIERS');
+
+      await service.update('p-1', { contentType: 'CONTRATS' }, 'u-admin');
+
+      expect(updatedData().contentType).toBe('CONTRATS');
     });
   });
 

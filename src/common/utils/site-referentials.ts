@@ -1,5 +1,8 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { ProjectStatus } from '../../../generated/prisma/client';
+import {
+  ProjectContentType,
+  ProjectStatus,
+} from '../../../generated/prisma/client';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
@@ -94,6 +97,22 @@ export async function assertProjectOfSite(
     );
   }
   return project;
+}
+
+// A dossier outside any contract: refused in a project made of contracts.
+export async function assertProjectTakesDossiers(
+  db: DatabaseService,
+  projectId: string,
+) {
+  const project = await db.project.findUnique({
+    where: { id: projectId },
+    select: { name: true, contentType: true },
+  });
+  if (project?.contentType === ProjectContentType.CONTRATS) {
+    throw new BadRequestException(
+      `Le projet « ${project.name} » ne contient que des contrats : ce dossier doit être rattaché à l'un d'eux`,
+    );
+  }
 }
 
 // The caller's own site, for the visibility of per-site data: null for a

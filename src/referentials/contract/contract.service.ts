@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   ContractStatus,
+  ProjectContentType,
   ProjectStatus,
   Prisma,
   UserStatus,
@@ -522,10 +523,15 @@ export class ContractService {
     if (dto.projectId && dto.projectId !== current?.projectId) {
       const project = await this.database.project.findUnique({
         where: { id: dto.projectId },
-        select: { id: true },
+        select: { name: true, contentType: true },
       });
       if (!project) {
         throw new BadRequestException(`Project ${dto.projectId} not found`);
+      }
+      if (project.contentType === ProjectContentType.DOSSIERS) {
+        throw new BadRequestException(
+          `Le projet « ${project.name} » ne contient que des dossiers : aucun contrat ne peut y être rattaché`,
+        );
       }
     }
     if (dto.clientId && dto.clientId !== current?.clientId) {

@@ -122,7 +122,13 @@ export class UsersService {
 
   async create(dto: CreateUserDto, actingUserId: string) {
     const scope = await this.adminScope(actingUserId);
-    const { roleIds = [], siteId: requestedSiteId, password, ...data } = dto;
+    const {
+      roleIds = [],
+      siteId: requestedSiteId,
+      password,
+      status = UserStatus.ACTIVE,
+      ...data
+    } = dto;
     const siteId = this.siteForNewUser(scope, requestedSiteId);
     assertInScope(scope, siteId);
     this.assertProfileAllowed(scope, dto.accessProfile);
@@ -134,7 +140,10 @@ export class UsersService {
         ...data,
         siteId,
         password: await bcrypt.hash(password, SALT_ROUNDS),
-        status: UserStatus.ACTIVE,
+        status,
+        ...(status === UserStatus.SUSPENDED
+          ? { deactivatedAt: new Date(), deactivatedById: actingUserId }
+          : {}),
         userRoles: roleIds.length
           ? { create: grantsAt(roleIds, siteId) }
           : undefined,
@@ -148,6 +157,8 @@ export class UsersService {
         email: user.email,
         siteId,
         accessProfile: user.accessProfile,
+        status: user.status,
+        mustChangePassword: user.mustChangePassword,
         roles: view.roles.map((role) => role.name).sort(),
       },
     });

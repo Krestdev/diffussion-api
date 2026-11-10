@@ -98,6 +98,19 @@ describe('ContractService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('refuses a project made of dossiers', async () => {
+    database.project.findUnique.mockResolvedValue({
+      id: 'p-1',
+      siteId: 's-1',
+      name: 'P',
+      contentType: 'DOSSIERS',
+    });
+
+    await expect(
+      service.create({ title: 'Marché A', projectId: 'p-1' }, 'u-admin'),
+    ).rejects.toThrow('ne contient que des dossiers');
+  });
+
   it('refuses a contract that ends before it starts', async () => {
     await expect(
       service.create(

@@ -65,6 +65,11 @@ export class NotificationsController {
     return this.notificationsService.findMine(user.sub, status);
   }
 
+  @Patch('read-all')
+  markAllRead(@CurrentUser() user: JwtPayloadWithRefreshToken) {
+    return this.notificationsService.markAllRead(user.sub);
+  }
+
   @Patch(':id/read')
   markRead(
     @Param('id', ParseUUIDPipe) id: string,

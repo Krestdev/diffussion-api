@@ -9,6 +9,8 @@ export type JwtPayload = {
   sub: string;
   email: string;
   typ?: TokenType;
+  /** Set by JwtStrategy from the account, never part of the token. */
+  mustChangePassword?: boolean;
 };
 
 export type JwtPayloadWithRefreshToken = JwtPayload & {
