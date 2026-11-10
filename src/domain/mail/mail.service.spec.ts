@@ -1085,6 +1085,33 @@ describe('MailService', () => {
       expect(database.dossier.findUnique).not.toHaveBeenCalled();
       expect(database.dossier.updateMany).not.toHaveBeenCalled();
     });
+
+    it("won't take a typed reference on a sortant", async () => {
+      const sortant = { ...draft, direction: CourrierDirection.SORTANT };
+      database.courrier.findUnique.mockResolvedValue(sortant);
+      database.courrier.update.mockResolvedValue(sortant);
+
+      await service.update('c-1', { reference: 'TAPEE' }, 'u-1');
+
+      const { data } = database.courrier.update.mock.calls[0][0] as {
+        data: Record<string, unknown>;
+      };
+      expect(data.reference).toBeUndefined();
+    });
+
+    it('keeps the type of a sortant that has its reference', async () => {
+      database.courrier.findUnique.mockResolvedValue({
+        ...draft,
+        direction: CourrierDirection.SORTANT,
+        reference: 'LET-2026-000001',
+        typeId: 't-courrier',
+      });
+
+      await expect(
+        service.update('c-1', { typeId: 't-autre' }, 'u-1'),
+      ).rejects.toThrow('son type ne peut plus changer');
+      expect(database.courrier.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('validation', () => {
@@ -1464,6 +1491,10 @@ describe('MailService', () => {
     });
 
     describe('submitForValidation', () => {
+      beforeEach(() => {
+        database.courrier.update.mockResolvedValue({ id: 'c-1' });
+      });
+
       it('refuses a sortant courrier that is not a draft', async () => {
         database.courrier.findUnique.mockResolvedValue(
           courrier(CourrierStatus.ENVOYE),
