@@ -30,11 +30,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../auth/rbac/permission.guard';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RequirePermission } from '../auth/rbac/require-permission.decorator';
-import {
-  SiteScope,
-  fromBody,
-  fromParam,
-} from '../auth/rbac/site-scope.decorator';
+import { SiteScope, fromParam } from '../auth/rbac/site-scope.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtPayloadWithRefreshToken } from '../auth/types/jwt-payload.type';
 import { AssignInstructionDto } from './dto/assign-instruction.dto';
@@ -64,9 +60,9 @@ import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 export class InstructionsController {
   constructor(private readonly instructionsService: InstructionsService) {}
 
+  // INSTRUCTION_CREATE at the dossier's site, or the effet's supervisor:
+  // checked in the service.
   @Post()
-  @RequirePermission(PermissionCode.InstructionCreate)
-  @SiteScope(fromBody('dossier', 'dossierId'))
   create(
     @Body() dto: CreateInstructionsDto,
     @CurrentUser() user: JwtPayloadWithRefreshToken,
@@ -146,13 +142,15 @@ export class InstructionsController {
     );
   }
 
+  // INSTRUCTION_ASSIGN at the task's site, or the supervisor of its effet:
+  // checked in the service.
   @Post(':id/assign')
-  @RequirePermission(PermissionCode.InstructionAssign)
   assign(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignInstructionDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
   ) {
-    return this.instructionsService.assign(id, dto);
+    return this.instructionsService.assign(id, dto, user.sub);
   }
 
   // By designation, not by role: only one of the task's executants may

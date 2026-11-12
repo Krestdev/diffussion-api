@@ -35,7 +35,9 @@ import { FindContractsQueryDto } from './dto/find-contracts.query.dto';
 import { UpdateContractDto } from './dto/update-contract.dto';
 
 const contractInclude = {
-  project: { select: { id: true, name: true, reference: true } },
+  project: {
+    select: { id: true, name: true, reference: true, contentType: true },
+  },
   client: { select: { id: true, name: true } },
   responsible: { select: { id: true, name: true, email: true } },
   _count: { select: { dossiers: true, accesses: true } },

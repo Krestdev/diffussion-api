@@ -85,7 +85,9 @@ const mailInclude = {
   signedBy: { select: { id: true, name: true } },
   signedDocument: true,
   dischargeDocument: true,
-  project: { select: { id: true, name: true, reference: true } },
+  project: {
+    select: { id: true, name: true, reference: true, contentType: true },
+  },
   contract: {
     select: { id: true, number: true, title: true, reference: true },
   },
@@ -496,29 +498,51 @@ export class MailService {
   // number, not yet attached to a dossier. Everything else, dossier
   // included, is completed through update() before submitForVerification().
   async createOutgoingDraft(dto: CreateOutgoingMailDto, createdById: string) {
-    const typeId = await this.defaultEffetTypeId();
+    const siteId = await this.siteOfEffet(null, createdById);
+    const typeId = await this.checkEffetFields(
+      { typeId: dto.typeId },
+      { direction: CourrierDirection.SORTANT, siteId },
+    );
+    const now = new Date();
     // To be sent within its site's reply delay (PA·8).
     const dueDate = await this.defaultDeadline(
-      await this.siteOfEffet(null, createdById),
-      new Date(),
+      siteId,
+      now,
       'outgoingReplyDays',
     );
     const draft = await createWithUniqueReference('M', (number) =>
-      this.database.courrier.create({
-        data: {
-          subject: dto.subject,
-          typeId,
-          number,
-          direction: CourrierDirection.SORTANT,
-          status: CourrierStatus.BROUILLON,
-          createdById,
-          dueDate,
-        },
-        include: mailInclude,
+      this.database.$transaction(async (tx) => {
+        const { id } = await tx.courrier.create({
+          data: {
+            subject: dto.subject,
+            typeId,
+            number,
+            direction: CourrierDirection.SORTANT,
+            status: CourrierStatus.BROUILLON,
+            createdById,
+            dueDate,
+          },
+          select: { id: true },
+        });
+        // Its reference at once, to be written on the document. A model
+        // needing a project or a dossier waits for them: it is given at
+        // the submission then.
+        const reference = await newOutgoingReference(tx, id, now).catch(
+          (error: unknown) => {
+            if (error instanceof BadRequestException) return null;
+            throw error;
+          },
+        );
+        return tx.courrier.update({
+          where: { id },
+          data: reference ? { reference } : {},
+          include: mailInclude,
+        });
       }),
     );
     this.recordCourrierEvent(draft.id, 'COURRIER_BROUILLON_CREE', {
       subject: draft.subject,
+      reference: draft.reference,
     });
     return formatCourrier(draft);
   }
@@ -991,8 +1015,8 @@ export class MailService {
         'Nobody can validate this courrier: neither its dossier nor its site has a responsible — name one first',
       );
     }
-    // Type, project and dossier are known by now: its reference is given
-    // here, once, with the submission or not at all.
+    // Its reference, if it did not get one at its creation (a model needing
+    // a project or a dossier): they are known by now. Never changed after.
     const now = new Date();
     const updated = await this.database.$transaction(async (tx) => {
       const reference = await newOutgoingReference(tx, id, now);

@@ -561,6 +561,8 @@ describe('MailService', () => {
     it("gives a sortant draft its site's reply delay", async () => {
       settings.outgoingReplyDays = 15;
       settings.businessDaysOnly = false;
+      database.courrier.create.mockResolvedValue({ id: 'c-1' });
+      database.courrier.update.mockResolvedValue({ id: 'c-1' });
 
       await service.createOutgoingDraft({ subject: 'Réponse' }, 'u-author');
 
@@ -1005,9 +1007,36 @@ describe('MailService', () => {
   });
 
   describe('createOutgoingDraft', () => {
+    it('gives its reference at once, from its type', async () => {
+      database.courrier.create.mockResolvedValue({ id: 'c-1' });
+      database.courrier.findUnique.mockResolvedValue({
+        direction: CourrierDirection.SORTANT,
+        reference: null,
+        type: null,
+        createdBy: { name: 'Awa', siteId: 's-1' },
+      });
+      database.courrier.update.mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'c-1', ...data }),
+      );
+
+      const result = await service.createOutgoingDraft(
+        { subject: 'Réponse' },
+        'u-1',
+      );
+
+      expect(result.reference).toBe(`SOR-${new Date().getFullYear()}-000007`);
+    });
+
     it('creates a numbered sortant BROUILLON from its subject alone', async () => {
       database.courrier.create.mockImplementation(({ data }) =>
         Promise.resolve({ id: 'c-1', ...data }),
+      );
+      database.courrier.update.mockImplementation(({ data }) =>
+        Promise.resolve({
+          ...database.courrier.create.mock.calls[0][0].data,
+          id: 'c-1',
+          ...data,
+        }),
       );
 
       const result = await service.createOutgoingDraft(

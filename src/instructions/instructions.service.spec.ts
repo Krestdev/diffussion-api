@@ -37,6 +37,7 @@ describe('InstructionsService', () => {
     hasPermission: jest.Mock;
     hasPermissionAtSite: jest.Mock;
     hasGlobalPermission: jest.Mock;
+    resolveSiteId: jest.Mock;
   };
   let database: {
     instruction: Record<string, jest.Mock>;
@@ -105,6 +106,7 @@ describe('InstructionsService', () => {
       hasPermission: jest.fn().mockResolvedValue(true),
       hasPermissionAtSite: jest.fn().mockResolvedValue(true),
       hasGlobalPermission: jest.fn().mockResolvedValue(false),
+      resolveSiteId: jest.fn().mockResolvedValue('site-1'),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -408,7 +410,7 @@ describe('InstructionsService', () => {
         status: InstructionStatus.EN_COURS,
       });
 
-      await service.assign('i-1', { executantIds: ['u-3'] });
+      await service.assign('i-1', { executantIds: ['u-3'] }, 'u-chef');
 
       expect(database.dossierAccess.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -416,6 +418,83 @@ describe('InstructionsService', () => {
           create: { dossierId: 'd-1', userId: 'u-3', canView: true },
         }),
       );
+    });
+  });
+
+  describe("an effet's supervisor", () => {
+    // u-sup supervises effet c-1 of dossier d-1 and holds no permission.
+    beforeEach(() => {
+      rbac.hasPermission.mockResolvedValue(false);
+      rbac.hasPermissionAtSite.mockResolvedValue(false);
+      database.courrier.findUnique.mockResolvedValue({
+        supervisorId: 'u-sup',
+        dossierId: 'd-1',
+        contractId: null,
+      });
+    });
+
+    it('creates a task of that effet without INSTRUCTION_CREATE', async () => {
+      database.instruction.create.mockResolvedValue({
+        id: 'i-1',
+        dossierId: 'd-1',
+      });
+
+      await service.create(
+        { dossierId: 'd-1', courrierId: 'c-1', title: 'X' },
+        'u-sup',
+      );
+
+      expect(database.instruction.create).toHaveBeenCalled();
+    });
+
+    it('needs INSTRUCTION_CREATE for a task of another dossier', async () => {
+      await expect(
+        service.create(
+          { dossierId: 'd-2', courrierId: 'c-1', title: 'X' },
+          'u-sup',
+        ),
+      ).rejects.toThrow('Missing permission at this site: INSTRUCTION_CREATE');
+      expect(rbac.resolveSiteId).toHaveBeenCalledWith('dossier', 'd-2');
+    });
+
+    it('is refused when someone else supervises the effet', async () => {
+      await expect(
+        service.create(
+          { dossierId: 'd-1', courrierId: 'c-1', title: 'X' },
+          'u-other',
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(database.instruction.create).not.toHaveBeenCalled();
+    });
+
+    it("assigns that effet's tasks without INSTRUCTION_ASSIGN", async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        id: 'i-1',
+        dossierId: 'd-1',
+        status: InstructionStatus.A_AFFECTER,
+        courrier: { supervisorId: 'u-sup' },
+      });
+      database.instruction.update.mockResolvedValue({
+        id: 'i-1',
+        dossierId: 'd-1',
+      });
+
+      await service.assign('i-1', { executantIds: ['u-3'] }, 'u-sup');
+
+      expect(database.instruction.update).toHaveBeenCalled();
+    });
+
+    it('needs INSTRUCTION_ASSIGN for a task of another effet', async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        id: 'i-1',
+        status: InstructionStatus.A_AFFECTER,
+        courrier: { supervisorId: 'u-chef' },
+      });
+
+      await expect(
+        service.assign('i-1', { executantIds: ['u-3'] }, 'u-sup'),
+      ).rejects.toThrow('Missing permission at this site: INSTRUCTION_ASSIGN');
+      expect(database.instruction.update).not.toHaveBeenCalled();
     });
   });
 

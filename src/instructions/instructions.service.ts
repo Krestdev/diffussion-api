@@ -540,7 +540,54 @@ export class InstructionsService {
     );
   }
 
+  /**
+   * The supervisor of an effet works on it without a role: they create its
+   * tasks and assign them. Anyone else needs `permission` at the site of
+   * the dossier (or task) concerned, as the permission guard required.
+   */
+  private async assertMayManageTasks(
+    userId: string,
+    permission: PermissionCode,
+    supervisedBy: () => Promise<boolean>,
+    site?: { entity: 'dossier' | 'instruction'; id: string },
+  ) {
+    if (await supervisedBy()) return;
+    const siteId = site
+      ? await this.rbac.resolveSiteId(site.entity, site.id)
+      : null;
+    const granted = siteId
+      ? await this.rbac.hasPermissionAtSite(userId, permission, siteId)
+      : await this.rbac.hasPermission(userId, permission);
+    if (!granted) {
+      throw new ForbiddenException(
+        siteId
+          ? `Missing permission at this site: ${permission}`
+          : `Missing permission: ${permission}`,
+      );
+    }
+  }
+
   async create(dto: CreateInstructionsDto, createdById: string) {
+    await this.assertMayManageTasks(
+      createdById,
+      PermissionCode.InstructionCreate,
+      async () => {
+        if (!dto.courrierId) return false;
+        const effet = await this.database.courrier.findUnique({
+          where: { id: dto.courrierId },
+          select: { supervisorId: true, dossierId: true, contractId: true },
+        });
+        // Only for a task of the effet's own dossier or contract.
+        return (
+          !!effet &&
+          effet.supervisorId === createdById &&
+          (dto.dossierId
+            ? effet.dossierId === dto.dossierId
+            : !!dto.contractId && effet.contractId === dto.contractId)
+        );
+      },
+      dto.dossierId ? { entity: 'dossier', id: dto.dossierId } : undefined,
+    );
     const {
       executantIds,
       superviseurId,
@@ -1013,7 +1060,19 @@ export class InstructionsService {
 
   // RG-INS-002: (re)assign directly to executant(s), or to a superviseur
   // responsible for designating them.
-  async assign(id: string, dto: AssignInstructionDto) {
+  async assign(id: string, dto: AssignInstructionDto, userId: string) {
+    await this.assertMayManageTasks(
+      userId,
+      PermissionCode.InstructionAssign,
+      async () => {
+        const task = await this.database.instruction.findUnique({
+          where: { id },
+          select: { courrier: { select: { supervisorId: true } } },
+        });
+        return task?.courrier?.supervisorId === userId;
+      },
+      { entity: 'instruction', id },
+    );
     const instruction = await this.ensureNotTerminal(id);
     if (!dto.executantIds?.length && !dto.superviseurId && !dto.validateurId) {
       throw new BadRequestException(
