@@ -6,7 +6,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { MailService, formatCourrier } from './mail.service';
-import { DispatchMailDto } from './dto/dispatch-mail.dto';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { RbacService } from '../../auth/rbac/rbac.service';

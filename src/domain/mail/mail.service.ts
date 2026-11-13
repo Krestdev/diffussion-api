@@ -182,7 +182,6 @@ export function formatCourrier<T extends Record<string, any>>(courrier: T) {
           }
         : null
       : undefined;
-  /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 
   // The effet's site: its dossier's, else its registrant's (see
   // siteOfEffet) — the site its supervisor and agents are picked from.
@@ -238,6 +237,7 @@ export function formatCourrier<T extends Record<string, any>>(courrier: T) {
         },
   };
 }
+/* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 
 const courrierAccessInclude = {
   user: { select: { id: true, name: true, email: true } },
