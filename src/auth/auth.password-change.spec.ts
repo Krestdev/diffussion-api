@@ -9,7 +9,7 @@ import { RbacService } from './rbac/rbac.service';
 import { UserStatus } from '../../generated/prisma/enums';
 
 describe('AuthService — mandatory password change', () => {
-  const CURRENT = 'Current@2026';
+  const CURRENT = 'mock-current-password-123';
   let service: AuthService;
   let hash: string;
   let database: { user: Record<string, jest.Mock> };
@@ -28,7 +28,8 @@ describe('AuthService — mandatory password change', () => {
 
   beforeEach(async () => {
     process.env.JWT_SECRET = 'test-access-secret-not-used-in-production';
-    process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-not-used-in-production';
+    process.env.JWT_REFRESH_SECRET =
+      'test-refresh-secret-not-used-in-production';
     database = {
       user: {
         findUnique: jest.fn(),
@@ -64,16 +65,16 @@ describe('AuthService — mandatory password change', () => {
 
     const tokens = await service.changePassword('u-1', {
       currentPassword: CURRENT,
-      newPassword: 'Another@2026',
+      newPassword: 'mock-another-password-456',
     });
 
     const { data } = database.user.update.mock.calls[0][0] as {
       data: { password: string; mustChangePassword: boolean };
     };
     expect(data.mustChangePassword).toBe(false);
-    await expect(bcrypt.compare('Another@2026', data.password)).resolves.toBe(
-      true,
-    );
+    await expect(
+      bcrypt.compare('mock-another-password-456', data.password),
+    ).resolves.toBe(true);
     expect(tokens.accessToken).toBe('signed');
   });
 
@@ -82,8 +83,8 @@ describe('AuthService — mandatory password change', () => {
 
     await expect(
       service.changePassword('u-1', {
-        currentPassword: 'Wrong@2026',
-        newPassword: 'Another@2026',
+        currentPassword: 'mock-wrong-password-789',
+        newPassword: 'mock-another-password-456',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(database.user.update).not.toHaveBeenCalled();

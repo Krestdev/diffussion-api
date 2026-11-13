@@ -102,6 +102,7 @@ describe('AuthService — password reset', () => {
   });
 
   describe('resetPassword', () => {
+    const NEW_PASSWORD = 'mock-reset-password-123';
     const activeGrant = (overrides: Record<string, unknown> = {}) => ({
       id: 'prt-1',
       userId: 'u-1',
@@ -114,7 +115,7 @@ describe('AuthService — password reset', () => {
     it('sets the new password and ends every existing session', async () => {
       database.passwordResetToken.findUnique.mockResolvedValue(activeGrant());
 
-      await service.resetPassword({ token: 'raw-token', password: 'N3wP@ss1' });
+      await service.resetPassword({ token: 'raw-token', password: NEW_PASSWORD });
 
       expect(database.passwordResetToken.findUnique).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -124,7 +125,7 @@ describe('AuthService — password reset', () => {
       const update = database.user.update.mock.calls[0][0] as {
         data: { password: string; refreshToken: null };
       };
-      expect(await bcrypt.compare('N3wP@ss1', update.data.password)).toBe(true);
+      expect(await bcrypt.compare(NEW_PASSWORD, update.data.password)).toBe(true);
       expect(update.data.refreshToken).toBeNull();
       // Single use.
       expect(database.passwordResetToken.update).toHaveBeenCalledWith(
@@ -139,7 +140,7 @@ describe('AuthService — password reset', () => {
       database.passwordResetToken.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.resetPassword({ token: 'nope', password: 'N3wP@ss1' }),
+        service.resetPassword({ token: 'nope', password: NEW_PASSWORD }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(database.user.update).not.toHaveBeenCalled();
     });
@@ -150,7 +151,7 @@ describe('AuthService — password reset', () => {
       );
 
       await expect(
-        service.resetPassword({ token: 'raw-token', password: 'N3wP@ss1' }),
+        service.resetPassword({ token: 'raw-token', password: NEW_PASSWORD }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(database.user.update).not.toHaveBeenCalled();
     });
@@ -161,7 +162,7 @@ describe('AuthService — password reset', () => {
       );
 
       await expect(
-        service.resetPassword({ token: 'raw-token', password: 'N3wP@ss1' }),
+        service.resetPassword({ token: 'raw-token', password: NEW_PASSWORD }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(database.user.update).not.toHaveBeenCalled();
     });
@@ -172,7 +173,7 @@ describe('AuthService — password reset', () => {
       );
 
       await expect(
-        service.resetPassword({ token: 'raw-token', password: 'N3wP@ss1' }),
+        service.resetPassword({ token: 'raw-token', password: NEW_PASSWORD }),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(database.user.update).not.toHaveBeenCalled();
     });

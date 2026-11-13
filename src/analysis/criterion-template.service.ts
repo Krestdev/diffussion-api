@@ -74,7 +74,9 @@ export class CriterionTemplateService {
         siteId,
       ))
     ) {
-      throw new ForbiddenException('Ces critères appartiennent à un autre site');
+      throw new ForbiddenException(
+        'Ces critères appartiennent à un autre site',
+      );
     }
   }
 
