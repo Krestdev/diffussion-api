@@ -27,8 +27,8 @@ describe('AuthService — mandatory password change', () => {
   });
 
   beforeEach(async () => {
-    process.env.JWT_SECRET = 'access-secret';
-    process.env.JWT_REFRESH_SECRET = 'refresh-secret';
+    process.env.JWT_SECRET = 'test-access-secret-not-used-in-production';
+    process.env.JWT_REFRESH_SECRET = 'test-refresh-secret-not-used-in-production';
     database = {
       user: {
         findUnique: jest.fn(),
