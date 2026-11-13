@@ -1,9 +1,3 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, MaxLength } from 'class-validator';
+import { CreateSiteListItemDto } from '../../../common/dto/site-list-item.dto';
 
-export class CreateCorrespondentTypeDto {
-  @ApiProperty({ example: 'Administration publique' })
-  @IsString()
-  @MaxLength(100)
-  name: string;
-}
+export class CreateCorrespondentTypeDto extends CreateSiteListItemDto {}

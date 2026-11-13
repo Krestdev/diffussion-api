@@ -18,6 +18,8 @@ export interface AuditLogOptions {
   operation: 'CREATE' | 'UPDATE' | 'DELETE';
   idParamIndex?: number; // Index of the ID in the arguments array (default: 0)
   findMethod?: string; // Name of the method used to fetch the entity (default: 'findOne')
+  /** Extra details for the entry, from the method's arguments. */
+  metadata?: (args: unknown[]) => Record<string, unknown> | undefined;
 }
 
 /**
@@ -72,22 +74,27 @@ export function AuditLog(options: AuditLogOptions) {
       if (options.operation === 'CREATE') {
         // Assume create() returns the newly created entity
         entityId = result?.id ?? id;
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         changes = snapshotCreate(result ?? {});
       } else if (options.operation === 'UPDATE') {
         // Assume update() returns the updated entity
         entityId = id;
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         changes = diffEntity(before ?? {}, result ?? {});
       } else if (options.operation === 'DELETE') {
         entityId = id;
         changes = snapshotDelete(before ?? {});
       }
 
-      // 4. Record the log
-      await activityService.record({
+      // 4. Record the log — never fatal: the database change above is
+      // already committed, so failing here would report an error for an
+      // action that actually happened.
+      await activityService.tryRecord({
         action: options.action,
         entityType: options.entityType,
         entityId,
         changes: changes ?? undefined,
+        metadata: options.metadata?.(args),
       });
 
       return result;

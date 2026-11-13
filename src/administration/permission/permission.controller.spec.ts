@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { PermissionController } from './permission.controller';
 import { PermissionService } from './permission.service';
@@ -13,6 +14,7 @@ describe('PermissionController', () => {
       providers: [
         PermissionService,
         { provide: DatabaseService, useValue: {} },
+        { provide: RbacService, useValue: {} },
       ],
     })
       .overrideGuard(PermissionGuard)

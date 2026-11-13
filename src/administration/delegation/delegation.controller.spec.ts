@@ -1,5 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
+import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { RbacService } from '../../auth/rbac/rbac.service';
 import { DelegationController } from './delegation.controller';
 import { DelegationService } from './delegation.service';
 
@@ -12,8 +15,13 @@ describe('DelegationController', () => {
       providers: [
         DelegationService,
         { provide: DatabaseService, useValue: {} },
+        { provide: ActivityService, useValue: {} },
+        { provide: RbacService, useValue: {} },
       ],
-    }).compile();
+    })
+      .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<DelegationController>(DelegationController);
   });

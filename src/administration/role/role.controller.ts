@@ -1,58 +1,82 @@
 import {
   Body,
   Controller,
-  Delete,
   Get,
-  HttpCode,
-  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { ArchiveRoleDto } from './dto/archive-role.dto';
 import { CreateRoleDto } from './dto/create-role.dto';
+import { FindRolesQueryDto } from './dto/find-roles.query.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { RoleService } from './role.service';
 
 @ApiTags('roles')
 @ApiBearerAuth()
+// Global roles: platform administrators. A site's roles: its responsible.
+// Enforced in RoleService, since the responsible needs no role for it.
 @UseGuards(JwtAuthGuard, PermissionGuard)
 @Controller('roles')
 export class RoleController {
   constructor(private readonly roleService: RoleService) {}
 
   @Post()
-  @RequirePermission(PermissionCode.AdminManageRoles)
-  create(@Body() dto: CreateRoleDto) {
-    return this.roleService.create(dto);
+  create(@Body() dto: CreateRoleDto, @CurrentUser() user: JwtPayload) {
+    return this.roleService.create(dto, user.sub);
   }
 
   @Get()
-  findAll() {
-    return this.roleService.findAll();
+  @RequirePermission(PermissionCode.RolesRead)
+  findAll(@Query() query: FindRolesQueryDto, @CurrentUser() user: JwtPayload) {
+    return this.roleService.findAll(query, user.sub);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.roleService.findOne(id);
+  @RequirePermission(PermissionCode.RolesRead)
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.roleService.findOne(id, user.sub);
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AdminManageRoles)
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateRoleDto) {
-    return this.roleService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateRoleDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.roleService.update(id, dto, user.sub);
   }
 
-  @Delete(':id')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AdminManageRoles)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.roleService.remove(id);
+  // Never deleted: archived, then restorable from the Archives.
+  @Post(':id/archive')
+  archive(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ArchiveRoleDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.roleService.archive(id, dto, user.sub);
+  }
+
+  @Post(':id/restore')
+  restore(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RestoreNoteDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.roleService.restore(id, user.sub, dto.note);
   }
 }

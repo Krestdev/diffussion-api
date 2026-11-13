@@ -9,53 +9,63 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import {
+  CreateSiteListItemDto,
+  FindSiteListQueryDto,
+  UpdateSiteListItemDto,
+} from '../../common/dto/site-list-item.dto';
 import { DossierTypeService } from './dossier-type.service';
-import { CreateDossierTypeDto } from './dto/create-dossier-type.dto';
-import { UpdateDossierTypeDto } from './dto/update-dossier-type.dto';
 
+// Each site's own (PA·7): managed by its responsible or whoever holds
+// ADMIN_MANAGE_REFERENTIALS there — checked in the service.
 @ApiTags('dossier-types')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(JwtAuthGuard)
 @Controller('dossier-types')
 export class DossierTypeController {
-  constructor(private readonly dossierTypeService: DossierTypeService) {}
+  constructor(private readonly types: DossierTypeService) {}
 
   @Post()
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  create(@Body() dto: CreateDossierTypeDto) {
-    return this.dossierTypeService.create(dto);
+  create(@Body() dto: CreateSiteListItemDto, @CurrentUser() user: JwtPayload) {
+    return this.types.create(dto, user.sub);
   }
 
+  // The caller's own site's — every site's for a platform administrator.
   @Get()
-  findAll() {
-    return this.dossierTypeService.findAll();
+  findAll(
+    @Query() query: FindSiteListQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.types.findAll(query, user.sub);
   }
 
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierTypeService.findOne(id);
+    return this.types.findOne(id);
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AdminManageReferentials)
   update(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateDossierTypeDto,
+    @Body() dto: UpdateSiteListItemDto,
+    @CurrentUser() user: JwtPayload,
   ) {
-    return this.dossierTypeService.update(id, dto);
+    return this.types.update(id, dto, user.sub);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dossierTypeService.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.types.remove(id, user.sub);
   }
 }

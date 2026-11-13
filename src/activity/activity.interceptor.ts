@@ -34,13 +34,18 @@ export class ActivityInterceptor implements NestInterceptor {
 
     // We generally don't want to spam the database with a root log for every single GET request.
     // By also checking for `userId`, we only log authenticated user actions
-    // (which automatically ignores public routes like /auth/register and /auth/login).
+    // (which automatically ignores public routes like /auth/login).
     if (method !== 'GET' && userId) {
-      await this.activity.recordRoot({
-        action: `${method} ${url}`,
-        source: 'USER',
-        message: `Request: ${method} ${url}`,
-      });
+      // Non-fatal: an audit-trail failure must never turn a valid business
+      // request into a 500 (see ActivityService.tryRecord).
+      await this.activity.tryRecord(
+        {
+          action: `${method} ${url}`,
+          source: 'USER',
+          message: `Request: ${method} ${url}`,
+        },
+        { asRoot: true },
+      );
     }
 
     return next.handle();

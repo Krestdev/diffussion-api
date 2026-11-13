@@ -2,21 +2,22 @@ import 'dotenv/config';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { AppModule } from './app.module';
+import { AppModule } from './AppModule';
 import { DatabaseService } from './database/database.service';
 import { DbLogger } from './logging/db.logger';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ClsService } from 'nestjs-cls';
+import { corsOrigins } from './common/cors';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   app.useLogger(app.get(DbLogger));
 
-  // The Next.js frontend runs on a different origin (localhost:3000) and
+  // The Next.js frontend runs on a different origin (localhost:4000) and
   // sends the JWT as an Authorization header, not a cookie, but the
   // preflight still needs an explicit allow-list.
   app.enableCors({
-    origin: (process.env.CORS_ORIGINS ?? 'http://localhost:3000').split(','),
+    origin: corsOrigins(),
     credentials: true,
   });
 

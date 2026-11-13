@@ -8,13 +8,39 @@ import {
   IsString,
   IsUUID,
   MaxLength,
+  ValidateNested,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { InstructionPriority } from 'generated/prisma/enums';
 
+export class CreateInstructionLivrableDto {
+  @ApiProperty({ example: 'Rapport de conformité' })
+  @IsString()
+  @MaxLength(200)
+  title: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string;
+}
+
 export class CreateInstructionsDto {
-  @ApiProperty({ description: 'Dossier this instruction belongs to (7.3)' })
+  @ApiPropertyOptional({
+    description:
+      'Dossier this instruction belongs to. Exactly one of dossierId / contractId must be provided.',
+  })
+  @IsOptional()
   @IsUUID()
-  dossierId: string;
+  dossierId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Contract this instruction belongs to. Exactly one of dossierId / contractId must be provided.',
+  })
+  @IsOptional()
+  @IsUUID()
+  contractId?: string;
 
   @ApiPropertyOptional({
     description: 'Courrier that triggered this instruction, if any',
@@ -41,10 +67,22 @@ export class CreateInstructionsDto {
   @IsEnum(InstructionPriority)
   priority?: InstructionPriority;
 
-  @ApiPropertyOptional({ example: '2026-09-01' })
+  @ApiPropertyOptional({
+    example: '2026-09-15',
+    description: "The task's deadline: validated by then",
+  })
   @IsOptional()
   @IsDateString()
   dueDate?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-09-10',
+    description:
+      "The executants' deadline: livrables submitted by then. Not after dueDate. Usually set by the superviseur (PATCH /instructions/:id/delai-execution).",
+  })
+  @IsOptional()
+  @IsDateString()
+  agentDueDate?: string;
 
   @ApiPropertyOptional({
     type: [String],
@@ -58,11 +96,19 @@ export class CreateInstructionsDto {
 
   @ApiPropertyOptional({
     description:
-      'RG-INS-002: or to a superviseur responsible for designating executants',
+      'RG-INS-002: or to a superviseur responsible for designating executants.',
   })
   @IsOptional()
   @IsUUID()
   superviseurId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Who decides on the livrables first, before the superviseur. Not one of the executants. Without one, the superviseur decides from the start.',
+  })
+  @IsOptional()
+  @IsUUID('4')
+  validateurId?: string;
 
   @ApiPropertyOptional({
     description: 'Parent task this one depends on (sub-task)',
@@ -70,4 +116,14 @@ export class CreateInstructionsDto {
   @IsOptional()
   @IsUUID()
   dependsOnId?: string;
+
+  @ApiPropertyOptional({
+    type: [CreateInstructionLivrableDto],
+    description: 'Initial deliverables defined for this task',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateInstructionLivrableDto)
+  livrables?: CreateInstructionLivrableDto[];
 }

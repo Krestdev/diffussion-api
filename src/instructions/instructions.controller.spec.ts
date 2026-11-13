@@ -14,9 +14,11 @@ describe('InstructionsController', () => {
       findOne: jest.fn(),
       update: jest.fn(),
       assign: jest.fn(),
-      refuse: jest.fn(),
+      declineSubscription: jest.fn(),
+      subscribe: jest.fn(),
       close: jest.fn(),
       cancel: jest.fn(),
+      deposerLivrables: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -34,14 +36,42 @@ describe('InstructionsController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('refuse() forwards id and dto to the service', () => {
-    controller.refuse('i-1', {
-      motif: 'Non disponible',
-      newAssigneeId: 'u-2',
-    });
-    expect(service.refuse).toHaveBeenCalledWith('i-1', {
-      motif: 'Non disponible',
-      newAssigneeId: 'u-2',
-    });
+  const user = { sub: 'u-1', email: 'u@x.com', refreshToken: 'r' };
+
+  it('declineSubscription() forwards the motif and the current user', () => {
+    controller.declineSubscription('i-1', { motif: 'Non disponible' }, user);
+    expect(service.declineSubscription).toHaveBeenCalledWith(
+      'i-1',
+      { motif: 'Non disponible' },
+      'u-1',
+    );
+  });
+
+  it('keeps the former routes working until the frontend moves over', () => {
+    controller.accept('i-1', user);
+    // The former body's newAssigneeId is accepted and ignored.
+    controller.refuse(
+      'i-1',
+      { motif: 'Non disponible', newAssigneeId: 'u-2' },
+      user,
+    );
+    expect(service.subscribe).toHaveBeenCalledWith('i-1', 'u-1');
+    expect(service.declineSubscription).toHaveBeenCalledWith(
+      'i-1',
+      { motif: 'Non disponible' },
+      'u-1',
+    );
+  });
+
+  it('deposerLivrables() forwards id, dto, files and user id', () => {
+    const dto = { livrables: '[]', agentComment: 'OK' };
+    const files = [] as Express.Multer.File[];
+    controller.deposerLivrables('i-1', dto, files, user);
+    expect(service.deposerLivrables).toHaveBeenCalledWith(
+      'i-1',
+      dto,
+      files,
+      'u-1',
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { Request } from 'express';
 import { ExtractJwt, Strategy } from 'passport-jwt';
@@ -28,6 +28,9 @@ export class JwtRefreshStrategy extends PassportStrategy(
   }
 
   validate(req: Request, payload: JwtPayload): JwtPayloadWithRefreshToken {
+    if (payload.typ !== 'refresh') {
+      throw new UnauthorizedException('A refresh token is required');
+    }
     const refreshToken = ExtractJwt.fromAuthHeaderAsBearerToken()(req);
     return { ...payload, refreshToken: refreshToken ?? '' };
   }

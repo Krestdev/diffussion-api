@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreatePermissionDto {
   @ApiProperty({ example: 'DOSSIER_CLOSE' })
@@ -8,6 +8,7 @@ export class CreatePermissionDto {
   code: string;
 
   @ApiPropertyOptional({ example: 'Clôturer un dossier' })
+  @IsOptional()
   @IsString()
   @MaxLength(255)
   description?: string;

@@ -29,7 +29,7 @@ export class DbLogger extends ConsoleLogger implements LoggerService {
     } else {
       super.warn(message);
     }
-    this.persist('warn', message, context);
+    this.persist('warn', message, context as string | undefined);
   }
 
   error(message: any, stack?: string, context?: any) {
@@ -38,7 +38,7 @@ export class DbLogger extends ConsoleLogger implements LoggerService {
     } else {
       super.error(message, stack);
     }
-    this.persist('error', message, context, stack);
+    this.persist('error', message, context as string | undefined, stack);
   }
 
   private persist(
@@ -57,7 +57,12 @@ export class DbLogger extends ConsoleLogger implements LoggerService {
           level,
           action: `system.${level}`,
           message: String(message),
-          stack,
+          stack:
+            typeof stack === 'string'
+              ? stack
+              : stack
+                ? JSON.stringify(stack)
+                : undefined,
         },
       })
       .catch(() => void 0)

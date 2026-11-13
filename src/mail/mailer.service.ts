@@ -1,0 +1,75 @@
+import { Injectable, Logger } from '@nestjs/common';
+
+export interface PasswordResetMail {
+  to: string;
+  name: string;
+  resetLink: string;
+  expiresAt: Date;
+}
+
+/**
+ * Outbound mail port. Injected by its abstract class, so swapping delivery
+ * is a one-line provider change in MailModule:
+ *
+ *   { provide: MailerService, useClass: SmtpMailerService }
+ *
+ * A real implementation only has to extend this class and implement the
+ * methods — nothing else in the app changes.
+ */
+export interface InvitationMail {
+  to: string;
+  name: string;
+  invitedBy: string | null;
+  acceptLink: string;
+  expiresAt: Date;
+}
+
+export interface SupportMail {
+  kind: 'ticket' | 'reply';
+  /** The support team's address. */
+  to: string;
+  /** The requester's copy. */
+  copyTo: string;
+  number: string;
+  subject: string;
+  body: string;
+  from: string;
+}
+
+@Injectable()
+export abstract class MailerService {
+  abstract sendPasswordReset(mail: PasswordResetMail): Promise<void>;
+  abstract sendInvitation(mail: InvitationMail): Promise<void>;
+  abstract sendSupport(mail: SupportMail): Promise<void>;
+}
+
+/**
+ * Default implementation: logs the message instead of sending it. Lets the
+ * whole reset flow run end to end in development — the link is printed in
+ * the API logs. NOT suitable for production: nothing reaches the user.
+ */
+@Injectable()
+export class LogMailerService extends MailerService {
+  private readonly logger = new Logger(LogMailerService.name);
+
+  sendPasswordReset(mail: PasswordResetMail): Promise<void> {
+    this.logger.warn(
+      `[no mailer configured] Password reset for ${mail.to} — link valid until ${mail.expiresAt.toISOString()}: ${mail.resetLink}`,
+    );
+    return Promise.resolve();
+  }
+
+  sendSupport(mail: SupportMail): Promise<void> {
+    this.logger.warn(
+      `[no mailer configured] Support ${mail.kind} ${mail.number} for ${mail.to}, copy to ${mail.copyTo}`,
+    );
+    return Promise.resolve();
+  }
+
+  sendInvitation(mail: InvitationMail): Promise<void> {
+    this.logger.warn(
+      `[no mailer configured] Invitation for ${mail.to} (${mail.name}) — link valid until ${mail.expiresAt.toISOString()}: ${mail.acceptLink}`,
+    );
+    return Promise.resolve();
+  }
+}

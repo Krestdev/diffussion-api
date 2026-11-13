@@ -45,4 +45,9 @@ export class CreateNotificationDto {
   @IsOptional()
   @IsUUID()
   courrierId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  instructionId?: string;
 }

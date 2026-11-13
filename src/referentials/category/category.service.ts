@@ -4,20 +4,53 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
+import { ActivityService } from '../../activity/activity.service';
+import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
+import {
+  DEFAULT_TAKE,
+  PaginationQueryDto,
+} from '../../common/dto/pagination.query.dto';
 
 @Injectable()
 export class CategoryService {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    // Read by @AuditLog through `this.activity`.
+    private readonly activity: ActivityService,
+  ) {}
 
-  create(dto: CreateCategoryDto) {
+  @AuditLog({
+    action: 'category.created',
+    entityType: 'category',
+    operation: 'CREATE',
+  })
+  async create(dto: CreateCategoryDto) {
     return this.database.category.create({ data: dto });
   }
 
-  findAll() {
-    return this.database.category.findMany({ orderBy: { label: 'asc' } });
+  async findAll(query: PaginationQueryDto = {}) {
+    const where: Prisma.CategoryWhereInput = {
+      label: query.search
+        ? { contains: query.search, mode: 'insensitive' }
+        : undefined,
+    };
+    const skip = query.skip ?? 0;
+    const take = query.take ?? DEFAULT_TAKE;
+
+    const [data, total] = await this.database.$transaction([
+      this.database.category.findMany({
+        where,
+        orderBy: { label: 'asc' },
+        skip,
+        take,
+      }),
+      this.database.category.count({ where }),
+    ]);
+
+    return { data, total, skip, take };
   }
 
   async findOne(id: string) {
@@ -30,11 +63,21 @@ export class CategoryService {
     return category;
   }
 
+  @AuditLog({
+    action: 'category.updated',
+    entityType: 'category',
+    operation: 'UPDATE',
+  })
   async update(id: string, dto: UpdateCategoryDto) {
     await this.findOne(id);
     return this.database.category.update({ where: { id }, data: dto });
   }
 
+  @AuditLog({
+    action: 'category.deleted',
+    entityType: 'category',
+    operation: 'DELETE',
+  })
   async remove(id: string) {
     await this.findOne(id);
     try {

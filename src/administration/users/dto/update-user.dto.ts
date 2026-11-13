@@ -3,7 +3,11 @@ import { IsOptional, IsString, MinLength } from 'class-validator';
 import { CreateUserDto } from './create-user.dto';
 
 export class UpdateUserDto extends PartialType(
-  OmitType(CreateUserDto, ['password'] as const),
+  OmitType(CreateUserDto, [
+    'password',
+    'mustChangePassword',
+    'status',
+  ] as const),
 ) {
   @ApiPropertyOptional({
     description: 'Only set to change the password',

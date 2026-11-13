@@ -9,13 +9,18 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import {
+  PlatformOnly,
+  RequirePermission,
+} from '../../auth/rbac/require-permission.decorator';
+import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { CourrierNatureService } from './courrier-nature.service';
 import { CreateCourrierNatureDto } from './dto/create-courrier-nature.dto';
 import { UpdateCourrierNatureDto } from './dto/update-courrier-nature.dto';
@@ -29,13 +34,14 @@ export class CourrierNatureController {
 
   @Post()
   @RequirePermission(PermissionCode.AdminManageReferentials)
+  @PlatformOnly()
   create(@Body() dto: CreateCourrierNatureDto) {
     return this.courrierNatureService.create(dto);
   }
 
   @Get()
-  findAll() {
-    return this.courrierNatureService.findAll();
+  findAll(@Query() query: PaginationQueryDto) {
+    return this.courrierNatureService.findAll(query);
   }
 
   @Get(':id')
@@ -45,6 +51,7 @@ export class CourrierNatureController {
 
   @Patch(':id')
   @RequirePermission(PermissionCode.AdminManageReferentials)
+  @PlatformOnly()
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCourrierNatureDto,
@@ -55,6 +62,7 @@ export class CourrierNatureController {
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermission(PermissionCode.AdminManageReferentials)
+  @PlatformOnly()
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.courrierNatureService.remove(id);
   }

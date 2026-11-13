@@ -5,6 +5,15 @@ import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { RbacService } from '../auth/rbac/rbac.service';
 
+// Dossier-state rules (RG-DOS-007, site activity, progress) are covered by
+// the DossierService spec; here they're stubbed so fixtures don't need a
+// full dossier/site graph.
+jest.mock('../common/utils/dossier-lifecycle', () => ({
+  assertDossierOpenForActivity: jest.fn(),
+  markDossierInProgress: jest.fn(),
+  refreshDossierProgress: jest.fn(),
+}));
+
 describe('DocumentsService', () => {
   let service: DocumentsService;
   let database: {
@@ -28,7 +37,11 @@ describe('DocumentsService', () => {
       delete: jest.fn(),
       getSignedDownloadUrl: jest.fn(),
     };
-    rbac = { hasPermission: jest.fn().mockResolvedValue(false) };
+    rbac = {
+      hasGlobalPermission: jest.fn().mockResolvedValue(false),
+      resolveSiteId: jest.fn().mockResolvedValue('s-1'),
+      worksAtSite: jest.fn().mockResolvedValue(true),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -141,7 +154,7 @@ describe('DocumentsService', () => {
         dossier: { site: { responsibleId: 'someone-else-too' } },
         courrier: null,
       });
-      rbac.hasPermission.mockResolvedValue(true);
+      rbac.hasGlobalPermission.mockResolvedValue(true);
       database.document.update.mockResolvedValue({ id: 'doc-1' });
 
       await expect(

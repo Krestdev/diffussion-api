@@ -17,8 +17,11 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  ATTACHMENT_RULE,
+  attachmentUploadOptions,
+} from '../common/utils/attachment-upload';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
-import { memoryStorage } from 'multer';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { JwtPayloadWithRefreshToken } from '../auth/types/jwt-payload.type';
@@ -27,8 +30,6 @@ import { SetOwnerDto } from '../common/dto/set-owner.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 import { FindDocumentsQueryDto } from './dto/find-documents.query.dto';
 import { DocumentsService } from './documents.service';
-
-const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 @ApiTags('documents')
 @ApiBearerAuth()
@@ -44,19 +45,25 @@ export class DocumentsController {
       type: 'object',
       required: ['file'],
       properties: {
-        file: { type: 'string', format: 'binary' },
-        dossierId: { type: 'string' },
-        courrierId: { type: 'string' },
-        livrableId: { type: 'string' },
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: ATTACHMENT_RULE,
+        },
+        name: {
+          type: 'string',
+          maxLength: 200,
+          description:
+            'Human-readable display name (defaults to filename if omitted)',
+        },
+        dossierId: { type: 'string', format: 'uuid' },
+        courrierId: { type: 'string', format: 'uuid' },
+        livrableId: { type: 'string', format: 'uuid' },
+        contractId: { type: 'string', format: 'uuid' },
       },
     },
   })
-  @UseInterceptors(
-    FileInterceptor('file', {
-      storage: memoryStorage(),
-      limits: { fileSize: MAX_UPLOAD_BYTES },
-    }),
-  )
+  @UseInterceptors(FileInterceptor('file', attachmentUploadOptions()))
   upload(
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: UploadDocumentDto,
@@ -69,24 +76,36 @@ export class DocumentsController {
   }
 
   @Get()
-  findAll(@Query() query: FindDocumentsQueryDto) {
-    return this.documentsService.findAll(query);
+  findAll(
+    @Query() query: FindDocumentsQueryDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.findAll(query, user.sub);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.documentsService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.findOne(id, user.sub);
   }
 
   @Get(':id/download-url')
-  getDownloadUrl(@Param('id', ParseUUIDPipe) id: string) {
-    return this.documentsService.getDownloadUrl(id);
+  getDownloadUrl(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.getDownloadUrl(id, user.sub);
   }
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', ParseUUIDPipe) id: string) {
-    return this.documentsService.remove(id);
+  remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.remove(id, user.sub);
   }
 
   // Authorization (uploader / site responsible / platform admin) is
@@ -101,12 +120,19 @@ export class DocumentsController {
   }
 
   @Get(':id/access')
-  getAccess(@Param('id', ParseUUIDPipe) id: string) {
-    return this.documentsService.getAccess(id);
+  getAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.getAccess(id, user.sub);
   }
 
   @Put(':id/access')
-  setAccess(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetAccessDto) {
-    return this.documentsService.setAccess(id, dto);
+  setAccess(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetAccessDto,
+    @CurrentUser() user: JwtPayloadWithRefreshToken,
+  ) {
+    return this.documentsService.setAccess(id, dto, user.sub);
   }
 }

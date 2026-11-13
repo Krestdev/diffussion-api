@@ -1,11 +1,18 @@
 import {
+  CreateBucketCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadBucketCommand,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 
@@ -32,21 +39,67 @@ function requireEnv(name: string): string {
 // modules can upload/download/delete files without touching the AWS SDK
 // directly. Configured entirely from RUSTFS_* env vars.
 @Injectable()
-export class StorageService {
+export class StorageService implements OnModuleInit {
+  private readonly logger = new Logger(StorageService.name);
   private readonly client: S3Client;
+  private readonly publicClient: S3Client;
   private readonly bucket: string;
 
   constructor() {
     this.bucket = requireEnv('RUSTFS_BUCKET');
+    const credentials = {
+      accessKeyId: requireEnv('RUSTFS_ACCESS_KEY'),
+      secretAccessKey: requireEnv('RUSTFS_SECRET_KEY'),
+    };
     this.client = new S3Client({
       endpoint: requireEnv('RUSTFS_ENDPOINT'),
       region: process.env.RUSTFS_REGION ?? 'us-east-1',
       forcePathStyle: true,
-      credentials: {
-        accessKeyId: requireEnv('RUSTFS_ACCESS_KEY'),
-        secretAccessKey: requireEnv('RUSTFS_SECRET_KEY'),
-      },
+      credentials,
     });
+    // Presigned URLs must be signed with the endpoint the client will actually
+    // call — the host is part of the signature. Use a dedicated client pointed
+    // at the public endpoint when one is configured.
+    const publicEndpoint = process.env.RUSTFS_PUBLIC_ENDPOINT;
+    this.publicClient = publicEndpoint
+      ? new S3Client({
+          endpoint: publicEndpoint,
+          region: process.env.RUSTFS_REGION ?? 'us-east-1',
+          forcePathStyle: true,
+          credentials,
+        })
+      : this.client;
+  }
+
+  /**
+   * Creates the bucket on a fresh RustFS so the first upload doesn't fail
+   * with NoSuchBucket. Never blocks startup: if RustFS is down, the rest of
+   * the API still works and only file routes fail — logged here so the
+   * cause is obvious instead of a bare ECONNREFUSED on the first upload.
+   */
+  async onModuleInit() {
+    try {
+      await this.client.send(new HeadBucketCommand({ Bucket: this.bucket }));
+    } catch (error) {
+      const status = (error as { $metadata?: { httpStatusCode?: number } })
+        .$metadata?.httpStatusCode;
+      if (status !== 404) {
+        this.logger.warn(
+          `Object storage unreachable at ${process.env.RUSTFS_ENDPOINT} (${(error as Error).name || 'connection error'}) — file uploads/downloads will fail until RustFS is running`,
+        );
+        return;
+      }
+      try {
+        await this.client.send(
+          new CreateBucketCommand({ Bucket: this.bucket }),
+        );
+        this.logger.log(`Created storage bucket "${this.bucket}"`);
+      } catch (createError) {
+        this.logger.warn(
+          `Could not create storage bucket "${this.bucket}": ${(createError as Error).message}`,
+        );
+      }
+    }
   }
 
   async upload(
@@ -88,7 +141,7 @@ export class StorageService {
 
   getSignedDownloadUrl(key: string, expiresInSeconds = 900): Promise<string> {
     return getSignedUrl(
-      this.client,
+      this.publicClient,
       new GetObjectCommand({ Bucket: this.bucket, Key: key }),
       { expiresIn: expiresInSeconds },
     );

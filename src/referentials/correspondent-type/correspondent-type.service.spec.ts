@@ -1,4 +1,6 @@
+import { RbacService } from '../../auth/rbac/rbac.service';
 import { Test, TestingModule } from '@nestjs/testing';
+import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
 import { CorrespondentTypeService } from './correspondent-type.service';
 
@@ -10,6 +12,8 @@ describe('CorrespondentTypeService', () => {
       providers: [
         CorrespondentTypeService,
         { provide: DatabaseService, useValue: {} },
+        { provide: ActivityService, useValue: {} },
+        { provide: RbacService, useValue: {} },
       ],
     }).compile();
 
