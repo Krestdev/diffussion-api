@@ -15,9 +15,10 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
-# Copy installed modules and source.
+# Copy installed modules, generated Prisma client, and source.
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/prisma ./prisma
+COPY --from=deps /app/generated ./generated
 COPY . .
 
 RUN npm run build
