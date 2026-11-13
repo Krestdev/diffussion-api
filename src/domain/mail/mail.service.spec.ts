@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { MailService, formatCourrier } from './mail.service';
+import { DispatchMailDto } from './dto/dispatch-mail.dto';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
@@ -1876,7 +1877,7 @@ describe('MailService', () => {
 
     it('rejects if neither or both contractId and dossierId are provided', async () => {
       await expect(
-        service.dispatch('c-1', { projectId: 'p-1' } as any, 'u-user'),
+        service.dispatch('c-1', { projectId: 'p-1' }, 'u-user'),
       ).rejects.toBeInstanceOf(BadRequestException);
 
       await expect(

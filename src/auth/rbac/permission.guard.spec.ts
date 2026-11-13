@@ -170,8 +170,8 @@ describe('PermissionGuard', () => {
         PermissionCode.LivrableSubmit,
       ];
       rbac.hasPermission.mockImplementation(
-        async (_user: string, code: PermissionCode) =>
-          code === PermissionCode.LivrableDeposit,
+        (_user: string, code: PermissionCode) =>
+          Promise.resolve(code === PermissionCode.LivrableDeposit),
       );
 
       await expect(guard.canActivate(context({}))).rejects.toBeInstanceOf(

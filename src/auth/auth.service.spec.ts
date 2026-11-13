@@ -115,7 +115,10 @@ describe('AuthService — password reset', () => {
     it('sets the new password and ends every existing session', async () => {
       database.passwordResetToken.findUnique.mockResolvedValue(activeGrant());
 
-      await service.resetPassword({ token: 'raw-token', password: NEW_PASSWORD });
+      await service.resetPassword({
+        token: 'raw-token',
+        password: NEW_PASSWORD,
+      });
 
       expect(database.passwordResetToken.findUnique).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -125,7 +128,9 @@ describe('AuthService — password reset', () => {
       const update = database.user.update.mock.calls[0][0] as {
         data: { password: string; refreshToken: null };
       };
-      expect(await bcrypt.compare(NEW_PASSWORD, update.data.password)).toBe(true);
+      expect(await bcrypt.compare(NEW_PASSWORD, update.data.password)).toBe(
+        true,
+      );
       expect(update.data.refreshToken).toBeNull();
       // Single use.
       expect(database.passwordResetToken.update).toHaveBeenCalledWith(

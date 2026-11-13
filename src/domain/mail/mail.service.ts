@@ -141,6 +141,7 @@ const mailInclude = {
  * - dispatch: { proposedBy: { id, name }, proposedAt, validatedBy: { id, name } | null, validatedAt | null }
  * - supervisor: { id, name } | null, dueDate, supervisorNote
  */
+
 export function formatCourrier<T extends Record<string, any>>(courrier: T) {
   if (!courrier) return courrier;
 
@@ -152,6 +153,7 @@ export function formatCourrier<T extends Record<string, any>>(courrier: T) {
     courrier.proposedById !== undefined ||
     courrier.dispatchValidatedById !== undefined;
 
+  /* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
   const dispatch = hasDispatch
     ? {
         proposedBy: courrier.proposedBy
@@ -180,6 +182,7 @@ export function formatCourrier<T extends Record<string, any>>(courrier: T) {
           }
         : null
       : undefined;
+  /* eslint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access */
 
   // The effet's site: its dossier's, else its registrant's (see
   // siteOfEffet) — the site its supervisor and agents are picked from.
@@ -943,7 +946,8 @@ export class MailService {
         receivedAt: receivedAt ? new Date(receivedAt) : undefined,
         dueDate: dueDate ? new Date(dueDate) : undefined,
         // A moved deadline: its reminders start over (PA·8).
-        ...(dueDate && !sameDay(new Date(dueDate), courrier.dueDate)
+        ...(dueDate &&
+        !sameDay(new Date(dueDate), courrier.dueDate as Date | null | undefined)
           ? { dueReminderSentAt: null, overdueRemindedAt: null }
           : {}),
         ...(dossierChanged ? await this.projectOfDossier(dto.dossierId) : {}),

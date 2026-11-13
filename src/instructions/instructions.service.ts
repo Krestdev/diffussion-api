@@ -1849,7 +1849,10 @@ export class InstructionsService {
     let livrablesList: Array<{ livrableId: string; files: string[] }>;
     if (typeof dto.livrables === 'string') {
       try {
-        livrablesList = JSON.parse(dto.livrables);
+        livrablesList = JSON.parse(dto.livrables) as Array<{
+          livrableId: string;
+          files: string[];
+        }>;
       } catch {
         throw new BadRequestException(
           'Format JSON invalide pour le champ livrables',
@@ -1986,7 +1989,7 @@ export class InstructionsService {
               file,
               storageKey: key,
             });
-          } catch (storageError) {
+          } catch {
             throw new BadRequestException(
               `Livrable ${item.livrableId} : échec du stockage du fichier "${file.originalname}"`,
             );

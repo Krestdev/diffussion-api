@@ -74,10 +74,12 @@ export function AuditLog(options: AuditLogOptions) {
       if (options.operation === 'CREATE') {
         // Assume create() returns the newly created entity
         entityId = result?.id ?? id;
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         changes = snapshotCreate(result ?? {});
       } else if (options.operation === 'UPDATE') {
         // Assume update() returns the updated entity
         entityId = id;
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
         changes = diffEntity(before ?? {}, result ?? {});
       } else if (options.operation === 'DELETE') {
         entityId = id;

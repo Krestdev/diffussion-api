@@ -248,7 +248,7 @@ export class DeliverableService {
       },
       include: deliverableInclude,
     });
-    await this.recordInstructionEvent(
+    this.recordInstructionEvent(
       updated.instructionId,
       'INSTRUCTION_LIVRABLE_DEPOSE',
       { livrableId: id },

@@ -259,11 +259,13 @@ export class CreateMailDto {
   @EmptyToUndefined()
   @Transform(({ value }) => {
     if (value === undefined || value === null) return undefined;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     let items = value;
     if (typeof value === 'string') {
       const trimmed = value.trim();
       if (!trimmed) return undefined;
       try {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         items = JSON.parse(trimmed);
       } catch {
         return value;
@@ -275,11 +277,13 @@ export class CreateMailDto {
         items.map((item) => {
           if (typeof item === 'string') {
             try {
+              // eslint-disable-next-line @typescript-eslint/no-unsafe-return
               return JSON.parse(item);
             } catch {
               return item;
             }
           }
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-return
           return item;
         }),
       );
@@ -287,6 +291,7 @@ export class CreateMailDto {
     if (typeof items === 'object') {
       return plainToInstance(CourrierDocumentDto, [items]);
     }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
     return value;
   })
   @IsArray()

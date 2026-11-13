@@ -104,7 +104,8 @@ export class DocumentIdentityService {
       try {
         const { body } = await this.logo(siteId);
         const chunks: Buffer[] = [];
-        for await (const chunk of body) chunks.push(Buffer.from(chunk));
+        for await (const chunk of body)
+          chunks.push(Buffer.from(chunk as ArrayBufferLike));
         logo = Buffer.concat(chunks);
       } catch {
         logo = null; // A missing file never blocks the PDF.

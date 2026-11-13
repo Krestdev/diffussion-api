@@ -53,7 +53,7 @@ describe('MailController', () => {
     };
     const files = [
       { originalname: 'file.pdf', buffer: Buffer.from('') },
-    ] as any;
+    ] as Express.Multer.File[];
     controller.create(
       dto,
       { sub: 'u-1', email: 'u@x.com', refreshToken: 'r' },
