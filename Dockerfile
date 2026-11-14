@@ -6,6 +6,7 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
+COPY prisma.config.ts ./
 
 # Install all deps (dev included) so `prisma generate` and `nest build` work.
 RUN npm ci
@@ -15,9 +16,11 @@ FROM node:22-alpine AS build
 
 WORKDIR /app
 
-# Copy installed modules and source.
+# Copy installed modules, generated Prisma client, and source.
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/prisma ./prisma
+COPY --from=deps /app/prisma.config.ts ./prisma.config.ts
+COPY --from=deps /app/generated ./generated
 COPY . .
 
 RUN npm run build
@@ -32,6 +35,7 @@ ENV NODE_ENV=production
 # Only production dependencies.
 COPY package.json package-lock.json ./
 COPY prisma ./prisma
+COPY prisma.config.ts ./
 RUN npm ci --omit=dev
 
 # Compiled app.
@@ -40,9 +44,6 @@ COPY --from=build /app/dist ./dist
 # Prisma client is generated into generated/prisma (not node_modules),
 # so copy it explicitly.
 COPY --from=build /app/generated ./generated
-
-# Prisma needs the schema at runtime for migrations / introspection.
-# (already copied above via prisma/)
 
 EXPOSE 3000
 
