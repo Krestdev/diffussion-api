@@ -14,12 +14,12 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { ProjectService } from './project.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -29,7 +29,7 @@ import { UpdateProjectDto } from './dto/update-project.dto';
 
 @ApiTags('projects')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 @Controller('projects')
 export class ProjectController {
   constructor(private readonly projectService: ProjectService) {}
@@ -38,16 +38,13 @@ export class ProjectController {
   // checked in the service.
   @Post()
   @RequirePermission(PermissionCode.ProjectCreate)
-  create(@Body() dto: CreateProjectDto, @CurrentUser() user: JwtPayload) {
+  create(@Body() dto: CreateProjectDto, @CurrentUser() user: AuthUser) {
     return this.projectService.create(dto, user.sub);
   }
 
   @Get()
   @RequirePermission(PermissionCode.ProjectRead)
-  findAll(
-    @Query() query: FindProjectsQueryDto,
-    @CurrentUser() user: JwtPayload,
-  ) {
+  findAll(@Query() query: FindProjectsQueryDto, @CurrentUser() user: AuthUser) {
     return this.projectService.findAll(query, user.sub);
   }
 
@@ -56,7 +53,7 @@ export class ProjectController {
   @RequirePermission(PermissionCode.ProjectRead)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.projectService.findOneFor(id, user.sub);
   }
@@ -65,7 +62,7 @@ export class ProjectController {
   @RequirePermission(PermissionCode.ProjectRead)
   getAccess(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.projectService.getAccess(id, user.sub);
   }
@@ -76,7 +73,7 @@ export class ProjectController {
   setAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetReferentialAccessDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.projectService.setAccess(id, dto.userIds, user.sub);
   }
@@ -86,7 +83,7 @@ export class ProjectController {
   history(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.projectService.history(id, user.sub, query);
   }
@@ -95,7 +92,7 @@ export class ProjectController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateProjectDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.projectService.update(id, dto, user.sub);
   }
@@ -105,7 +102,7 @@ export class ProjectController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.projectService.remove(id, user.sub);
   }

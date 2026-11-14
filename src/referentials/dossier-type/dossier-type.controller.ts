@@ -14,8 +14,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import {
   CreateSiteListItemDto,
   FindSiteListQueryDto,
@@ -27,22 +27,19 @@ import { DossierTypeService } from './dossier-type.service';
 // ADMIN_MANAGE_REFERENTIALS there — checked in the service.
 @ApiTags('dossier-types')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(CoreAuthGuard)
 @Controller('dossier-types')
 export class DossierTypeController {
   constructor(private readonly types: DossierTypeService) {}
 
   @Post()
-  create(@Body() dto: CreateSiteListItemDto, @CurrentUser() user: JwtPayload) {
+  create(@Body() dto: CreateSiteListItemDto, @CurrentUser() user: AuthUser) {
     return this.types.create(dto, user.sub);
   }
 
   // The caller's own site's — every site's for a platform administrator.
   @Get()
-  findAll(
-    @Query() query: FindSiteListQueryDto,
-    @CurrentUser() user: JwtPayload,
-  ) {
+  findAll(@Query() query: FindSiteListQueryDto, @CurrentUser() user: AuthUser) {
     return this.types.findAll(query, user.sub);
   }
 
@@ -55,7 +52,7 @@ export class DossierTypeController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateSiteListItemDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.types.update(id, dto, user.sub);
   }
@@ -64,7 +61,7 @@ export class DossierTypeController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.types.remove(id, user.sub);
   }

@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Request } from 'express';
-import { JwtPayload } from '../types/jwt-payload.type';
+import { AuthUser } from '../types/auth-user.type';
 import {
   PERMISSION_METADATA_KEY,
   PermissionCode,
@@ -16,7 +16,7 @@ import { RbacService } from './rbac.service';
 import { PLATFORM_ONLY_METADATA_KEY } from './require-permission.decorator';
 import { SITE_SCOPE_METADATA_KEY, SiteSource } from './site-scope.decorator';
 
-// Runs after JwtAuthGuard (req.user must already be set). No-op if the
+// Runs after CoreAuthGuard (req.user must already be set). No-op if the
 // route/controller carries no @RequirePermission metadata. With @SiteScope,
 // the permission must be held at the targeted resource's site; without it,
 // at any site. Platform permissions (and @PlatformOnly routes) need a
@@ -38,7 +38,7 @@ export class PermissionGuard implements CanActivate {
 
     const request = context
       .switchToHttp()
-      .getRequest<Request & { user?: JwtPayload }>();
+      .getRequest<Request & { user?: AuthUser }>();
     const user = request.user;
     if (!user) {
       throw new ForbiddenException('Missing authenticated user');

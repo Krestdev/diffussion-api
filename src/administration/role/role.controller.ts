@@ -12,11 +12,11 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
-import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import { ArchiveRoleDto } from './dto/archive-role.dto';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { FindRolesQueryDto } from './dto/find-roles.query.dto';
@@ -27,19 +27,19 @@ import { RoleService } from './role.service';
 @ApiBearerAuth()
 // Global roles: platform administrators. A site's roles: its responsible.
 // Enforced in RoleService, since the responsible needs no role for it.
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 @Controller('roles')
 export class RoleController {
   constructor(private readonly roleService: RoleService) {}
 
   @Post()
-  create(@Body() dto: CreateRoleDto, @CurrentUser() user: JwtPayload) {
+  create(@Body() dto: CreateRoleDto, @CurrentUser() user: AuthUser) {
     return this.roleService.create(dto, user.sub);
   }
 
   @Get()
   @RequirePermission(PermissionCode.RolesRead)
-  findAll(@Query() query: FindRolesQueryDto, @CurrentUser() user: JwtPayload) {
+  findAll(@Query() query: FindRolesQueryDto, @CurrentUser() user: AuthUser) {
     return this.roleService.findAll(query, user.sub);
   }
 
@@ -47,7 +47,7 @@ export class RoleController {
   @RequirePermission(PermissionCode.RolesRead)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.roleService.findOne(id, user.sub);
   }
@@ -56,7 +56,7 @@ export class RoleController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateRoleDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.roleService.update(id, dto, user.sub);
   }
@@ -66,7 +66,7 @@ export class RoleController {
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveRoleDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.roleService.archive(id, dto, user.sub);
   }
@@ -75,7 +75,7 @@ export class RoleController {
   restore(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RestoreNoteDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.roleService.restore(id, user.sub, dto.note);
   }

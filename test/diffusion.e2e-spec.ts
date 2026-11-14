@@ -7,21 +7,24 @@
  * whole application boots on it, and the scenarios below run as real users.
  * The developer's own database is never touched.
  *
+ * People sign in at the CREAPP core: here LocalCoreSigner stands in for it
+ * (its keys, its tokens, the session store in memory), and the core's
+ * directory (companies = sites, people) is applied by DirectorySyncService.
+ *
  * Run: npm run test:e2e (needs the docker-compose Postgres).
  */
 import 'dotenv/config';
 import { execSync } from 'child_process';
+import { randomUUID } from 'crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
-import * as bcrypt from 'bcrypt';
 import { ClsService } from 'nestjs-cls';
 import { Client } from 'pg';
 import request from 'supertest';
 import type { App } from 'supertest/types';
+import { LocalCoreSigner } from './core-signer';
 
 const TEMP_DB = 'diffusion_e2e';
-const PASSWORD = 'Str0ngP@ssword';
 
 const baseUrl = new URL(process.env.DATABASE_URL!);
 const tempUrl = new URL(baseUrl);
@@ -51,47 +54,94 @@ async function eventually<T>(
   return value;
 }
 
+/** A person of the core's directory. */
+const person = (who: string, tenantAdmin = false) => ({
+  id: randomUUID(),
+  email: `${who}@e2e.test`,
+  firstName: who,
+  lastName: 'E2E',
+  phone: null,
+  jobTitle: null,
+  language: 'fr',
+  status: 'ACTIVE' as const,
+  tenantAdmin,
+  lastSignInAt: null,
+});
+
 describe('Diffusion, end to end', () => {
   let app: INestApplication<App>;
   let db: any;
+  let signer: LocalCoreSigner;
   const token: Record<string, string> = {};
   const id: Record<string, string> = {};
+
+  // The core's directory: two companies (Diffusion sites) and their people.
+  const people = {
+    super: person('super'),
+    respA: person('respA', true),
+    agentA: person('agentA'),
+    chefA: person('chefA'),
+    exec1: person('exec1'),
+    exec2: person('exec2'),
+    norole: person('norole'),
+    respB: person('respB', true),
+  };
+  const companyA = {
+    id: randomUUID(),
+    name: 'Douala',
+    slug: 'douala',
+    status: 'ACTIVE' as const,
+  };
+  const companyB = {
+    id: randomUUID(),
+    name: 'Yaoundé',
+    slug: 'yaounde',
+    status: 'ACTIVE' as const,
+  };
+  const directory = () => ({
+    version: randomUUID(),
+    tenants: [
+      {
+        ...companyA,
+        users: [
+          people.super,
+          people.respA,
+          people.agentA,
+          people.chefA,
+          people.exec1,
+          people.exec2,
+          people.norole,
+        ],
+      },
+      { ...companyB, users: [people.respB] },
+    ],
+  });
 
   const as = (who: string) => ({
     get: (url: string) =>
       request(app.getHttpServer())
         .get(url)
-        .set('Authorization', `Bearer ${token[who]}`),
+        .set('Cookie', `creapp_access=${token[who]}`),
     post: (url: string, body?: object) =>
       request(app.getHttpServer())
         .post(url)
-        .set('Authorization', `Bearer ${token[who]}`)
+        .set('Cookie', `creapp_access=${token[who]}`)
         .send(body ?? {}),
     patch: (url: string, body?: object) =>
       request(app.getHttpServer())
         .patch(url)
-        .set('Authorization', `Bearer ${token[who]}`)
+        .set('Cookie', `creapp_access=${token[who]}`)
         .send(body ?? {}),
     put: (url: string, body?: object) =>
       request(app.getHttpServer())
         .put(url)
-        .set('Authorization', `Bearer ${token[who]}`)
+        .set('Cookie', `creapp_access=${token[who]}`)
         .send(body ?? {}),
     delete: (url: string) =>
       request(app.getHttpServer())
         .delete(url)
-        .set('Authorization', `Bearer ${token[who]}`),
+        .set('Cookie', `creapp_access=${token[who]}`),
   });
-
-  async function tokenFor(name: string, userId: string, email: string) {
-    id[name] = userId;
-    token[name] = await app
-      .get(JwtService)
-      .signAsync(
-        { sub: userId, email, typ: 'access' },
-        { secret: process.env.JWT_SECRET!, expiresIn: '1h' },
-      );
-  }
 
   beforeAll(async () => {
     await admin(`DROP DATABASE IF EXISTS "${TEMP_DB}" WITH (FORCE)`);
@@ -102,8 +152,9 @@ describe('Diffusion, end to end', () => {
       stdio: 'ignore',
     });
     // Everything the application opens from here on uses the throwaway
-    // database.
+    // database; roles are read again on every request.
     process.env.DATABASE_URL = tempUrl.toString();
+    process.env.ACCESS_CACHE_SECONDS = '0';
 
     const { AppModule } = await import('../src/AppModule');
     const { AllExceptionsFilter } =
@@ -113,10 +164,17 @@ describe('Diffusion, end to end', () => {
       await import('../src/database/database.service');
     const { PermissionCode, PERMISSION_LABELS } =
       await import('../src/auth/rbac/rbac.constants');
+    const { MemorySessionStore, SESSION_STORE } =
+      await import('../src/session-store/session-store');
+    const { DirectorySyncService } =
+      await import('../src/core/directory-sync.service');
 
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(SESSION_STORE)
+      .useValue(new MemorySessionStore())
+      .compile();
     app = moduleRef.createNestApplication();
     // Same pipeline as main.ts.
     app.useGlobalFilters(
@@ -131,6 +189,7 @@ describe('Diffusion, end to end', () => {
     );
     await app.init();
     db = app.get(DatabaseService);
+    signer = new LocalCoreSigner().install(app);
 
     // Reference data a real installation gets from the seed.
     const codes = Object.values(PermissionCode);
@@ -139,6 +198,8 @@ describe('Diffusion, end to end', () => {
         code,
         description: PERMISSION_LABELS[code],
       })),
+      // Some migrations already insert the permissions they introduce.
+      skipDuplicates: true,
     });
     const perms = await db.permission.findMany();
     const permId = (code: string) => perms.find((p: any) => p.code === code).id;
@@ -182,16 +243,19 @@ describe('Diffusion, end to end', () => {
       'LIVRABLE_NEW_VERSION',
     ]);
 
-    // The platform administrator: no site, the Administrateur role globally.
-    const superAdmin = await db.user.create({
-      data: {
-        name: 'Super Admin',
-        email: 'super@e2e.test',
-        password: await bcrypt.hash(PASSWORD, 10),
-        userRoles: { create: { roleId: id.roleAdmin, siteId: null } },
-      },
+    // The core's directory: companies become sites, people their users.
+    await app.get(DirectorySyncService).apply(directory());
+    id.siteA = companyA.id;
+    id.siteB = companyB.id;
+    for (const [who, p] of Object.entries(people)) id[who] = p.id;
+
+    // The platform administrator: the Administrateur role globally.
+    await db.userRole.create({
+      data: { userId: id.super, roleId: id.roleAdmin, siteId: null },
     });
-    await tokenFor('super', superAdmin.id, superAdmin.email);
+    for (const [who, p] of Object.entries(people)) {
+      token[who] = await signer.signIn(p.id, { tenantAdmin: p.tenantAdmin });
+    }
   });
 
   // The throwaway database is left in place: dropping it here would cut
@@ -202,85 +266,101 @@ describe('Diffusion, end to end', () => {
   });
 
   // ---------------------------------------------------------------------------
-  describe('1. Connexion', () => {
-    it('logs in with a real password', async () => {
+  describe('1. Connexion par la plateforme CREAPP', () => {
+    it("answers who is signed in, with their company and the company's apps", async () => {
+      const res = await as('super').get('/auth/me').expect(200);
+      expect(res.body.email).toBe('super@e2e.test');
+      expect(res.body.company).toEqual({ id: id.siteA, name: 'Douala' });
+      expect(res.body.apps.map((a: any) => a.id)).toEqual(['diffusion']);
+      expect(res.body.impersonatedBy).toBeNull();
+      expect(res.body).not.toHaveProperty('password');
+    });
+
+    it('refuses a call without the core cookie', async () => {
       const res = await request(app.getHttpServer())
-        .post('/auth/login')
-        .send({ email: 'super@e2e.test', password: PASSWORD })
-        .expect(200);
-      expect(res.body.accessToken).toEqual(expect.any(String));
+        .get('/auth/me')
+        .expect(401);
+      expect(res.body.code).toBe('UNAUTHENTICATED');
     });
 
-    it('refuses a refresh token used as an access token', async () => {
-      const login = await request(app.getHttpServer())
-        .post('/auth/login')
-        .send({ email: 'super@e2e.test', password: PASSWORD })
-        .expect(200);
+    it('accepts the token as a Bearer header too (server-side callers)', async () => {
       await request(app.getHttpServer())
         .get('/auth/me')
-        .set('Authorization', `Bearer ${login.body.refreshToken}`)
-        .expect(401);
-      await request(app.getHttpServer())
-        .get('/auth/me')
-        .set('Authorization', `Bearer ${login.body.accessToken}`)
-        .expect(200);
-      // And an access token can't refresh the session.
-      await request(app.getHttpServer())
-        .post('/auth/refresh')
-        .set('Authorization', `Bearer ${login.body.accessToken}`)
-        .expect(401);
-      // The refresh token still does its own job.
-      const refreshed = await request(app.getHttpServer())
-        .post('/auth/refresh')
-        .set('Authorization', `Bearer ${login.body.refreshToken}`)
-        .expect(200);
-      await request(app.getHttpServer())
-        .get('/auth/me')
-        .set('Authorization', `Bearer ${refreshed.body.accessToken}`)
+        .set('Authorization', `Bearer ${token.super}`)
         .expect(200);
     });
 
-    it('refuses a wrong password', async () => {
+    it('refuses a token whose session the store does not hold', async () => {
+      const ended = signer.token(id.super, id.siteA);
       await request(app.getHttpServer())
-        .post('/auth/login')
-        .send({ email: 'super@e2e.test', password: 'wrong-password' })
+        .get('/auth/me')
+        .set('Cookie', `creapp_access=${ended}`)
         .expect(401);
+    });
+
+    it('refuses a token signed by anyone else than the core', async () => {
+      const forged = new LocalCoreSigner();
+      const other = forged.token(id.super, id.siteA);
+      await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Cookie', `creapp_access=${other}`)
+        .expect(401);
+    });
+
+    it('answers NO_APP_ACCESS to a signed-in person without a Diffusion role', async () => {
+      const res = await as('norole').get('/auth/me').expect(403);
+      expect(res.body.code).toBe('NO_APP_ACCESS');
+    });
+
+    it('answers NO_APP_ACCESS when the company may not use Diffusion', async () => {
+      const off = await signer.signIn(id.super, { access: 'DISABLED' });
+      const res = await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Cookie', `creapp_access=${off}`)
+        .expect(403);
+      expect(res.body.code).toBe('NO_APP_ACCESS');
+    });
+
+    it('shows who acts as the person ("sign in as")', async () => {
+      const as2 = await signer.signIn(id.super, {
+        impersonator: {
+          id: randomUUID(),
+          name: 'Plateforme',
+          email: 'p@e2e.test',
+        },
+      });
+      const res = await request(app.getHttpServer())
+        .get('/auth/me')
+        .set('Cookie', `creapp_access=${as2}`)
+        .expect(200);
+      expect(res.body.impersonatedBy).toEqual({
+        name: 'Plateforme',
+        email: 'p@e2e.test',
+      });
     });
   });
 
   // ---------------------------------------------------------------------------
-  describe('2. Sites et leurs administrateurs', () => {
-    it('the super-admin creates two sites', async () => {
-      for (const [key, name] of [
-        ['siteA', 'Douala'],
-        ['siteB', 'Yaoundé'],
-      ]) {
-        const res = await as('super').post('/sites', { name }).expect(201);
-        id[key] = res.body.id;
-      }
+  describe('2. Sociétés (sites) et leurs administrateurs', () => {
+    it('each company of the core is a site, with its default roles and its administrator as responsible', async () => {
+      const sites = await db.site.findMany({
+        where: { id: { in: [id.siteA, id.siteB] } },
+        include: { roles: true },
+        orderBy: { name: 'asc' },
+      });
+      expect(sites.map((s: any) => s.name)).toEqual(['Douala', 'Yaoundé']);
+      expect(sites.map((s: any) => s.responsibleId)).toEqual([
+        id.respA,
+        id.respB,
+      ]);
+      expect(sites[0].roles.map((r: any) => r.name)).toContain('Admin');
+      // The company administrator holds the site's Admin role.
+      const me = await as('respA').get('/auth/me').expect(200);
+      expect(me.body.roles).toEqual(['Admin']);
+      expect(me.body.site.id).toBe(id.siteA);
     });
 
-    it('names a responsible for each site, who becomes its admin', async () => {
-      for (const [who, site] of [
-        ['respA', 'siteA'],
-        ['respB', 'siteB'],
-      ]) {
-        const user = await as('super')
-          .post('/users', {
-            name: who,
-            email: `${who}@e2e.test`,
-            password: PASSWORD,
-            siteId: id[site],
-          })
-          .expect(201);
-        await as('super')
-          .patch(`/sites/${id[site]}`, { responsibleId: user.body.id })
-          .expect(200);
-        await tokenFor(who, user.body.id, `${who}@e2e.test`);
-      }
-    });
-
-    it("the site admin creates their site's users, on their own site", async () => {
+    it("the site admin gives their company's people their roles", async () => {
       const users: [string, string][] = [
         ['agentA', id.roleAgent],
         ['chefA', id.roleChef],
@@ -289,16 +369,25 @@ describe('Diffusion, end to end', () => {
       ];
       for (const [who, roleId] of users) {
         const res = await as('respA')
-          .post('/users', {
-            name: who,
-            email: `${who}@e2e.test`,
-            password: PASSWORD,
-            roleIds: [roleId],
-          })
-          .expect(201);
+          .patch(`/users/${id[who]}`, { roleIds: [roleId] })
+          .expect(200);
         expect(res.body.site.id).toBe(id.siteA);
-        await tokenFor(who, res.body.id, `${who}@e2e.test`);
+        await as(who).get('/auth/me').expect(200);
       }
+    });
+
+    it('identity comes from the core: Diffusion does not create, edit or suspend people', async () => {
+      await as('super')
+        .post('/users', { name: 'Intrus', email: 'intrus@e2e.test' })
+        .expect(404);
+      await as('respA')
+        .patch(`/users/${id.agentA}`, { name: 'Renamed' })
+        .expect(400);
+      await as('respA')
+        .patch(`/users/${id.agentA}`, { siteId: id.siteB })
+        .expect(400);
+      await as('super').post(`/users/${id.agentA}/toggle-status`).expect(404);
+      await as('super').post('/sites', { name: 'Garoua' }).expect(404);
     });
 
     it('a site admin only sees their own site', async () => {
@@ -309,30 +398,36 @@ describe('Diffusion, end to end', () => {
       await as('respB').get(`/users/${id.agentA}`).expect(403);
     });
 
-    it('a site admin cannot create a user on another site', async () => {
+    it("a site admin cannot give roles to another company's people", async () => {
       await as('respA')
-        .post('/users', {
-          name: 'Intrus',
-          email: 'intrus@e2e.test',
-          password: PASSWORD,
-          siteId: id.siteB,
-        })
+        .patch(`/users/${id.respB}`, { roleIds: [id.roleAgent] })
         .expect(403);
     });
 
-    it('a site responsible cannot be suspended', async () => {
-      const res = await as('super')
-        .post(`/users/${id.respA}/toggle-status`)
-        .expect(400);
-      expect(res.body.message).toMatch(/responsible of site/);
+    it('people the core no longer lists are suspended, and lose access', async () => {
+      const { DirectorySyncService } =
+        await import('../src/core/directory-sync.service');
+      const sync = app.get(DirectorySyncService);
+      const full = directory();
+      await sync.apply({
+        ...full,
+        tenants: full.tenants.map((t) => ({
+          ...t,
+          users: t.users.filter((u) => u.id !== people.norole.id),
+        })),
+      });
+      const gone = await db.user.findUnique({ where: { id: id.norole } });
+      expect(gone.status).toBe('SUSPENDED');
+      // Back in the directory: active again.
+      await sync.apply(directory());
+      const back = await db.user.findUnique({ where: { id: id.norole } });
+      expect(back.status).toBe('ACTIVE');
     });
 
     it('someone who administers nothing cannot manage users', async () => {
       await as('agentA').get('/users').expect(403);
     });
   });
-
-  // ---------------------------------------------------------------------------
   describe('3. Rôles et permissions du site', () => {
     it('the site admin creates a role for their site', async () => {
       const perms = await as('respA').get('/permissions').expect(200);
@@ -1696,7 +1791,7 @@ describe('Diffusion, end to end', () => {
         (log: any) => log.action === 'INSTRUCTION_RELANCEE',
       );
       expect(reminded).toBeDefined();
-      expect(reminded.actorName).toBe('chefA');
+      expect(reminded.actorName).toBe('chefA E2E');
       expect(reminded.entityReference).toMatch(/^T-/);
     });
 
@@ -1710,7 +1805,7 @@ describe('Diffusion, end to end', () => {
         (log: any) => log.action === 'INSTRUCTION_RELANCEE',
       );
       expect(reminded).toMatchObject({
-        actorName: 'chefA',
+        actorName: 'chefA E2E',
         entityType: 'Instruction',
       });
       expect(reminded.entityReference).toMatch(/^T-/);

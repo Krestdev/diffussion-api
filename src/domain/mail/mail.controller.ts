@@ -27,7 +27,7 @@ import {
 } from '../../common/utils/attachment-upload';
 import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
@@ -36,7 +36,7 @@ import {
   fromBody,
   fromParam,
 } from '../../auth/rbac/site-scope.decorator';
-import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { SetOwnerDto } from '../../common/dto/set-owner.dto';
 import { ArchiveReasonDto } from '../../common/dto/archive-reason.dto';
@@ -58,7 +58,7 @@ import { MailService } from './mail.service';
 
 @ApiTags('courriers')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 // Permissions are checked at the site of the targeted resource.
 @SiteScope(fromParam('courrier'))
 @Controller('courriers')
@@ -102,7 +102,7 @@ export class MailController {
   @UseInterceptors(FilesInterceptor('files', 10, attachmentUploadOptions()))
   create(
     @Body() dto: CreateMailDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
     @UploadedFiles() files?: Express.Multer.File[],
   ) {
     return this.mailService.create(dto, user.sub, files);
@@ -114,7 +114,7 @@ export class MailController {
   @RequirePermission(PermissionCode.CourrierWriteSortant)
   createOutgoing(
     @Body() dto: CreateOutgoingMailDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.createOutgoingDraft(dto, user.sub);
   }
@@ -123,10 +123,7 @@ export class MailController {
   // visibleMailsWhere), like the entrants / sortants lists.
   @Get()
   @RequirePermission(PermissionCode.CourrierRead)
-  findAll(
-    @Query() query: FindMailsQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
-  ) {
+  findAll(@Query() query: FindMailsQueryDto, @CurrentUser() user: AuthUser) {
     return this.mailService.findAll(query, user.sub);
   }
 
@@ -135,7 +132,7 @@ export class MailController {
   @RequirePermission(PermissionCode.CourrierRead)
   findIncoming(
     @Query() query: FindIncomingMailsQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.findIncoming(query, user.sub);
   }
@@ -144,14 +141,14 @@ export class MailController {
   @RequirePermission(PermissionCode.CourrierRead)
   findOutgoing(
     @Query() query: FindOutgoingMailsQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.findOutgoing(query, user.sub);
   }
 
   // The caller's validation inbox.
   @Get('awaiting-my-validation')
-  findAwaitingMyValidation(@CurrentUser() user: JwtPayloadWithRefreshToken) {
+  findAwaitingMyValidation(@CurrentUser() user: AuthUser) {
     return this.mailService.findAwaitingMyValidation(user.sub);
   }
 
@@ -161,7 +158,7 @@ export class MailController {
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async exportIncoming(
     @Query() query: FindIncomingMailsQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
     const csv = await this.mailService.exportIncoming(query, user.sub);
@@ -178,7 +175,7 @@ export class MailController {
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async exportOutgoing(
     @Query() query: FindOutgoingMailsQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
     const csv = await this.mailService.exportOutgoing(query, user.sub);
@@ -192,7 +189,7 @@ export class MailController {
   @Get(':id')
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.findOneDetailed(id, user.sub);
   }
@@ -204,7 +201,7 @@ export class MailController {
   @Header('Content-Type', 'application/pdf')
   async pdf(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
     const { pdf, filename } = await this.mailService.outgoingPdf(id, user.sub);
@@ -218,7 +215,7 @@ export class MailController {
   @Header('Content-Type', 'application/pdf')
   async bordereau(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
     const { pdf, filename } = await this.mailService.bordereauPdf(id, user.sub);
@@ -230,7 +227,7 @@ export class MailController {
   @RequirePermission(PermissionCode.CourrierRead)
   historique(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
     @Query('skip') skip?: string,
     @Query('take') take?: string,
   ) {
@@ -246,7 +243,7 @@ export class MailController {
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateMailDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.mailService.assertVisible(id, user.sub);
     await this.mailService.assertMayEdit(id, user.sub);
@@ -257,7 +254,7 @@ export class MailController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.mailService.assertVisible(id, user.sub);
     await this.mailService.assertMayEdit(id, user.sub);
@@ -268,7 +265,7 @@ export class MailController {
   @RequirePermission(PermissionCode.CourrierRead)
   transmit(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.transmit(id, user.sub);
   }
@@ -278,7 +275,7 @@ export class MailController {
   dispatch(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DispatchMailDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.dispatch(id, dto, user.sub);
   }
@@ -287,7 +284,7 @@ export class MailController {
   @RequirePermission(PermissionCode.CourrierDispatchValidate)
   validateDispatch(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.validateDispatch(id, user.sub);
   }
@@ -297,7 +294,7 @@ export class MailController {
   assignSupervisor(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignSupervisorDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.assignSupervisor(id, dto, user.sub);
   }
@@ -308,7 +305,7 @@ export class MailController {
   @RequirePermission(PermissionCode.CourrierWriteSortant)
   submitForValidation(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.submitForValidation(id, user.sub);
   }
@@ -318,7 +315,7 @@ export class MailController {
   @Post(':id/validate')
   validate(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.validate(id, user.sub);
   }
@@ -327,7 +324,7 @@ export class MailController {
   requestCorrections(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RequestCorrectionsDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.requestCorrections(id, dto.motif, user.sub);
   }
@@ -356,7 +353,7 @@ export class MailController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SignMailDto,
     @UploadedFile() file: Express.Multer.File | undefined,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.sign(id, dto, file, user.sub);
   }
@@ -367,7 +364,7 @@ export class MailController {
   send(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SendMailDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.send(id, dto, user.sub);
   }
@@ -377,7 +374,7 @@ export class MailController {
   async cancel(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CancelMailDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.mailService.assertVisible(id, user.sub);
     await this.mailService.assertMayEdit(id, user.sub);
@@ -393,7 +390,7 @@ export class MailController {
   close(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CloseMailDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.close(id, dto, user.sub);
   }
@@ -405,7 +402,7 @@ export class MailController {
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.archive(id, dto?.reason, user.sub);
   }
@@ -415,7 +412,7 @@ export class MailController {
   unarchive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RestoreNoteDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.unarchive(id, user.sub, dto.note);
   }
@@ -456,7 +453,7 @@ export class MailController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DischargeMailDto,
     @UploadedFile() file: Express.Multer.File | undefined,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.mailService.assertVisible(id, user.sub);
     return this.mailService.discharge(id, user.sub, dto, file);
@@ -468,7 +465,7 @@ export class MailController {
   setOwner(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetOwnerDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.setOwner(id, dto, user.sub);
   }

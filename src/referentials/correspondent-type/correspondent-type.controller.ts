@@ -14,8 +14,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import { FindSiteListQueryDto } from '../../common/dto/site-list-item.dto';
 import { CorrespondentTypeService } from './correspondent-type.service';
 import { CreateCorrespondentTypeDto } from './dto/create-correspondent-type.dto';
@@ -25,7 +25,7 @@ import { UpdateCorrespondentTypeDto } from './dto/update-correspondent-type.dto'
 // ADMIN_MANAGE_REFERENTIALS there — checked in the service.
 @ApiTags('correspondent-types')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(CoreAuthGuard)
 @Controller('correspondent-types')
 export class CorrespondentTypeController {
   constructor(
@@ -35,17 +35,14 @@ export class CorrespondentTypeController {
   @Post()
   create(
     @Body() dto: CreateCorrespondentTypeDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentTypeService.create(dto, user.sub);
   }
 
   // The caller's own site's — every site's for a platform administrator.
   @Get()
-  findAll(
-    @Query() query: FindSiteListQueryDto,
-    @CurrentUser() user: JwtPayload,
-  ) {
+  findAll(@Query() query: FindSiteListQueryDto, @CurrentUser() user: AuthUser) {
     return this.correspondentTypeService.findAll(query, user.sub);
   }
 
@@ -58,7 +55,7 @@ export class CorrespondentTypeController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCorrespondentTypeDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentTypeService.update(id, dto, user.sub);
   }
@@ -67,7 +64,7 @@ export class CorrespondentTypeController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentTypeService.remove(id, user.sub);
   }

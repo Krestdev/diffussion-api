@@ -13,7 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import {
@@ -27,7 +27,7 @@ import { UpdateCourrierNatureDto } from './dto/update-courrier-nature.dto';
 
 @ApiTags('courrier-natures')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 @Controller('courrier-natures')
 export class CourrierNatureController {
   constructor(private readonly courrierNatureService: CourrierNatureService) {}

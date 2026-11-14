@@ -2,8 +2,8 @@ import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
+import { AuthUser } from '../auth/types/auth-user.type';
 import { exportTables, renderPdf, renderXlsx } from './dashboard-export';
 import { DashboardOverviewService } from './dashboard-overview.service';
 import { DashboardService } from './dashboard.service';
@@ -16,7 +16,7 @@ import { DashboardStatsQueryDto } from './dto/dashboard-stats.query.dto';
 
 @ApiTags('dashboard')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(CoreAuthGuard)
 @Controller('dashboard')
 export class DashboardController {
   constructor(
@@ -29,7 +29,7 @@ export class DashboardController {
   @Get('overview')
   overview(
     @Query() query: DashboardOverviewQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.overviewService.overview(query, user.sub);
   }
@@ -37,7 +37,7 @@ export class DashboardController {
   @Get('export')
   async export(
     @Query() query: DashboardExportQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
     const { format, sections, ...filters } = query;
@@ -71,7 +71,7 @@ export class DashboardController {
   @Get('stats')
   getStats(
     @Query() query: DashboardStatsQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dashboardService.getStats(user.sub, query);
   }

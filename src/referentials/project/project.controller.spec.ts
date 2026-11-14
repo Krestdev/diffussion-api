@@ -1,3 +1,4 @@
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
@@ -22,6 +23,8 @@ describe('ProjectController', () => {
       ],
     })
       .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

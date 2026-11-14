@@ -1,3 +1,4 @@
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { MailController } from './mail.controller';
@@ -27,6 +28,8 @@ describe('MailController', () => {
     })
       .overrideGuard(PermissionGuard)
       .useValue({ canActivate: () => true })
+      .overrideGuard(CoreAuthGuard)
+      .useValue({ canActivate: () => true })
       .compile();
 
     controller = module.get<MailController>(MailController);
@@ -40,7 +43,10 @@ describe('MailController', () => {
     controller.submitForValidation('c-1', {
       sub: 'u-1',
       email: 'u@x.com',
-      refreshToken: 'r',
+      name: 'U',
+      siteId: 's-1',
+      sid: 'sid-1',
+      impersonator: null,
     });
     expect(service.submitForValidation).toHaveBeenCalledWith('c-1', 'u-1');
   });
@@ -56,7 +62,14 @@ describe('MailController', () => {
     ] as Express.Multer.File[];
     controller.create(
       dto,
-      { sub: 'u-1', email: 'u@x.com', refreshToken: 'r' },
+      {
+        sub: 'u-1',
+        email: 'u@x.com',
+        name: 'U',
+        siteId: 's-1',
+        sid: 'sid-1',
+        impersonator: null,
+      },
       files,
     );
     expect(service.create).toHaveBeenCalledWith(dto, 'u-1', files);

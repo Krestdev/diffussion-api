@@ -100,6 +100,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
         ? extractMessage(exception)
         : (prismaError?.message ?? 'Internal server error');
 
+    // A machine-readable reason the UI acts on (NO_APP_ACCESS, UNAUTHENTICATED…).
+    const response =
+      exception instanceof HttpException ? exception.getResponse() : null;
+    const code =
+      response && typeof response === 'object' && 'code' in response
+        ? String(response.code)
+        : undefined;
+
     const stack = exception instanceof Error ? exception.stack : undefined;
 
     if (status >= 500) {
@@ -122,6 +130,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     res.status(status).json({
       statusCode: status,
       message,
+      ...(code ? { code } : {}),
       requestId: this.cls.get('requestId') ?? null,
     });
   }

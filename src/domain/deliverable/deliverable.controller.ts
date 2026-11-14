@@ -14,12 +14,12 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { SiteScope, fromParam } from '../../auth/rbac/site-scope.decorator';
-import { JwtPayloadWithRefreshToken } from '../../auth/types/jwt-payload.type';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import { RejectLivrableDto } from '../../instructions/dto/request-corrections.dto';
 import { InstructionsService } from '../../instructions/instructions.service';
 import { DeliverableService } from './deliverable.service';
@@ -31,7 +31,7 @@ import { UpdateDeliverableDto } from './dto/update-deliverable.dto';
 
 @ApiTags('livrables')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 // Permissions are checked at the site of the targeted resource.
 @SiteScope(fromParam('livrable'))
 @Controller('deliverables')
@@ -48,7 +48,7 @@ export class DeliverableController {
   @Post()
   async create(
     @Body() dto: CreateDeliverableDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.instructionsService.assertMayWorkOn(
       dto.instructionId,
@@ -62,7 +62,7 @@ export class DeliverableController {
   @RequirePermission(PermissionCode.LivrableRead)
   findAll(
     @Query() query: FindDeliverableQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.deliverableService.findAll(query, user.sub);
   }
@@ -77,7 +77,7 @@ export class DeliverableController {
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDeliverableDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.assertMayWorkOnLivrable(id, user.sub, [
       PermissionCode.LivrableDeposit,
@@ -89,7 +89,7 @@ export class DeliverableController {
   async newVersion(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDeliverableDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.assertMayWorkOnLivrable(id, user.sub, [
       PermissionCode.LivrableNewVersion,
@@ -101,7 +101,7 @@ export class DeliverableController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.assertMayWorkOnLivrable(id, user.sub, [
       PermissionCode.LivrableDeposit,
@@ -113,7 +113,7 @@ export class DeliverableController {
   async deposit(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DepositDeliverableDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.assertSubscriberOf(id, user.sub);
     return this.deliverableService.deposit(id, dto.agentComment);
@@ -122,7 +122,7 @@ export class DeliverableController {
   @Post(':id/submit')
   async submit(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.assertSubscriberOf(id, user.sub);
     return this.deliverableService.submit(id);
@@ -160,7 +160,7 @@ export class DeliverableController {
   giveAvis(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AvisDeliverableDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.giveAvis(id, dto.comment, user.sub);
   }
@@ -173,7 +173,7 @@ export class DeliverableController {
   reject(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RejectLivrableDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.rejectLivrable(id, dto.motif, user.sub);
   }

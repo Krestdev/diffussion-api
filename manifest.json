@@ -1,0 +1,11 @@
+{
+  "id": "diffusion",
+  "name": "Diffusion",
+  "version": "1.0.0",
+  "description": "Incoming and outgoing effets, dispatching, instructions, deliverables and analysis sheets",
+  "ownerTeam": "KrestDev",
+  "stage": "BETA",
+  "baseUrl": "https://diffusion.creaconsult-app.com",
+  "adminPath": "/administration",
+  "healthUrl": "https://diffusion-api.creaconsult-app.com/"
+}

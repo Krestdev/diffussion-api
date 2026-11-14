@@ -11,6 +11,9 @@ import { AppController } from './app.controller';
 import { RequestWithId, ResponseLike, NextFn } from './app.module';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { AppConfigModule } from './config/app-config.service';
+import { CoreModule } from './core/core.module';
+import { SessionStoreModule } from './session-store/session-store.module';
 import { RbacModule } from './auth/rbac/rbac.module';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { DashboardModule } from './dashboard/dashboard.module';
@@ -42,6 +45,11 @@ import { SupportModule } from './support/support.module';
       },
     ]),
     DatabaseModule,
+    // The CREAPP core: settings, shared session store, token checks and
+    // the directory sync (companies = sites, people).
+    AppConfigModule,
+    SessionStoreModule,
+    CoreModule,
     MailModule,
     // Global: every domain module can inject ActivityService directly to
     // record its own business events. The first record() call in a request
@@ -75,7 +83,7 @@ import { SupportModule } from './support/support.module';
 })
 export class AppModule implements NestModule {
   // Authentication/authorization is enforced per-controller via
-  // @UseGuards(JwtAuthGuard, PermissionGuard) + @RequirePermission(...)
+  // @UseGuards(CoreAuthGuard, PermissionGuard) + @RequirePermission(...)
   // rather than a global middleware, so each route can declare its own
   // permission requirement.
   configure(consumer: MiddlewareConsumer) {

@@ -226,7 +226,7 @@ export class RoleService {
    * A role is never deleted: archived (A·9), it is held by nobody any more
    * and offered nowhere, and can be restored. Its holders lose it, or get
    * `reassignToRoleId` instead (a role in use, global or of the same site);
-   * so do the delegations still running and the pending invitations.
+   * so do the delegations still running.
    */
   async archive(id: string, dto: ArchiveRoleDto, actingUserId: string) {
     const scope = await this.adminScope(actingUserId);
@@ -281,10 +281,6 @@ export class RoleService {
           data: { endDate: now },
         });
       }
-      await tx.invitation.updateMany({
-        where: { roleId: id, acceptedAt: null, revokedAt: null },
-        data: { roleId: replacementId ?? null },
-      });
       const formerUsersCount = new Set(grants.map((grant) => grant.userId))
         .size;
       await tx.role.update({

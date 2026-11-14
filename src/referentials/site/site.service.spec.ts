@@ -3,7 +3,7 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ActivityService } from '../../activity/activity.service';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
-import { SiteService } from './site.service';
+import { setUpSite, SiteService } from './site.service';
 
 const SITE = { id: 's-1', name: 'Cristal', responsibleId: 'u-old' };
 
@@ -99,40 +99,6 @@ describe('SiteService', () => {
     service = module.get<SiteService>(SiteService);
   });
 
-  describe('create with a responsible', () => {
-    it('moves the responsible into the new site, with their roles', async () => {
-      await service.create({ name: 'Bonaberi', responsibleId: 'u-1' });
-
-      expect(database.userRole.updateMany).toHaveBeenCalledWith({
-        where: { userId: 'u-1' },
-        data: { siteId: 's-new' },
-      });
-      expect(database.user.update).toHaveBeenCalledWith({
-        where: { id: 'u-1' },
-        data: { siteId: 's-new' },
-      });
-    });
-
-    it('refuses a platform administrator', async () => {
-      database.user.findUnique.mockResolvedValue(responsible({ siteId: null }));
-
-      await expect(
-        service.create({ name: 'Bonaberi', responsibleId: 'u-1' }),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      expect(database.site.create).not.toHaveBeenCalled();
-    });
-
-    it('refuses the responsible of another site', async () => {
-      database.user.findUnique.mockResolvedValue(
-        responsible({ managedSites: [{ id: 's-9', name: 'Akwa' }] }),
-      );
-
-      await expect(
-        service.create({ name: 'Bonaberi', responsibleId: 'u-1' }),
-      ).rejects.toThrow('Awa is already the responsible of site "Akwa"');
-    });
-  });
-
   describe('update', () => {
     it('lets the responsible edit their own site', async () => {
       rbac.administeredSites.mockResolvedValue(['s-1']);
@@ -158,21 +124,42 @@ describe('SiteService', () => {
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    it('lets a platform administrator change the responsible', async () => {
+    it('lets a platform administrator name a person of the company responsible', async () => {
+      database.user.findUnique.mockResolvedValue(
+        responsible({ siteId: 's-1' }),
+      );
+
       await service.update('s-1', { responsibleId: 'u-1' }, 'super-admin');
 
-      expect(database.user.update).toHaveBeenCalledWith({
-        where: { id: 'u-1' },
-        data: { siteId: 's-1' },
-      });
       expect(database.site.update).toHaveBeenCalledWith(
         expect.objectContaining({ data: { responsibleId: 'u-1' } }),
       );
     });
+
+    it('refuses a responsible from another company', async () => {
+      await expect(
+        service.update('s-1', { responsibleId: 'u-1' }, 'super-admin'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(database.site.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses the responsible of another site', async () => {
+      database.user.findUnique.mockResolvedValue(
+        responsible({
+          siteId: 's-1',
+          managedSites: [{ id: 's-9', name: 'Akwa' }],
+        }),
+      );
+
+      await expect(
+        service.update('s-1', { responsibleId: 'u-1' }, 'super-admin'),
+      ).rejects.toThrow('Awa is already the responsible of site "Akwa"');
+    });
   });
 
+  // A new site (from the core's directory) is set up by setUpSite.
   it('gives a new site its own copy of the analysis criteria', async () => {
-    await service.create({ name: 'Garoua' });
+    await setUpSite(database as never, 's-new', null);
 
     expect(database.analysisCriterionTemplate.createMany).toHaveBeenCalledWith({
       data: [
@@ -189,7 +176,7 @@ describe('SiteService', () => {
   });
 
   it('gives a new site its 4 default roles, Admin to its responsible', async () => {
-    await service.create({ name: 'Garoua', responsibleId: 'u-resp' });
+    await setUpSite(database as never, 's-new', 'u-resp');
 
     const created = database.role.create.mock.calls.map(
       ([args]) =>

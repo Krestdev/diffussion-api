@@ -1,3 +1,4 @@
+import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { DocumentsController } from './documents.controller';
@@ -19,7 +20,10 @@ describe('DocumentsController', () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [DocumentsController],
       providers: [{ provide: DocumentsService, useValue: service }],
-    }).compile();
+    })
+      .overrideGuard(CoreAuthGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
 
     controller = module.get<DocumentsController>(DocumentsController);
   });
@@ -36,7 +40,10 @@ describe('DocumentsController', () => {
         {
           sub: 'u-1',
           email: 'u@x.com',
-          refreshToken: 'r',
+          name: 'U',
+          siteId: 's-1',
+          sid: 'sid-1',
+          impersonator: null,
         },
       ),
     ).toThrow(BadRequestException);

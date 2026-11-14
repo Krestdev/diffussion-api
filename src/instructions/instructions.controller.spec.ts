@@ -1,3 +1,4 @@
+import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../auth/rbac/permission.guard';
 import { InstructionsController } from './instructions.controller';
@@ -27,6 +28,8 @@ describe('InstructionsController', () => {
     })
       .overrideGuard(PermissionGuard)
       .useValue({ canActivate: () => true })
+      .overrideGuard(CoreAuthGuard)
+      .useValue({ canActivate: () => true })
       .compile();
 
     controller = module.get<InstructionsController>(InstructionsController);
@@ -36,7 +39,14 @@ describe('InstructionsController', () => {
     expect(controller).toBeDefined();
   });
 
-  const user = { sub: 'u-1', email: 'u@x.com', refreshToken: 'r' };
+  const user = {
+    sub: 'u-1',
+    email: 'u@x.com',
+    name: 'U',
+    siteId: 's-1',
+    sid: 'sid-1',
+    impersonator: null,
+  };
 
   it('declineSubscription() forwards the motif and the current user', () => {
     controller.declineSubscription('i-1', { motif: 'Non disponible' }, user);

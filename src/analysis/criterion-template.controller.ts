@@ -14,8 +14,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { JwtPayload } from '../auth/types/jwt-payload.type';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AuthUser } from '../auth/types/auth-user.type';
+import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../auth/rbac/permission.guard';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RequirePermission } from '../auth/rbac/require-permission.decorator';
@@ -34,7 +34,7 @@ import {
 // manages its criteria (checked in the service).
 @ApiTags('analysis-criteria')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 @Controller('analysis-criteria')
 export class CriterionTemplateController {
   constructor(private readonly templates: CriterionTemplateService) {}
@@ -42,7 +42,7 @@ export class CriterionTemplateController {
   @Post()
   create(
     @Body() dto: CreateCriterionTemplateDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.templates.create(dto, user.sub);
   }
@@ -50,10 +50,7 @@ export class CriterionTemplateController {
   // ?siteId=: what a fiche of that site offers (common + its own).
   @Get()
   @RequirePermission(PermissionCode.AnalysisRead)
-  findAll(
-    @Query() query: FindCriteriaQueryDto,
-    @CurrentUser() user: JwtPayload,
-  ) {
+  findAll(@Query() query: FindCriteriaQueryDto, @CurrentUser() user: AuthUser) {
     return this.templates.findAll(query, user.sub);
   }
 
@@ -62,7 +59,7 @@ export class CriterionTemplateController {
   @RequirePermission(PermissionCode.AnalysisRead)
   getSettings(
     @Query() query: AnalysisSettingsQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.templates.getSettingsFor(query.siteId, user.sub);
   }
@@ -70,7 +67,7 @@ export class CriterionTemplateController {
   @Patch('settings')
   updateSettings(
     @Body() dto: UpdateAnalysisSettingsDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.templates.updateSettings(dto, user.sub);
   }
@@ -79,7 +76,7 @@ export class CriterionTemplateController {
   @RequirePermission(PermissionCode.AnalysisRead)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.templates.findOneFor(id, user.sub);
   }
@@ -88,7 +85,7 @@ export class CriterionTemplateController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCriterionTemplateDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.templates.update(id, dto, user.sub);
   }
@@ -97,7 +94,7 @@ export class CriterionTemplateController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.templates.remove(id, user.sub);
   }

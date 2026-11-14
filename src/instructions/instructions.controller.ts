@@ -26,13 +26,13 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../auth/rbac/permission.guard';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RequirePermission } from '../auth/rbac/require-permission.decorator';
 import { SiteScope, fromParam } from '../auth/rbac/site-scope.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { JwtPayloadWithRefreshToken } from '../auth/types/jwt-payload.type';
+import { AuthUser } from '../auth/types/auth-user.type';
 import { AssignInstructionDto } from './dto/assign-instruction.dto';
 import { CancelInstructionDto } from './dto/cancel-instruction.dto';
 import { CloseInstructionDto } from './dto/close-instruction.dto';
@@ -50,7 +50,7 @@ import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 
 @ApiTags('instructions')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 // Permissions are checked at the site of the targeted resource.
 @SiteScope(fromParam('instruction'))
 // Livrables come back as their current version, with earlier versions in
@@ -63,17 +63,14 @@ export class InstructionsController {
   // INSTRUCTION_CREATE at the dossier's site, or the effet's supervisor:
   // checked in the service.
   @Post()
-  create(
-    @Body() dto: CreateInstructionsDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
-  ) {
+  create(@Body() dto: CreateInstructionsDto, @CurrentUser() user: AuthUser) {
     return this.instructionsService.create(dto, user.sub);
   }
 
   @Get()
   findAll(
     @Query() query: FindInstructionsQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.findAll(query, user.sub);
   }
@@ -84,7 +81,7 @@ export class InstructionsController {
   @Get('taches')
   findMyTasks(
     @Query() query: FindMyTasksQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.findMyTasks(query, user.sub);
   }
@@ -95,7 +92,7 @@ export class InstructionsController {
   @Get('workload')
   workload(
     @Query() query: FindWorkloadQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.workload(query, user.sub);
   }
@@ -103,7 +100,7 @@ export class InstructionsController {
   @Get(':id')
   async findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     await this.instructionsService.assertVisible(id, user.sub);
     return this.instructionsService.findOne(id);
@@ -114,7 +111,7 @@ export class InstructionsController {
   @Post(':id/remind')
   remind(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.remind(id, user.sub);
   }
@@ -133,7 +130,7 @@ export class InstructionsController {
   setAgentDueDate(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetAgentDueDateDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.setAgentDueDate(
       id,
@@ -148,7 +145,7 @@ export class InstructionsController {
   assign(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignInstructionDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.assign(id, dto, user.sub);
   }
@@ -158,7 +155,7 @@ export class InstructionsController {
   @Patch(':id/souscrire')
   subscribe(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.subscribe(id, user.sub);
   }
@@ -168,7 +165,7 @@ export class InstructionsController {
   declineSubscription(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DeclineSubscriptionDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.declineSubscription(id, dto, user.sub);
   }
@@ -182,7 +179,7 @@ export class InstructionsController {
   })
   accept(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.subscribe(id, user);
   }
@@ -195,7 +192,7 @@ export class InstructionsController {
   refuse(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RefuseInstructionDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.declineSubscription(id, { motif: dto.motif }, user);
   }
@@ -212,7 +209,7 @@ export class InstructionsController {
   })
   approveLivrables(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.approveLivrables(id, user.sub);
   }
@@ -226,7 +223,7 @@ export class InstructionsController {
   approveSelectedLivrables(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ApproveSelectedLivrablesDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.approveSelectedLivrables(
       id,
@@ -245,7 +242,7 @@ export class InstructionsController {
   requestCorrections(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RequestCorrectionsDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.requestCorrections(id, dto, user.sub);
   }
@@ -253,7 +250,7 @@ export class InstructionsController {
   @Get(':id/historique')
   async historique(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
     @Query('skip') skip?: string,
     @Query('take') take?: string,
   ) {
@@ -323,7 +320,7 @@ export class InstructionsController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DeposerLivrablesDto,
     @UploadedFiles() files: Array<Express.Multer.File>,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.instructionsService.deposerLivrables(
       id,

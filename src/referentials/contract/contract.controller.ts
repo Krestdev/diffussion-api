@@ -16,11 +16,11 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
-import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { SetReferentialAccessDto } from '../project/dto/set-access.dto';
 import { ContractService } from './contract.service';
@@ -34,7 +34,7 @@ import { UpdateContractDto } from './dto/update-contract.dto';
 // administrators.
 @ApiTags('contracts')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 @Controller('contracts')
 export class ContractController {
   constructor(private readonly contractService: ContractService) {}
@@ -43,7 +43,7 @@ export class ContractController {
   // checked in the service (also for the routes below).
   @Post()
   @RequirePermission(PermissionCode.ContractCreate)
-  create(@Body() dto: CreateContractDto, @CurrentUser() user: JwtPayload) {
+  create(@Body() dto: CreateContractDto, @CurrentUser() user: AuthUser) {
     return this.contractService.create(dto, user.sub);
   }
 
@@ -51,7 +51,7 @@ export class ContractController {
   @RequirePermission(PermissionCode.ContractRead)
   findAll(
     @Query() query: FindContractsQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.contractService.findAll(query, user.sub);
   }
@@ -68,7 +68,7 @@ export class ContractController {
   @RequirePermission(PermissionCode.ContractRead)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.contractService.findOneFor(id, user.sub);
   }
@@ -78,7 +78,7 @@ export class ContractController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateContractDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.contractService.update(id, dto, user.sub);
   }
@@ -88,7 +88,7 @@ export class ContractController {
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.contractService.archive(id, user.sub, dto.reason);
   }
@@ -98,7 +98,7 @@ export class ContractController {
   unarchive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RestoreNoteDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.contractService.unarchive(id, user.sub, dto.note);
   }
@@ -108,7 +108,7 @@ export class ContractController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.contractService.remove(id, user.sub);
   }
@@ -117,7 +117,7 @@ export class ContractController {
   @RequirePermission(PermissionCode.ContractRead)
   getAccess(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.contractService.getAccess(id, user.sub);
   }
@@ -128,7 +128,7 @@ export class ContractController {
   setAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetReferentialAccessDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.contractService.setAccess(id, dto.userIds, user.sub);
   }
@@ -138,7 +138,7 @@ export class ContractController {
   history(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.contractService.history(id, user.sub, query);
   }

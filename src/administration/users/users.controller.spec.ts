@@ -1,10 +1,11 @@
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
-import { MailerService } from '../../mail/mailer.service';
+import { AppAccessService } from '../../core/app-access.service';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { ActivityService } from '../../activity/activity.service';
@@ -24,8 +25,8 @@ describe('UsersController', () => {
         },
         { provide: DatabaseService, useValue: {} },
         {
-          provide: MailerService,
-          useValue: { sendInvitation: jest.fn() },
+          provide: AppAccessService,
+          useValue: { refresh: jest.fn() },
         },
         {
           provide: RealtimeGateway,
@@ -35,6 +36,8 @@ describe('UsersController', () => {
       ],
     })
       .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

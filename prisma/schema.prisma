@@ -44,23 +44,6 @@ datasource db {
 // Organisation domain (BAD 6.1.1 / 9)
 // ---------------------------------------------------------------------------
 
-/// Single-use, short-lived password reset grant (only the SHA-256 digest of
-/// the token is stored — the token itself only ever lives in the user's
-/// reset link).
-model PasswordResetToken {
-  id        String    @id @default(uuid())
-  userId    String
-  tokenHash String    @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("password_reset_token")
-}
-
 enum UserStatus {
   ACTIVE
   SUSPENDED
@@ -74,12 +57,15 @@ enum AccessProfile {
   USER
 }
 
+/// A person, as the CREAPP core knows them (same id): name, email, phone,
+/// job title, status and last sign-in are copied from the core's directory
+/// and never edited here. People sign in at the core: Diffusion keeps no
+/// password. Their site is their company in the core. Diffusion owns their
+/// roles (UserRole).
 model User {
   id           String  @id @default(uuid())
   name         String
   email        String  @unique
-  password     String
-  refreshToken String?
 
   /// Matricule (9.2.2)
   registrationNumber String? @unique @db.VarChar(30)
@@ -87,18 +73,19 @@ model User {
   function           String?
   phone              String? @db.VarChar(30)
 
+  /// ACTIVE while the core lists the person as active; SUSPENDED otherwise
+  /// (deactivated or not yet active at the core, or no longer listed).
   status          UserStatus    @default(ACTIVE)
   accessProfile   AccessProfile @default(USER)
-  /// Has to choose their own password before doing anything else: only
-  /// POST /auth/change-password, /auth/me and /auth/logout are open until then.
-  mustChangePassword Boolean    @default(false)
-  /// When and by whom the account was last suspended (A·13); cleared when
-  /// it is reactivated.
+  /// When the account was last suspended; cleared when it is reactivated.
+  /// `deactivatedById` is only set by suspensions made in Diffusion before
+  /// it moved onto the core.
   deactivatedAt   DateTime?
   deactivatedById String?
-  isVerified      Boolean       @default(false)
-  isConnected     Boolean       @default(false)
+  /// Last sign-in to the platform (from the core, rounded to the hour).
   lastLogin       DateTime?
+  /// Last time the core's directory listed the person.
+  coreSyncedAt    DateTime?
 
   /// The one site the user belongs to (RG-ORG-001, revised: one site per
   /// user). Null for platform users (super-admins), whose roles are global.
@@ -112,8 +99,6 @@ model User {
   deactivatedBy      User?            @relation("UserDeactivatedBy", fields: [deactivatedById], references: [id], onDelete: SetNull)
   deactivatedUsers   User[]           @relation("UserDeactivatedBy")
   archivedRoles      Role[]           @relation("RoleArchivedBy")
-  invitationsSent    Invitation[]     @relation("InvitationInvitedBy")
-  invitationAccepted Invitation?      @relation("InvitationUser")
   supportTickets     SupportTicket[]  @relation("SupportTicketRequester")
   supportMessages    SupportMessage[] @relation("SupportMessageAuthor")
   helpFeedback       HelpFeedback[]
@@ -151,7 +136,6 @@ model User {
   contractAccesses           ContractAccess[]
   responsibleContracts       Contract[]           @relation("ContractResponsible")
   documentAccesses           DocumentAccess[]
-  passwordResetTokens        PasswordResetToken[]
   analysisSheets             AnalysisSheet[]      @relation("AnalysisSheetAuthor")
   analysisDecisions          AnalysisSheet[]      @relation("AnalysisSheetDecidedBy")
 
@@ -164,8 +148,10 @@ enum SiteStatus {
   INACTIVE
 }
 
-/// A geographic/organisational location (9.5). Owns dossiers as their
-/// "site propriétaire" (RG-DOS-003) and has a responsible user.
+/// A company of the CREAPP platform (9.5): the core's company, same id.
+/// Owns dossiers as their "site propriétaire" (RG-DOS-003) and has a
+/// responsible user. Created, named and (de)activated by the directory sync
+/// (src/core/directory-sync.service.ts); the core is the source of truth.
 model Site {
   id            String     @id @default(uuid())
   code          String     @unique @db.VarChar(30)
@@ -173,6 +159,9 @@ model Site {
   city          String?    @db.VarChar(100)
   status        SiteStatus @default(ACTIVE)
   responsibleId String?
+  /// Last time the core's directory listed the company (null: a site made
+  /// before Diffusion moved onto the core, not matched yet).
+  coreSyncedAt  DateTime?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -189,7 +178,6 @@ model Site {
   userRoles          UserRole[]
   dossiers           Dossier[]
   delegations        Delegation[]
-  invitations        Invitation[]
   correspondentTypes CorrespondentType[]
   dossierTypes       DossierType[]
 
@@ -218,7 +206,6 @@ model Role {
 
   site            Site?            @relation(fields: [siteId], references: [id], onDelete: Restrict)
   archivedBy      User?            @relation("RoleArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
-  invitations     Invitation[]
   userRoles       UserRole[]
   rolePermissions RolePermission[]
   delegations     Delegation[]
@@ -1786,33 +1773,4 @@ model AnalysisSiteSettings {
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
   @@map("analysis_site_settings")
-}
-
-/// An invitation to join (A·12): the account is created when the invitee
-/// accepts it with their password (POST /auth/invitations/accept). Pending:
-/// neither accepted nor revoked, and not expired.
-model Invitation {
-  id          String    @id @default(uuid())
-  email       String    @db.VarChar(150)
-  name        String
-  siteId      String?
-  /// The role it will hold, at its site (or globally without a site).
-  roleId      String?
-  invitedById String?
-  tokenHash   String    @unique
-  sentAt      DateTime  @default(now())
-  expiresAt   DateTime
-  acceptedAt  DateTime?
-  revokedAt   DateTime?
-  /// The account created on acceptance.
-  userId      String?   @unique
-
-  site      Site? @relation(fields: [siteId], references: [id], onDelete: Restrict)
-  role      Role? @relation(fields: [roleId], references: [id], onDelete: Restrict)
-  invitedBy User? @relation("InvitationInvitedBy", fields: [invitedById], references: [id], onDelete: SetNull)
-  user      User? @relation("InvitationUser", fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([siteId])
-  @@index([email])
-  @@map("invitation")
 }

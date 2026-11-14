@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
@@ -21,10 +21,7 @@ import {
   fromBody,
   fromParam,
 } from '../../auth/rbac/site-scope.decorator';
-import {
-  JwtPayload,
-  JwtPayloadWithRefreshToken,
-} from '../../auth/types/jwt-payload.type';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { ArchiveReasonDto } from '../../common/dto/archive-reason.dto';
@@ -36,7 +33,7 @@ import { UpdateDossierDto } from './dto/update-dossier.dto';
 
 @ApiTags('dossiers')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 // Permissions are checked at the site of the targeted resource.
 @SiteScope(fromParam('dossier'))
 @Controller('dossiers')
@@ -45,20 +42,14 @@ export class DossierController {
 
   @Get()
   @RequirePermission(PermissionCode.DossierRead)
-  findAll(
-    @Query() query: FindDossiersQueryDto,
-    @CurrentUser() user: JwtPayload,
-  ) {
+  findAll(@Query() query: FindDossiersQueryDto, @CurrentUser() user: AuthUser) {
     return this.dossierService.findAll(query, user.sub);
   }
 
   @Post()
   @RequirePermission(PermissionCode.DossierCreate)
   @SiteScope(fromBody('site', 'siteId'))
-  create(
-    @Body() dto: CreateDossierDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
-  ) {
+  create(@Body() dto: CreateDossierDto, @CurrentUser() user: AuthUser) {
     return this.dossierService.create(dto, user.sub);
   }
 
@@ -66,7 +57,7 @@ export class DossierController {
   @RequirePermission(PermissionCode.DossierRead)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dossierService.findOne(id, user.sub);
   }
@@ -77,7 +68,7 @@ export class DossierController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDossierDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dossierService.update(id, dto, user.sub);
   }
@@ -117,7 +108,7 @@ export class DossierController {
   getCourriers(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dossierService.getCourriers(id, query, user.sub);
   }
@@ -127,7 +118,7 @@ export class DossierController {
   getInstructions(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dossierService.getInstructions(id, query, user.sub);
   }
@@ -137,7 +128,7 @@ export class DossierController {
   getLivrables(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dossierService.getLivrables(id, query, user.sub);
   }
@@ -146,7 +137,7 @@ export class DossierController {
   @RequirePermission(PermissionCode.AuditRead)
   getHistorique(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dossierService.getHistorique(id, user.sub);
   }
@@ -155,7 +146,7 @@ export class DossierController {
   @RequirePermission(PermissionCode.DossierRead)
   getProgression(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dossierService.getProgression(id, user.sub);
   }
@@ -164,7 +155,7 @@ export class DossierController {
   @RequirePermission(PermissionCode.DossierRead)
   getAccess(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dossierService.getAccess(id, user.sub);
   }
@@ -174,7 +165,7 @@ export class DossierController {
   setAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetAccessDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.dossierService.setAccess(id, dto, user.sub);
   }

@@ -14,11 +14,11 @@ import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
-import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import {
   DocumentIdentityService,
   LOGO_MAX_BYTES,
@@ -31,7 +31,7 @@ import { SettingsService } from './settings.service';
 
 @ApiTags('settings')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 @Controller('settings')
 export class SettingsController {
   constructor(
@@ -43,7 +43,7 @@ export class SettingsController {
   // The caller's own site's settings, readable by every signed-in user;
   // another site's (?siteId=) for whoever administers it.
   @Get()
-  get(@Query() query: SettingsQueryDto, @CurrentUser() user: JwtPayload) {
+  get(@Query() query: SettingsQueryDto, @CurrentUser() user: AuthUser) {
     return this.settings.getFor(query, user.sub);
   }
 
@@ -51,7 +51,7 @@ export class SettingsController {
   // there; the common ones: a platform administrator — checked in
   // SettingsService.
   @Patch()
-  update(@Body() dto: UpdateSettingsDto, @CurrentUser() user: JwtPayload) {
+  update(@Body() dto: UpdateSettingsDto, @CurrentUser() user: AuthUser) {
     return this.settings.update(dto, user.sub);
   }
 
@@ -60,7 +60,7 @@ export class SettingsController {
   @RequirePermission(PermissionCode.SettingsRead)
   getNotifications(
     @Query() query: SettingsQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.notifications.getFor(query.siteId, user.sub);
   }
@@ -68,17 +68,14 @@ export class SettingsController {
   @Patch('notifications')
   updateNotifications(
     @Body() dto: UpdateModuleNotificationsDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.notifications.update(dto, user.sub);
   }
 
   // PA·3 — the documents' letterhead. Declared before any ':param'.
   @Get('document-identity')
-  getIdentity(
-    @Query() query: SettingsQueryDto,
-    @CurrentUser() user: JwtPayload,
-  ) {
+  getIdentity(@Query() query: SettingsQueryDto, @CurrentUser() user: AuthUser) {
     return this.identity.getFor(query.siteId, user.sub);
   }
 
@@ -94,7 +91,7 @@ export class SettingsController {
   updateIdentity(
     @Body() dto: UpdateDocumentIdentityDto,
     @UploadedFile() logo: Express.Multer.File | undefined,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.identity.update(dto, logo, user.sub);
   }

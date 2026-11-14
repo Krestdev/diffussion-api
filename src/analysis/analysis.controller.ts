@@ -23,7 +23,7 @@ import { Response } from 'express';
 import { ArchiveReasonDto } from '../common/dto/archive-reason.dto';
 import { attachmentUploadOptions } from '../common/utils/attachment-upload';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
 import { PermissionGuard } from '../auth/rbac/permission.guard';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { RequirePermission } from '../auth/rbac/require-permission.decorator';
@@ -32,7 +32,7 @@ import {
   fromBody,
   fromParam,
 } from '../auth/rbac/site-scope.decorator';
-import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { AuthUser } from '../auth/types/auth-user.type';
 import { AnalysisSheetService } from './analysis-sheet.service';
 import {
   CreateAnalysisItemDto,
@@ -48,7 +48,7 @@ import {
 
 @ApiTags('analysis-sheets')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 // Permissions are checked at the site of the targeted resource.
 @SiteScope(fromParam('analysisSheet'))
 @Controller('analysis-sheets')
@@ -58,7 +58,7 @@ export class AnalysisController {
   @Post()
   @RequirePermission(PermissionCode.AnalysisCreate)
   @SiteScope(fromBody('courrier', 'courrierId'))
-  create(@Body() dto: CreateAnalysisSheetDto, @CurrentUser() user: JwtPayload) {
+  create(@Body() dto: CreateAnalysisSheetDto, @CurrentUser() user: AuthUser) {
     return this.sheets.create(dto, user.sub);
   }
 
@@ -66,7 +66,7 @@ export class AnalysisController {
   @RequirePermission(PermissionCode.AnalysisRead)
   findAll(
     @Query() query: FindAnalysisSheetsQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.sheets.findAll(query, user.sub);
   }
@@ -122,7 +122,7 @@ export class AnalysisController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SignAnalysisSheetDto,
     @UploadedFile() file: Express.Multer.File | undefined,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.sheets.sign(id, dto, file, user.sub);
   }
@@ -205,7 +205,7 @@ export class AnalysisController {
   @RequirePermission(PermissionCode.AnalysisUpdate)
   submit(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.sheets.submit(id, user.sub);
   }
@@ -216,7 +216,7 @@ export class AnalysisController {
   decide(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DecideAnalysisSheetDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.sheets.decide(id, dto, user.sub);
   }

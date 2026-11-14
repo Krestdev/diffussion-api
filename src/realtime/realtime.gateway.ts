@@ -1,16 +1,13 @@
 import { Logger } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
 import {
   OnGatewayConnection,
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { UserStatus } from '../../generated/prisma/client';
-import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { accessToken } from '../auth/guards/core-auth.guard';
 import { corsOrigins } from '../common/cors';
-import { DatabaseService } from '../database/database.service';
-
+import { CoreAccessService } from '../core/core-access.service';
 /** Events the frontend's SocketProvider listens for. */
 export type RealtimeEvent =
   'notification:new' | 'user:new' | 'user:update' | 'user:delete';
@@ -30,37 +27,21 @@ export class RealtimeGateway implements OnGatewayConnection {
   @WebSocketServer()
   private readonly server: Server;
 
-  constructor(
-    private readonly jwt: JwtService,
-    private readonly database: DatabaseService,
-  ) {}
+  constructor(private readonly access: CoreAccessService) {}
 
   /**
-   * Same checks as JwtStrategy: a valid access token from
-   * `handshake.auth.token`, for an account that is still ACTIVE. Anything
-   * else is disconnected. An accepted socket joins its user's room, which
-   * is what `emitToUsers` targets.
+   * Same checks as CoreAuthGuard: the core's access cookie sent with the
+   * handshake (withCredentials), a session the store confirms, a person with
+   * a Diffusion role. Anything else is disconnected. An accepted socket joins
+   * its user's room, which is what `emitToUsers` targets.
    */
   async handleConnection(client: Socket) {
-    const token: unknown = client.handshake.auth?.token;
     try {
-      if (typeof token !== 'string' || !token) {
-        throw new Error('missing token');
-      }
-      const payload = await this.jwt.verifyAsync<JwtPayload>(token, {
-        secret: process.env.JWT_SECRET,
-      });
-      if (payload.typ !== 'access') {
-        throw new Error('not an access token');
-      }
-      const user = await this.database.user.findUnique({
-        where: { id: payload.sub },
-        select: { status: true },
-      });
-      if (user?.status !== UserStatus.ACTIVE) {
-        throw new Error('account is not active');
-      }
-      await client.join(userRoom(payload.sub));
+      const token = accessToken({ headers: client.handshake.headers });
+      if (!token) throw new Error('missing token');
+      const result = await this.access.resolve(token);
+      if (typeof result === 'string') throw new Error(result);
+      await client.join(userRoom(result.account.id));
     } catch (error) {
       this.logger.debug(
         `Rejected socket ${client.id}: ${(error as Error).message}`,
@@ -68,7 +49,6 @@ export class RealtimeGateway implements OnGatewayConnection {
       client.disconnect(true);
     }
   }
-
   emitToUsers(userIds: string[], event: RealtimeEvent, payload?: unknown) {
     if (userIds.length === 0) return;
     this.server.to(userIds.map(userRoom)).emit(event, payload);

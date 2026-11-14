@@ -1,15 +1,12 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 import { Request } from 'express';
-import { JwtPayloadWithRefreshToken } from '../types/jwt-payload.type';
+import { AuthUser } from '../types/auth-user.type';
 
 export const CurrentUser = createParamDecorator(
-  (
-    _data: unknown,
-    ctx: ExecutionContext,
-  ): JwtPayloadWithRefreshToken | undefined => {
+  (_data: unknown, ctx: ExecutionContext): AuthUser | undefined => {
     const request = ctx
       .switchToHttp()
-      .getRequest<Request & { user?: JwtPayloadWithRefreshToken }>();
+      .getRequest<Request & { user?: AuthUser }>();
     return request.user;
   },
 );

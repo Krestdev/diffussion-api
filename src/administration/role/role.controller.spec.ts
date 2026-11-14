@@ -1,3 +1,4 @@
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { RbacService } from '../../auth/rbac/rbac.service';
@@ -23,6 +24,8 @@ describe('RoleController', () => {
       ],
     })
       .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

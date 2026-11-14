@@ -14,8 +14,8 @@ async function bootstrap() {
   app.useLogger(app.get(DbLogger));
 
   // The Next.js frontend runs on a different origin (localhost:4000) and
-  // sends the JWT as an Authorization header, not a cookie, but the
-  // preflight still needs an explicit allow-list.
+  // sends the CREAPP core's access cookie (creapp_access) with each call:
+  // credentials are allowed, for the listed origins only.
   app.enableCors({
     origin: corsOrigins(),
     credentials: true,
@@ -40,6 +40,7 @@ async function bootstrap() {
     .setTitle('Diffusion API')
     .setDescription('API documentation for the Diffusion service')
     .setVersion('1.0')
+    .addCookieAuth('creapp_access')
     .addBearerAuth()
     .build();
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);

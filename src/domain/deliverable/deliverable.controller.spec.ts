@@ -1,3 +1,4 @@
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { InstructionsService } from '../../instructions/instructions.service';
@@ -37,6 +38,8 @@ describe('DeliverableController', () => {
     })
       .overrideGuard(PermissionGuard)
       .useValue({ canActivate: () => true })
+      .overrideGuard(CoreAuthGuard)
+      .useValue({ canActivate: () => true })
       .compile();
 
     controller = module.get<DeliverableController>(DeliverableController);
@@ -52,7 +55,10 @@ describe('DeliverableController', () => {
       {
         sub: 'u-1',
         email: 'u@x.com',
-        refreshToken: 'r',
+        name: 'U',
+        siteId: 's-1',
+        sid: 'sid-1',
+        impersonator: null,
       },
     );
     expect(instructions.assertMayWorkOn).toHaveBeenCalledWith('i-1', 'u-1', [
@@ -72,7 +78,10 @@ describe('DeliverableController', () => {
       controller.submit('l-1', {
         sub: 'u-1',
         email: 'u@x.com',
-        refreshToken: 'r',
+        name: 'U',
+        siteId: 's-1',
+        sid: 'sid-1',
+        impersonator: null,
       }),
     ).rejects.toThrow('forbidden');
     expect(service.submit).not.toHaveBeenCalled();

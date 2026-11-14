@@ -15,8 +15,8 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtPayload } from '../../auth/types/jwt-payload.type';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { AuthUser } from '../../auth/types/auth-user.type';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { CreateDelegationDto } from './dto/create-delegation.dto';
 import { UpdateDelegationDto } from './dto/update-delegation.dto';
 import { DelegationService } from './delegation.service';
@@ -27,25 +27,25 @@ import { DelegationService } from './delegation.service';
 // them is an administration act over people — same gate as user management.
 // Scope (platform administrator, or the site's responsible) is enforced in
 // DelegationService.
-@UseGuards(JwtAuthGuard)
+@UseGuards(CoreAuthGuard)
 @Controller('delegations')
 export class DelegationController {
   constructor(private readonly delegationService: DelegationService) {}
 
   @Post()
-  create(@Body() dto: CreateDelegationDto, @CurrentUser() user: JwtPayload) {
+  create(@Body() dto: CreateDelegationDto, @CurrentUser() user: AuthUser) {
     return this.delegationService.create(dto, user.sub);
   }
 
   @Get()
-  findAll(@Query() query: PaginationQueryDto, @CurrentUser() user: JwtPayload) {
+  findAll(@Query() query: PaginationQueryDto, @CurrentUser() user: AuthUser) {
     return this.delegationService.findAll(query, user.sub);
   }
 
   @Get(':id')
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.delegationService.findOne(id, user.sub);
   }
@@ -54,7 +54,7 @@ export class DelegationController {
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDelegationDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.delegationService.update(id, dto, user.sub);
   }
@@ -63,7 +63,7 @@ export class DelegationController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.delegationService.remove(id, user.sub);
   }

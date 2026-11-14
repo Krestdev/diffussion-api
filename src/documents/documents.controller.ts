@@ -23,8 +23,8 @@ import {
 } from '../common/utils/attachment-upload';
 import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { JwtPayloadWithRefreshToken } from '../auth/types/jwt-payload.type';
+import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
+import { AuthUser } from '../auth/types/auth-user.type';
 import { SetAccessDto } from '../common/dto/access.dto';
 import { SetOwnerDto } from '../common/dto/set-owner.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
@@ -33,7 +33,7 @@ import { DocumentsService } from './documents.service';
 
 @ApiTags('documents')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(CoreAuthGuard)
 @Controller('documents')
 export class DocumentsController {
   constructor(private readonly documentsService: DocumentsService) {}
@@ -67,7 +67,7 @@ export class DocumentsController {
   upload(
     @UploadedFile() file: Express.Multer.File | undefined,
     @Body() dto: UploadDocumentDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     if (!file) {
       throw new BadRequestException('A file is required');
@@ -78,7 +78,7 @@ export class DocumentsController {
   @Get()
   findAll(
     @Query() query: FindDocumentsQueryDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.documentsService.findAll(query, user.sub);
   }
@@ -86,7 +86,7 @@ export class DocumentsController {
   @Get(':id')
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.documentsService.findOne(id, user.sub);
   }
@@ -94,7 +94,7 @@ export class DocumentsController {
   @Get(':id/download-url')
   getDownloadUrl(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.documentsService.getDownloadUrl(id, user.sub);
   }
@@ -103,7 +103,7 @@ export class DocumentsController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.documentsService.remove(id, user.sub);
   }
@@ -114,7 +114,7 @@ export class DocumentsController {
   setOwner(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetOwnerDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.documentsService.setOwner(id, dto, user.sub);
   }
@@ -122,7 +122,7 @@ export class DocumentsController {
   @Get(':id/access')
   getAccess(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.documentsService.getAccess(id, user.sub);
   }
@@ -131,7 +131,7 @@ export class DocumentsController {
   setAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetAccessDto,
-    @CurrentUser() user: JwtPayloadWithRefreshToken,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.documentsService.setAccess(id, dto, user.sub);
   }

@@ -1,19 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { UserStatus } from '../../../generated/prisma/enums';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { RbacService } from '../../auth/rbac/rbac.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
-import { MailerService } from '../../mail/mailer.service';
+import { AppAccessService } from '../../core/app-access.service';
 import { UsersService } from './users.service';
 import { ActivityService } from '../../activity/activity.service';
-
-const NEW_USER = {
-  name: 'Paul',
-  email: 'paul@example.com',
-  password: 'Str0ngP@ssword',
-};
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -29,14 +22,6 @@ describe('UsersService', () => {
     withAdminCoverage: jest.Mock;
     hasGlobalPermission: jest.Mock;
   };
-
-  const created = () =>
-    database.user.create.mock.calls[0][0] as {
-      data: {
-        siteId: string | null;
-        userRoles?: { create: { roleId: string; siteId: string | null }[] };
-      };
-    };
 
   beforeEach(async () => {
     database = {
@@ -90,8 +75,8 @@ describe('UsersService', () => {
         },
         { provide: DatabaseService, useValue: database },
         {
-          provide: MailerService,
-          useValue: { sendInvitation: jest.fn() },
+          provide: AppAccessService,
+          useValue: { refresh: jest.fn() },
         },
         {
           provide: RealtimeGateway,
@@ -117,65 +102,27 @@ describe('UsersService', () => {
   });
 
   describe("site responsible (the site's administrator)", () => {
-    it('creates users in their own site, with the roles held there', async () => {
-      await service.create({ ...NEW_USER, roleIds: ['r-1'] }, 'admin-s1');
+    it('gives a user of their site roles held there', async () => {
+      database.user.findUnique.mockResolvedValue({ id: 'u-2', siteId: 's-1' });
 
-      expect(created().data.siteId).toBe('s-1');
-      expect(created().data.userRoles?.create).toEqual([
-        { roleId: 'r-1', siteId: 's-1' },
-      ]);
+      await service.update('u-2', { roleIds: ['r-1'] }, 'admin-s1');
+
+      const { data } = database.user.update.mock.calls[0][0] as {
+        data: { userRoles: { create: unknown } };
+      };
+      expect(data.userRoles.create).toEqual([{ roleId: 'r-1', siteId: 's-1' }]);
     });
 
     it("can't give a user another site's role", async () => {
+      database.user.findUnique.mockResolvedValue({ id: 'u-2', siteId: 's-1' });
       database.role.findMany.mockResolvedValue([
         { id: 'r-2', name: 'Agent Akwa', siteId: 's-2' },
       ]);
 
       await expect(
-        service.create({ ...NEW_USER, roleIds: ['r-2'] }, 'admin-s1'),
+        service.update('u-2', { roleIds: ['r-2'] }, 'admin-s1'),
       ).rejects.toBeInstanceOf(BadRequestException);
-      expect(database.user.create).not.toHaveBeenCalled();
-    });
-
-    it('keeps the password obligation and a suspended status', async () => {
-      await service.create(
-        { ...NEW_USER, mustChangePassword: true, status: UserStatus.SUSPENDED },
-        'admin-s1',
-      );
-
-      expect(database.user.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            mustChangePassword: true,
-            status: UserStatus.SUSPENDED,
-            deactivatedById: 'admin-s1',
-            deactivatedAt: expect.any(Date),
-          }),
-        }),
-      );
-    });
-
-    it('creates an active account by default', async () => {
-      await service.create(NEW_USER, 'admin-s1');
-
-      const { data } = created() as unknown as {
-        data: Record<string, unknown>;
-      };
-      expect(data.status).toBe(UserStatus.ACTIVE);
-      expect(data.deactivatedAt).toBeUndefined();
-    });
-
-    it('cannot create a user in another site', async () => {
-      await expect(
-        service.create({ ...NEW_USER, siteId: 's-2' }, 'admin-s1'),
-      ).rejects.toBeInstanceOf(ForbiddenException);
-      expect(database.user.create).not.toHaveBeenCalled();
-    });
-
-    it('cannot create a platform user (global roles)', async () => {
-      await expect(
-        service.create({ ...NEW_USER, siteId: null }, 'admin-s1'),
-      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(database.user.update).not.toHaveBeenCalled();
     });
 
     it('only lists the users of their site', async () => {
@@ -206,46 +153,14 @@ describe('UsersService', () => {
         ForbiddenException,
       );
       await expect(
-        service.update('u-2', { name: 'X' }, 'admin-s1'),
+        service.update('u-2', { roleIds: [] }, 'admin-s1'),
       ).rejects.toBeInstanceOf(ForbiddenException);
-      await expect(
-        service.toggleStatus('u-2', 'admin-s1'),
-      ).rejects.toBeInstanceOf(ForbiddenException);
-      await expect(service.remove('u-2', 'admin-s1')).rejects.toBeInstanceOf(
-        ForbiddenException,
-      );
       expect(database.user.update).not.toHaveBeenCalled();
-    });
-
-    it('cannot move one of their users to another site', async () => {
-      database.user.findUnique.mockResolvedValue({ id: 'u-2', siteId: 's-1' });
-
-      await expect(
-        service.update('u-2', { siteId: 's-2' }, 'admin-s1'),
-      ).rejects.toBeInstanceOf(ForbiddenException);
     });
   });
 
   describe('platform administrator', () => {
     beforeEach(() => rbac.administeredSites.mockResolvedValue('ALL'));
-
-    it('must say which site a new user belongs to', async () => {
-      await expect(
-        service.create(NEW_USER, 'super-admin'),
-      ).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it('creates a platform user with global roles', async () => {
-      await service.create(
-        { ...NEW_USER, siteId: null, roleIds: ['r-admin'] },
-        'super-admin',
-      );
-
-      expect(created().data.siteId).toBeNull();
-      expect(created().data.userRoles?.create).toEqual([
-        { roleId: 'r-admin', siteId: null },
-      ]);
-    });
 
     it('keeps a global grant still listed instead of tying it to the site', async () => {
       database.user.findUnique.mockResolvedValue({ id: 'u-2', siteId: 's-1' });
@@ -263,59 +178,6 @@ describe('UsersService', () => {
         NOT: { siteId: null, roleId: { in: ['r-g'] } },
       });
       expect(data.userRoles.create).toEqual([{ roleId: 'r-1', siteId: 's-1' }]);
-    });
-
-    it("moves a user's roles along when moving them to another site", async () => {
-      database.user.findUnique.mockResolvedValue({ id: 'u-2', siteId: 's-1' });
-      database.userRole.findMany.mockImplementation(
-        ({ where }: { where: { siteId?: null } }) =>
-          Promise.resolve(where.siteId === null ? [] : [{ roleId: 'r-1' }]),
-      );
-
-      await service.update('u-2', { siteId: 's-2' }, 'super-admin');
-
-      const { data } = database.user.update.mock.calls[0][0] as {
-        data: { siteId: string; userRoles: { create: unknown } };
-      };
-      expect(data.siteId).toBe('s-2');
-      expect(data.userRoles.create).toEqual([{ roleId: 'r-1', siteId: 's-2' }]);
-    });
-
-    it("won't suspend a site's responsible", async () => {
-      database.user.findUnique.mockResolvedValue({
-        id: 'u-2',
-        siteId: 's-1',
-        status: 'ACTIVE',
-      });
-      database.site.findFirst.mockResolvedValue({ name: 'Cristal' });
-
-      await expect(service.toggleStatus('u-2', 'super-admin')).rejects.toThrow(
-        /responsible of site "Cristal"/,
-      );
-      expect(database.user.update).not.toHaveBeenCalled();
-    });
-
-    it('reactivates a suspended user without that check', async () => {
-      database.user.findUnique.mockResolvedValue({
-        id: 'u-2',
-        siteId: 's-1',
-        status: 'SUSPENDED',
-      });
-
-      await service.toggleStatus('u-2', 'super-admin');
-
-      expect(database.site.findFirst).not.toHaveBeenCalled();
-      expect(database.user.update).toHaveBeenCalled();
-    });
-
-    it("won't move a site's responsible out of their site", async () => {
-      database.user.findUnique.mockResolvedValue({ id: 'u-2', siteId: 's-1' });
-      database.site.findFirst.mockResolvedValue({ name: 'Cristal' });
-
-      await expect(
-        service.update('u-2', { siteId: 's-2' }, 'super-admin'),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      expect(database.user.update).not.toHaveBeenCalled();
     });
   });
 

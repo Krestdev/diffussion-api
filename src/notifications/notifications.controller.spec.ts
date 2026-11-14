@@ -1,3 +1,4 @@
+import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../auth/rbac/permission.guard';
 import {
@@ -26,6 +27,8 @@ describe('NotificationsController', () => {
       providers: [{ provide: NotificationsService, useValue: service }],
     })
       .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
       .compile();
 
@@ -68,7 +71,10 @@ describe('NotificationsController', () => {
     controller.markRead('n-1', {
       sub: 'u-1',
       email: 'u@x.com',
-      refreshToken: 'r',
+      name: 'U',
+      siteId: 's-1',
+      sid: 'sid-1',
+      impersonator: null,
     });
     expect(service.markStatus).toHaveBeenCalledWith(
       'n-1',

@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
-import * as bcrypt from 'bcrypt';
 import { Pool } from 'pg';
 import { PrismaClient } from '../generated/prisma/client';
 import {
@@ -8,10 +7,10 @@ import {
   PermissionCode,
 } from '../src/auth/rbac/rbac.constants';
 
-const SALT_ROUNDS = 10;
-
-export const ADMIN_EMAIL = 'admin@creaconsult.com';
-export const ADMIN_PASSWORD = 'Admin@2026!';
+// People come from the CREAPP core (they sign in there): the seed makes no
+// account. A company administrator gets the site's Admin role at their first
+// directory sync; SEED_ADMIN_EMAIL (optional) names a person already synced
+// from the core who also gets every role and restricted dossier, for tests.
 const ADMIN_ROLE_NAME = 'Administrateur';
 const DEFAULT_SITE_NAME = 'Cristal';
 
@@ -92,31 +91,24 @@ async function seedSite() {
   return site;
 }
 
-// The platform administrator (super-admin): no site, global roles.
+// A person already synced from the core, made platform administrator
+// (global grant of the admin role) for tests. Null when SEED_ADMIN_EMAIL is
+// unset or that person hasn't signed in to Diffusion / been synced yet.
 async function seedAdminUser(roleId: string) {
-  const hashedPassword = await bcrypt.hash(ADMIN_PASSWORD, SALT_ROUNDS);
-
-  const user = await prisma.user.upsert({
-    where: { email: ADMIN_EMAIL },
-    update: { password: hashedPassword, status: 'ACTIVE' },
-    create: {
-      name: 'Admin Diffusion',
-      email: ADMIN_EMAIL,
-      password: hashedPassword,
-      status: 'ACTIVE',
-      isVerified: true,
-      function: 'Administrateur système',
-    },
-  });
-
+  const email = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
+  if (!email) return null;
+  const user = await prisma.user.findUnique({ where: { email } });
+  if (!user) {
+    console.log(`! ${email} is not synced from the core yet: no admin granted`);
+    return null;
+  }
   // Global grant (siteId null). skipDuplicates relies on the
   // NULLS NOT DISTINCT unique index to keep re-runs idempotent.
   await prisma.userRole.createMany({
     data: [{ userId: user.id, roleId, siteId: null }],
     skipDuplicates: true,
   });
-
-  console.log(`✓ Admin user ensured: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`);
+  console.log(`✓ ${email} holds "${ADMIN_ROLE_NAME}" globally`);
   return user;
 }
 
@@ -317,11 +309,9 @@ async function main() {
   await seedReferentials(site.id);
   await seedEffetTypes();
   await seedAnalysisCriteria();
-  await grantAdminFullAccess(admin.id);
+  if (admin) await grantAdminFullAccess(admin.id);
 
-  console.log('\nSeed complete. Log in with:');
-  console.log(`  email:    ${ADMIN_EMAIL}`);
-  console.log(`  password: ${ADMIN_PASSWORD}`);
+  console.log('\nSeed complete. Sign in through the CREAPP core.');
 }
 
 main()

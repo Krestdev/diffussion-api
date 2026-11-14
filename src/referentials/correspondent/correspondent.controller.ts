@@ -14,8 +14,8 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
-import { JwtPayload } from '../../auth/types/jwt-payload.type';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
+import { AuthUser } from '../../auth/types/auth-user.type';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
@@ -31,14 +31,14 @@ import { UpdateCorrespondantDto } from './dto/update-correspondent.dto';
 
 @ApiTags('correspondents')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionGuard)
 @Controller('correspondents')
 export class CorrespondantController {
   constructor(private readonly correspondentService: CorrespondantService) {}
 
   @Post()
   @RequirePermission(PermissionCode.CorrespondentCreate)
-  create(@Body() dto: CreateCorrespondentDto, @CurrentUser() user: JwtPayload) {
+  create(@Body() dto: CreateCorrespondentDto, @CurrentUser() user: AuthUser) {
     return this.correspondentService.create(dto, user.sub);
   }
 
@@ -48,7 +48,7 @@ export class CorrespondantController {
   @RequirePermission(PermissionCode.CorrespondentRead)
   findAll(
     @Query() query: FindCorrespondantsQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentService.findAll(query, user.sub);
   }
@@ -57,7 +57,7 @@ export class CorrespondantController {
   @RequirePermission(PermissionCode.CorrespondentRead)
   findOne(
     @Param('uuid', ParseUUIDPipe) uuid: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentService.findOne(uuid, user.sub);
   }
@@ -66,7 +66,7 @@ export class CorrespondantController {
   update(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: UpdateCorrespondantDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentService.update(uuid, dto, user.sub);
   }
@@ -76,7 +76,7 @@ export class CorrespondantController {
   findContacts(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Query() query: PaginationQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentService.findContacts(uuid, query, user.sub);
   }
@@ -86,7 +86,7 @@ export class CorrespondantController {
   createContact(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: CreateCorrespondentContactDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentService.createContact(uuid, dto, user.sub);
   }
@@ -97,7 +97,7 @@ export class CorrespondantController {
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Param('contactId', ParseUUIDPipe) contactId: string,
     @Body() dto: UpdateCorrespondentContactDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentService.updateContact(
       uuid,
@@ -113,7 +113,7 @@ export class CorrespondantController {
   removeContact(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Param('contactId', ParseUUIDPipe) contactId: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentService.removeContact(uuid, contactId, user.sub);
   }
@@ -123,7 +123,7 @@ export class CorrespondantController {
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('uuid', ParseUUIDPipe) uuid: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.correspondentService.remove(uuid, user.sub);
   }

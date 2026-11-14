@@ -1,3 +1,4 @@
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PermissionGuard } from '../../auth/rbac/permission.guard';
 import { DossierController } from './dossier.controller';
@@ -29,6 +30,8 @@ describe('DossierController', () => {
     })
       .overrideGuard(PermissionGuard)
       .useValue({ canActivate: () => true })
+      .overrideGuard(CoreAuthGuard)
+      .useValue({ canActivate: () => true })
       .compile();
 
     controller = module.get<DossierController>(DossierController);
@@ -44,7 +47,10 @@ describe('DossierController', () => {
       {
         sub: 'u-1',
         email: 'u@x.com',
-        refreshToken: 'r',
+        name: 'U',
+        siteId: 's-1',
+        sid: 'sid-1',
+        impersonator: null,
       },
     );
     expect(service.create).toHaveBeenCalledWith(

@@ -14,10 +14,10 @@ import { ActivityService } from './activity.service';
 import { FindActivityLogsQueryDto } from './dto/find-activity-logs.query.dto';
 import { FindMyActivityQueryDto } from './dto/find-my-activity.query.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
 import { PermissionCode } from '../auth/rbac/rbac.constants';
 import { assertAdministers, RbacService } from '../auth/rbac/rbac.service';
-import { JwtPayload } from '../auth/types/jwt-payload.type';
+import { AuthUser } from '../auth/types/auth-user.type';
 
 // The Journal d'audit (AU·1, RG-AUD-*): each entry belongs to its object's
 // site (else its author's) and carries its author's IP.
@@ -26,7 +26,7 @@ import { JwtPayload } from '../auth/types/jwt-payload.type';
 // Platform administrators (global AUDIT_READ) read everything; a site's
 // responsible, or whoever holds AUDIT_READ at a site, reads that site's
 // journal — checked in auditScope.
-@UseGuards(JwtAuthGuard)
+@UseGuards(CoreAuthGuard)
 @Controller('activity-logs')
 export class ActivityController {
   constructor(
@@ -37,7 +37,7 @@ export class ActivityController {
   @Get()
   async findAll(
     @Query() query: FindActivityLogsQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.activityService.findAll(query, await this.auditScope(user));
   }
@@ -47,7 +47,7 @@ export class ActivityController {
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async export(
     @Query() query: FindActivityLogsQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
     const csv = await this.activityService.exportCsv(
@@ -67,7 +67,7 @@ export class ActivityController {
   @Get('archives')
   async archives(
     @Query('siteId') siteId: string | undefined,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.activityService.archives(await this.auditScope(user), siteId);
   }
@@ -75,7 +75,7 @@ export class ActivityController {
   @Get('archives/:archiveId/download')
   async downloadArchive(
     @Param('archiveId', ParseUUIDPipe) archiveId: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
     const file = await this.activityService.archiveFile(
@@ -96,7 +96,7 @@ export class ActivityController {
   @Get('me')
   findMine(
     @Query() query: FindMyActivityQueryDto,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.activityService.findMine(query, user.sub);
   }
@@ -104,12 +104,12 @@ export class ActivityController {
   @Get(':id')
   async findOne(
     @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: JwtPayload,
+    @CurrentUser() user: AuthUser,
   ) {
     return this.activityService.findOne(id, await this.auditScope(user));
   }
 
-  private async auditScope(user: JwtPayload) {
+  private async auditScope(user: AuthUser) {
     const scope = await this.rbac.managedSites(
       user.sub,
       PermissionCode.AuditRead,

@@ -1,3 +1,4 @@
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
@@ -20,6 +21,8 @@ describe('DelegationController', () => {
       ],
     })
       .overrideGuard(PermissionGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
       .compile();
 
