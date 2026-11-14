@@ -48,4 +48,4 @@ COPY --from=build /app/generated ./generated
 EXPOSE 3000
 
 # Run pending migrations then start the server.
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main"]
+CMD ["sh", "-c", "npx prisma migrate deploy && if [ -f dist/src/main.js ]; then node dist/src/main; else node dist/main; fi"]
