@@ -1,6 +1,6 @@
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
 import { MailController } from './mail.controller';
 import { MailService } from './mail.service';
 
@@ -26,7 +26,7 @@ describe('MailController', () => {
       controllers: [MailController],
       providers: [{ provide: MailService, useValue: service }],
     })
-      .overrideGuard(PermissionGuard)
+      .overrideGuard(PermissionsGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
@@ -44,9 +44,11 @@ describe('MailController', () => {
       sub: 'u-1',
       email: 'u@x.com',
       name: 'U',
-      siteId: 's-1',
+      companyId: 's-1',
       sid: 'sid-1',
       impersonator: null,
+      permissions: new Set<string>(),
+      platformAdmin: false,
     });
     expect(service.submitForValidation).toHaveBeenCalledWith('c-1', 'u-1');
   });
@@ -66,9 +68,11 @@ describe('MailController', () => {
         sub: 'u-1',
         email: 'u@x.com',
         name: 'U',
-        siteId: 's-1',
+        companyId: 's-1',
         sid: 'sid-1',
         impersonator: null,
+        permissions: new Set<string>(),
+        platformAdmin: false,
       },
       files,
     );

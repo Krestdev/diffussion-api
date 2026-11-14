@@ -1,6 +1,6 @@
 import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PermissionGuard } from '../auth/rbac/permission.guard';
+import { PermissionsGuard } from '../auth/access/permissions.guard';
 import { InstructionsController } from './instructions.controller';
 import { InstructionsService } from './instructions.service';
 
@@ -26,7 +26,7 @@ describe('InstructionsController', () => {
       controllers: [InstructionsController],
       providers: [{ provide: InstructionsService, useValue: service }],
     })
-      .overrideGuard(PermissionGuard)
+      .overrideGuard(PermissionsGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
@@ -43,9 +43,11 @@ describe('InstructionsController', () => {
     sub: 'u-1',
     email: 'u@x.com',
     name: 'U',
-    siteId: 's-1',
+    companyId: 's-1',
     sid: 'sid-1',
     impersonator: null,
+    permissions: new Set<string>(),
+    platformAdmin: false,
   };
 
   it('declineSubscription() forwards the motif and the current user', () => {

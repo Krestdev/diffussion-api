@@ -9,8 +9,8 @@ import {
   LivrableStatus,
   Prisma,
 } from '../../../generated/prisma/client';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
 import { ActivityService } from '../../activity/activity.service';
 import { assertDossierOpenForActivity } from '../../common/utils/dossier-lifecycle';
 import {
@@ -53,7 +53,7 @@ const SUBMITTABLE_INSTRUCTION_STATUSES: InstructionStatus[] = [
 export class DeliverableService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     private readonly activity: ActivityService,
   ) {}
 
@@ -86,25 +86,25 @@ export class DeliverableService {
 
   async findAll(query: FindDeliverableQueryDto, userId: string) {
     // One row per livrable: its current version, earlier ones in `history`.
-    // Only the sites where the caller may read livrables (`{}` with a
-    // global grant).
-    const atReadableSites = await this.rbac.siteFilter(
+    // Only the livrables of the caller's company (when they hold
+    // deliverable.read).
+    const atReadableCompanies = await this.access.companyFilter(
       userId,
-      PermissionCode.LivrableRead,
-      (siteId): Prisma.LivrableWhereInput => ({
-        instruction: { dossier: { siteId } },
+      Permission.DELIVERABLE_READ,
+      (companyId): Prisma.LivrableWhereInput => ({
+        instruction: { dossier: { companyId } },
       }),
     );
     const where: Prisma.LivrableWhereInput = {
       isLatest: true,
       instructionId: query.instructionId,
       status: query.status,
-      ...(Object.keys(atReadableSites).length === 0
+      ...(Object.keys(atReadableCompanies).length === 0
         ? {}
         : {
             OR: [
-              atReadableSites,
-              // A task under a contract has no dossier, hence no site: its
+              atReadableCompanies,
+              // A task under a contract has no dossier, hence no company: its
               // livrables are read by those involved in it, and by those
               // who may open its contract.
               {

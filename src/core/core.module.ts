@@ -7,7 +7,7 @@ import { DirectorySyncService } from './directory-sync.service';
 
 /**
  * Diffusion on the CREAPP core: core tokens checked with its public keys, sessions read from the
- * session store, the directory (companies = sites, people) kept in sync, and people's access to
+ * session store, the directory (companies, people) kept in sync, and people's access to
  * Diffusion (its own roles) published back to the store.
  */
 @Global()

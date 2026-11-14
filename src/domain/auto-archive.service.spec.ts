@@ -7,7 +7,7 @@ describe('AutoArchiveService', () => {
   let service: AutoArchiveService;
   let months: Record<string, number | null>;
   let database: {
-    site: Record<string, jest.Mock>;
+    company: Record<string, jest.Mock>;
     courrier: Record<string, jest.Mock>;
     activityLog: Record<string, jest.Mock>;
   };
@@ -16,7 +16,7 @@ describe('AutoArchiveService', () => {
   beforeEach(async () => {
     months = { 's-1': 6, 's-2': null };
     database = {
-      site: {
+      company: {
         findMany: jest.fn().mockResolvedValue([{ id: 's-1' }, { id: 's-2' }]),
       },
       courrier: {
@@ -34,9 +34,9 @@ describe('AutoArchiveService', () => {
         {
           provide: SettingsService,
           useValue: {
-            get: jest.fn((siteId: string | null) =>
+            get: jest.fn((companyId: string | null) =>
               Promise.resolve({
-                autoArchiveAfterMonths: siteId ? months[siteId] : null,
+                autoArchiveAfterMonths: companyId ? months[companyId] : null,
               }),
             ),
           },
@@ -47,14 +47,14 @@ describe('AutoArchiveService', () => {
     service = module.get(AutoArchiveService);
   });
 
-  it('archives only the sites that set a delay, past that delay', async () => {
+  it('archives only the companies that set a delay, past that delay', async () => {
     await service.sweep(NOW);
 
     const queries = database.courrier.findMany.mock.calls.map(
       ([args]) => args as { where: Record<string, unknown> },
     );
-    // Three rules (closed entrant, discharged sortant, cancelled), site s-1
-    // only: s-2 and the effets of no site never auto-archive.
+    // Three rules (closed entrant, discharged sortant, cancelled), company s-1
+    // only: s-2 and the effets of no company never auto-archive.
     expect(queries).toHaveLength(3);
     expect(queries[0].where).toMatchObject({
       status: 'CLOTURE',

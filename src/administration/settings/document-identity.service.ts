@@ -4,8 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ActivityService } from '../../activity/activity.service';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService, SiteScopeList } from '../../auth/rbac/rbac.service';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
 import { DatabaseService } from '../../database/database.service';
 import { StorageService } from '../../storage/storage.service';
 import { UpdateDocumentIdentityDto } from './dto/document-identity.dto';
@@ -29,29 +29,31 @@ type IdentityRow = {
 /**
  * The documents' visual identity (PA·3) — the letterhead of the fiches
  * d'analyse: logo, accent colour, or the module's colour. Common, and each
- * site's own over it (a site that sets nothing inherits it).
+ * company's own over it (a company that sets nothing inherits it).
  */
 @Injectable()
 export class DocumentIdentityService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     private readonly storage: StorageService,
     private readonly activity: ActivityService,
   ) {}
 
-  /** The identity in force at `siteId` (the common one without a site). */
-  async get(siteId: string | null) {
-    const [common, own] = await this.rows(siteId);
+  /** The identity in force at `companyId` (the common one without a company). */
+  async get(companyId: string | null) {
+    const [common, own] = await this.rows(companyId);
     const pick = <K extends keyof NonNullable<IdentityRow>>(key: K) =>
       own?.[key] ?? common?.[key] ?? null;
-    const logoFromSite = Boolean(own?.logoKey);
-    const logoMime = logoFromSite ? own!.logoMime : (common?.logoMime ?? null);
-    const hasLogo = logoFromSite || Boolean(common?.logoKey);
+    const logoFromCompany = Boolean(own?.logoKey);
+    const logoMime = logoFromCompany
+      ? own!.logoMime
+      : (common?.logoMime ?? null);
+    const hasLogo = logoFromCompany || Boolean(common?.logoKey);
     const useModuleColor = pick('useModuleColor') ?? false;
     const accentColor = pick('accentColor') ?? DEFAULT_ACCENT;
     return {
-      siteId,
+      companyId,
       accentColor,
       useModuleColor,
       // What a document is actually printed in.
@@ -59,10 +61,10 @@ export class DocumentIdentityService {
       logo: hasLogo
         ? {
             mimeType: logoMime,
-            url: `/settings/document-identity/logo${siteId ? `?siteId=${siteId}` : ''}`,
+            url: `/settings/document-identity/logo${companyId ? `?companyId=${companyId}` : ''}`,
           }
         : null,
-      inherited: siteId
+      inherited: companyId
         ? {
             accentColor: own?.accentColor == null,
             useModuleColor: own?.useModuleColor == null,
@@ -72,23 +74,23 @@ export class DocumentIdentityService {
     };
   }
 
-  /** Readable by every signed-in user: their own site's by default. */
-  async getFor(siteId: string | undefined, userId: string) {
-    const own = await this.ownSite(userId);
-    if (siteId && siteId !== own) {
-      await this.rbac.assertManagesSite(
+  /** Readable by every signed-in user: their own company's by default. */
+  async getFor(companyId: string | undefined, userId: string) {
+    const own = await this.ownCompany(userId);
+    if (companyId && companyId !== own) {
+      await this.access.assertManages(
         userId,
-        PermissionCode.AdminManageSettings,
-        siteId,
+        Permission.SETTINGS_UPDATE,
+        companyId,
         'Ce réglage',
       );
     }
-    return this.get(siteId ?? own);
+    return this.get(companyId ?? own);
   }
 
-  /** The logo file in force at `siteId`. */
-  async logo(siteId: string | null) {
-    const [common, own] = await this.rows(siteId);
+  /** The logo file in force at `companyId`. */
+  async logo(companyId: string | null) {
+    const [common, own] = await this.rows(companyId);
     const key = own?.logoKey ?? common?.logoKey;
     const mime = own?.logoKey ? own.logoMime : common?.logoMime;
     if (!key) throw new NotFoundException('No logo');
@@ -97,12 +99,12 @@ export class DocumentIdentityService {
   }
 
   /** For a PDF: the colour, and the logo when it is a PNG (pdfkit). */
-  async forPdf(siteId: string | null) {
-    const identity = await this.get(siteId);
+  async forPdf(companyId: string | null) {
+    const identity = await this.get(companyId);
     let logo: Buffer | null = null;
     if (identity.logo?.mimeType === 'image/png') {
       try {
-        const { body } = await this.logo(siteId);
+        const { body } = await this.logo(companyId);
         const chunks: Buffer[] = [];
         for await (const chunk of body)
           chunks.push(Buffer.from(chunk as ArrayBufferLike));
@@ -119,21 +121,21 @@ export class DocumentIdentityService {
     file: Express.Multer.File | undefined,
     userId: string,
   ) {
-    const scope = await this.rbac.managedSites(
-      userId,
-      PermissionCode.AdminManageSettings,
+    const companyId = targetCompany(
+      await this.access.scope(userId, Permission.SETTINGS_UPDATE),
+      await this.access.isPlatformAdmin(userId),
+      dto.companyId,
     );
-    const siteId = targetSite(scope, dto.siteId);
-    await this.rbac.explainOutOfScope(
-      scope,
-      siteId,
-      siteId ? 'Cette identité visuelle' : "L'identité visuelle commune",
-      PermissionCode.AdminManageSettings,
+    await this.access.assertManages(
+      userId,
+      Permission.SETTINGS_UPDATE,
+      companyId,
+      companyId ? 'Cette identité visuelle' : "L'identité visuelle commune",
     );
     if (file) assertLogo(file);
 
-    const [common, own] = await this.rows(siteId);
-    const current = siteId ? own : common;
+    const [common, own] = await this.rows(companyId);
+    const current = companyId ? own : common;
     const oldKey = current?.logoKey ?? null;
 
     let logo: { logoKey: string | null; logoMime: string | null } | undefined;
@@ -141,15 +143,15 @@ export class DocumentIdentityService {
       const { key } = await this.storage.upload(file.buffer, {
         originalName: file.originalname,
         contentType: file.mimetype,
-        prefix: `settings/logos/${siteId ?? 'common'}`,
+        prefix: `settings/logos/${companyId ?? 'common'}`,
       });
       logo = { logoKey: key, logoMime: file.mimetype };
-    } else if (dto.removeLogo || (siteId && dto.reset)) {
+    } else if (dto.removeLogo || (companyId && dto.reset)) {
       logo = { logoKey: null, logoMime: null };
     }
 
     const data =
-      dto.reset && siteId
+      dto.reset && companyId
         ? { accentColor: null, useModuleColor: null, ...logo }
         : {
             ...(dto.accentColor !== undefined
@@ -162,10 +164,10 @@ export class DocumentIdentityService {
           };
 
     try {
-      if (siteId) {
-        await this.database.siteSettings.upsert({
-          where: { siteId },
-          create: { siteId, ...data },
+      if (companyId) {
+        await this.database.companySettings.upsert({
+          where: { companyId },
+          create: { companyId, ...data },
           update: data,
         });
       } else {
@@ -189,8 +191,8 @@ export class DocumentIdentityService {
       .tryRecord({
         action: 'settings.document-identity.updated',
         entityType: 'settings',
-        entityId: siteId ?? String(SETTINGS_ID),
-        siteId,
+        entityId: companyId ?? String(SETTINGS_ID),
+        companyId,
         metadata: {
           accentColor: dto.accentColor,
           useModuleColor: dto.useModuleColor,
@@ -199,10 +201,10 @@ export class DocumentIdentityService {
         },
       })
       .catch(() => undefined);
-    return this.get(siteId);
+    return this.get(companyId);
   }
 
-  private rows(siteId: string | null): Promise<[IdentityRow, IdentityRow]> {
+  private rows(companyId: string | null): Promise<[IdentityRow, IdentityRow]> {
     const select = {
       accentColor: true,
       useModuleColor: true,
@@ -214,18 +216,21 @@ export class DocumentIdentityService {
         where: { id: SETTINGS_ID },
         select,
       }),
-      siteId
-        ? this.database.siteSettings.findUnique({ where: { siteId }, select })
+      companyId
+        ? this.database.companySettings.findUnique({
+            where: { companyId },
+            select,
+          })
         : Promise.resolve(null),
     ]);
   }
 
-  private async ownSite(userId: string) {
+  private async ownCompany(userId: string) {
     const user = await this.database.user.findUnique({
       where: { id: userId },
-      select: { siteId: true },
+      select: { companyId: true },
     });
-    return user?.siteId ?? null;
+    return user?.companyId ?? null;
   }
 }
 
@@ -238,12 +243,14 @@ function assertLogo(file: Express.Multer.File) {
   }
 }
 
-function targetSite(
-  scope: SiteScopeList,
+function targetCompany(
+  scope: string[],
+  platformAdmin: boolean,
   requested: string | undefined,
 ): string | null {
   if (requested) return requested;
-  if (scope === 'ALL') return null;
+  // A super-administrator naming no company changes the common ones.
+  if (platformAdmin) return null;
   if (scope.length === 1) return scope[0];
-  throw new BadRequestException('siteId is required');
+  throw new BadRequestException('companyId is required');
 }

@@ -20,8 +20,8 @@ import {
 } from '../../generated/prisma/client';
 import { ActivityService } from '../activity/activity.service';
 import { AuditLog } from '../activity/decorators/audit-log.decorator';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { Permission } from '../auth/permissions';
+import { AccessService } from '../auth/access/access.service';
 import { DEFAULT_TAKE } from '../common/dto/pagination.query.dto';
 import {
   assertDossierOpenForActivity,
@@ -118,15 +118,15 @@ const sheetInclude = {
 
 type Sheet = Prisma.AnalysisSheetGetPayload<{ include: typeof sheetInclude }>;
 
-// The fiches of the given sites: through their dossier, or — without one —
-// the site of whoever registered their courrier (as for effets).
-export function sheetsAtSites(siteId: {
+// The fiches of the given companies: through their dossier, or — without one —
+// the company of whoever registered their courrier (as for effets).
+export function sheetsAtCompanies(companyId: {
   in: string[];
 }): Prisma.AnalysisSheetWhereInput {
   return {
     OR: [
-      { dossier: { siteId } },
-      { dossierId: null, courrier: { createdBy: { siteId } } },
+      { dossier: { companyId } },
+      { dossierId: null, courrier: { createdBy: { companyId } } },
     ],
   };
 }
@@ -165,7 +165,7 @@ function nextVersionNumber(version: string): string {
 export class AnalysisSheetService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
     private readonly storage: StorageService,
@@ -238,7 +238,7 @@ export class AnalysisSheetService {
           }))
         : []);
     const templates = await this.defaultTemplates(
-      await this.siteOfEffet(courrier),
+      await this.companyOfEffet(courrier),
     );
 
     const { courrierId, projectId, remise, ...fields } = dto;
@@ -302,15 +302,16 @@ export class AnalysisSheetService {
     const skip = query.skip ?? 0;
     const take = query.take ?? DEFAULT_TAKE;
     // Everything but the status: the tab counts ignore the tab shown.
-    // Only the sites where the caller may read analyses. Kept in AND: the
-    // site filter is itself an OR, which the search below must not replace.
-    const atSites = await this.rbac.siteFilter(
+    // Only the companies where the caller may read analyses. Kept in AND: the
+    // company filter is itself an OR, which the search below must not replace.
+    const atCompanies = await this.access.companyFilter(
       userId,
-      PermissionCode.AnalysisRead,
-      (siteId): Prisma.AnalysisSheetWhereInput => sheetsAtSites(siteId),
+      Permission.ANALYSIS_READ,
+      (companyId): Prisma.AnalysisSheetWhereInput =>
+        sheetsAtCompanies(companyId),
     );
     const scope: Prisma.AnalysisSheetWhereInput = {
-      AND: [atSites],
+      AND: [atCompanies],
       dossierId: query.dossierId,
       contractId: query.contractId,
       courrierId: query.courrierId,
@@ -465,7 +466,7 @@ export class AnalysisSheetService {
     }
 
     const templates = await this.defaultTemplates(
-      await this.siteOfSheet(sheetId),
+      await this.companyOfSheet(sheetId),
     );
     const order =
       dto.order ??
@@ -524,16 +525,16 @@ export class AnalysisSheetService {
         'Each criterion may appear only once on an element',
       );
     }
-    const siteId = await this.siteOfSheet(item.sheetId);
-    const { allowCustomCriteria } = await this.criteria.getSettings(siteId);
+    const companyId = await this.companyOfSheet(item.sheetId);
+    const { allowCustomCriteria } = await this.criteria.getSettings(companyId);
     if (!allowCustomCriteria) {
       const templateIds = dto.criteria.map((c) => c.templateId);
-      // The catalogue of the fiche's site: common criteria and its own.
+      // The catalogue of the fiche's company: common criteria and its own.
       const known = await this.database.analysisCriterionTemplate.count({
         where: {
           id: { in: templateIds.filter((t): t is string => Boolean(t)) },
           isActive: true,
-          ...this.criteria.offeredWhere(siteId),
+          ...this.criteria.offeredWhere(companyId),
         },
       });
       if (templateIds.some((t) => !t) || known !== new Set(templateIds).size) {
@@ -947,8 +948,8 @@ export class AnalysisSheetService {
       },
       signedAt: sheet.signedAt,
       signatoryName: sheet.signatoryName,
-      // The letterhead of the fiche's site (PA·3).
-      identity: await this.identity.forPdf(await this.siteOfSheet(sheet.id)),
+      // The letterhead of the fiche's company (PA·3).
+      identity: await this.identity.forPdf(await this.companyOfSheet(sheet.id)),
     });
     return {
       pdf,
@@ -1248,48 +1249,53 @@ export class AnalysisSheetService {
 
   /**
    * The grid put on a new element: the active criteria applied by default,
-   * common and of the fiche's site.
+   * common and of the fiche's company.
    */
-  private defaultTemplates(siteId: string | null) {
+  private defaultTemplates(companyId: string | null) {
     return this.database.analysisCriterionTemplate.findMany({
       where: {
         isActive: true,
         appliedByDefault: true,
-        ...this.criteria.offeredWhere(siteId),
+        ...this.criteria.offeredWhere(companyId),
       },
-      orderBy: [{ siteId: { sort: 'asc', nulls: 'first' } }, { order: 'asc' }],
+      orderBy: [
+        { companyId: { sort: 'asc', nulls: 'first' } },
+        { order: 'asc' },
+      ],
     });
   }
 
-  // A fiche's site: its effet's (its dossier's, else its registrant's).
-  private async siteOfSheet(sheetId: string): Promise<string | null> {
+  // A fiche's company: its effet's (its dossier's, else its registrant's).
+  private async companyOfSheet(sheetId: string): Promise<string | null> {
     const sheet = await this.database.analysisSheet.findUnique({
       where: { id: sheetId },
       select: {
-        dossier: { select: { siteId: true } },
-        courrier: { select: { createdBy: { select: { siteId: true } } } },
+        dossier: { select: { companyId: true } },
+        courrier: { select: { createdBy: { select: { companyId: true } } } },
       },
     });
-    return sheet?.dossier?.siteId ?? sheet?.courrier?.createdBy?.siteId ?? null;
+    return (
+      sheet?.dossier?.companyId ?? sheet?.courrier?.createdBy?.companyId ?? null
+    );
   }
 
-  private async siteOfEffet(effet: {
+  private async companyOfEffet(effet: {
     dossierId: string | null;
     createdById: string | null;
   }): Promise<string | null> {
     if (effet.dossierId) {
       const dossier = await this.database.dossier.findUnique({
         where: { id: effet.dossierId },
-        select: { siteId: true },
+        select: { companyId: true },
       });
-      return dossier?.siteId ?? null;
+      return dossier?.companyId ?? null;
     }
     if (!effet.createdById) return null;
     const registrant = await this.database.user.findUnique({
       where: { id: effet.createdById },
-      select: { siteId: true },
+      select: { companyId: true },
     });
-    return registrant?.siteId ?? null;
+    return registrant?.companyId ?? null;
   }
 
   /**

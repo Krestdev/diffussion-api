@@ -15,9 +15,9 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
+import { RequirePermissions } from '../../auth/access/decorators';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { AuthUser } from '../../auth/types/auth-user.type';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
@@ -29,28 +29,28 @@ import { UpdateProjectDto } from './dto/update-project.dto';
 
 @ApiTags('projects')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionsGuard)
 @Controller('projects')
 export class ProjectController {
   constructor(private readonly projectService: ProjectService) {}
 
-  // A site's responsible (their site's) or a platform administrator —
+  // project.create in the person's company —
   // checked in the service.
   @Post()
-  @RequirePermission(PermissionCode.ProjectCreate)
+  @RequirePermissions(Permission.PROJECT_CREATE)
   create(@Body() dto: CreateProjectDto, @CurrentUser() user: AuthUser) {
     return this.projectService.create(dto, user.sub);
   }
 
   @Get()
-  @RequirePermission(PermissionCode.ProjectRead)
+  @RequirePermissions(Permission.PROJECT_READ)
   findAll(@Query() query: FindProjectsQueryDto, @CurrentUser() user: AuthUser) {
     return this.projectService.findAll(query, user.sub);
   }
 
   // A project restricted to others answers 404.
   @Get(':id')
-  @RequirePermission(PermissionCode.ProjectRead)
+  @RequirePermissions(Permission.PROJECT_READ)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -59,7 +59,7 @@ export class ProjectController {
   }
 
   @Get(':id/access')
-  @RequirePermission(PermissionCode.ProjectRead)
+  @RequirePermissions(Permission.PROJECT_READ)
   getAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -67,7 +67,7 @@ export class ProjectController {
     return this.projectService.getAccess(id, user.sub);
   }
 
-  // The project's responsible or a platform administrator — checked in
+  // The project's responsible or an administrator of its company — checked in
   // the service.
   @Put(':id/access')
   setAccess(
@@ -79,7 +79,7 @@ export class ProjectController {
   }
 
   @Get(':id/historique')
-  @RequirePermission(PermissionCode.ProjectRead)
+  @RequirePermissions(Permission.PROJECT_READ)
   history(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
@@ -98,7 +98,7 @@ export class ProjectController {
   }
 
   @Delete(':id')
-  @RequirePermission(PermissionCode.ProjectArchive)
+  @RequirePermissions(Permission.PROJECT_ARCHIVE)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,

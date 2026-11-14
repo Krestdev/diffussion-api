@@ -17,14 +17,14 @@ import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { AuthUser } from '../../auth/types/auth-user.type';
 import { FindCanalsQueryDto } from './dto/find-canals.query.dto';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
 import { CanalService } from './canal.service';
 import { CreateCanalDto } from './dto/create-canal.dto';
 import { UpdateCanalDto } from './dto/update-canal.dto';
 
 @ApiTags('canaux')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionsGuard)
 @Controller('canaux')
 export class CanalController {
   constructor(private readonly canalService: CanalService) {}
@@ -34,8 +34,8 @@ export class CanalController {
     return this.canalService.create(dto, user.sub);
   }
 
-  // The caller's own site's canaux — every site's for a platform
-  // administrator (optionally ?siteId=).
+  // The caller's own company's canaux — every company's for a platform
+  // administrator (optionally ?companyId=).
   @Get()
   findAll(@Query() query: FindCanalsQueryDto, @CurrentUser() user: AuthUser) {
     return this.canalService.findAll(query, user.sub);

@@ -1,8 +1,8 @@
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { AccessService } from '../../auth/access/access.service';
 import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
 import { ProjectController } from './project.controller';
@@ -19,10 +19,10 @@ describe('ProjectController', () => {
         { provide: NotificationsService, useValue: {} },
         { provide: DatabaseService, useValue: {} },
         { provide: ActivityService, useValue: {} },
-        { provide: RbacService, useValue: {} },
+        { provide: AccessService, useValue: {} },
       ],
     })
-      .overrideGuard(PermissionGuard)
+      .overrideGuard(PermissionsGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })

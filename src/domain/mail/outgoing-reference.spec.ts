@@ -26,7 +26,7 @@ describe('newOutgoingReference', () => {
     direction: CourrierDirection.SORTANT,
     reference: null,
     type: { id: 't-1', referenceModel: model() },
-    createdBy: { name: 'Éric Mbarga Nkoa', siteId: 's-1' },
+    createdBy: { name: 'Éric Mbarga Nkoa', companyId: 's-1' },
     project: null,
     contract: null,
     dossier: null,
@@ -95,7 +95,7 @@ describe('newOutgoingReference', () => {
             }),
           },
           dossier: {
-            siteId: 's-1',
+            companyId: 's-1',
             number: 'D-453014',
             project: { name: 'Route de Kribi', reference: null },
             contract: null,
@@ -118,7 +118,7 @@ describe('newOutgoingReference', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('skips a number that would repeat a reference of the site', async () => {
+  it('skips a number that would repeat a reference of the company', async () => {
     tx.courrier.findUnique.mockResolvedValue(sortant());
     tx.$queryRaw
       .mockResolvedValueOnce([{ last: 1 }])

@@ -16,13 +16,13 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { AuthUser } from '../../auth/types/auth-user.type';
-import { FindSiteListQueryDto } from '../../common/dto/site-list-item.dto';
+import { FindCompanyListQueryDto } from '../../common/dto/company-list-item.dto';
 import { CorrespondentTypeService } from './correspondent-type.service';
 import { CreateCorrespondentTypeDto } from './dto/create-correspondent-type.dto';
 import { UpdateCorrespondentTypeDto } from './dto/update-correspondent-type.dto';
 
-// Each site's own (PA·7): managed by its responsible or whoever holds
-// ADMIN_MANAGE_REFERENTIALS there — checked in the service.
+// Each company's own (PA·7): managed by whoever holds settings.update
+// there — checked in the service.
 @ApiTags('correspondent-types')
 @ApiBearerAuth()
 @UseGuards(CoreAuthGuard)
@@ -40,9 +40,12 @@ export class CorrespondentTypeController {
     return this.correspondentTypeService.create(dto, user.sub);
   }
 
-  // The caller's own site's — every site's for a platform administrator.
+  // The caller's own company's.
   @Get()
-  findAll(@Query() query: FindSiteListQueryDto, @CurrentUser() user: AuthUser) {
+  findAll(
+    @Query() query: FindCompanyListQueryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
     return this.correspondentTypeService.findAll(query, user.sub);
   }
 

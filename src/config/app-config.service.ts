@@ -21,10 +21,10 @@ export interface AppConfig {
   /** How long a person's computed roles are reused by the guard (0: every request). */
   ACCESS_CACHE_SECONDS: number;
   /**
-   * Sites made before Diffusion moved onto the core, matched to the core's companies:
-   * CORE_SITE_LINKS="<core company id>=<site id>,…" (otherwise a site with the company's name).
+   * Companies made in Diffusion before it moved onto the core, matched to the core's:
+   * CORE_COMPANY_LINKS="<core company id>=<company id>,…" (otherwise the company of the same name).
    */
-  CORE_SITE_LINKS: Record<string, string>;
+  CORE_COMPANY_LINKS: Record<string, string>;
 }
 
 const links = (value: string | undefined): Record<string, string> =>
@@ -52,8 +52,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     CORE_APP_KEY: (env.CORE_APP_KEY ?? '').trim(),
     CORE_SYNC_SECONDS: Math.max(10, number(env.CORE_SYNC_SECONDS, 60)),
     REDIS_URL: (env.REDIS_URL ?? 'redis://localhost:6379').trim(),
-    ACCESS_CACHE_SECONDS: Math.max(0, number(env.ACCESS_CACHE_SECONDS, 30)),
-    CORE_SITE_LINKS: links(env.CORE_SITE_LINKS),
+    ACCESS_CACHE_SECONDS: Math.max(0, number(env.ACCESS_CACHE_SECONDS, 10)),
+    CORE_COMPANY_LINKS: links(env.CORE_COMPANY_LINKS),
   };
   if (config.NODE_ENV !== 'test') {
     const missing = (['CORE_URL', 'CORE_ISSUER'] as const).filter(

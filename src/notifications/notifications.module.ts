@@ -4,7 +4,7 @@ import { NotificationsService } from './notifications.service';
 import { NotificationsController } from './notifications.controller';
 
 @Module({
-  // The module's notifications per site (PA·9), above each user's choice.
+  // The module's notifications per company (PA·9), above each user's choice.
   imports: [SettingsModule],
   controllers: [NotificationsController],
   providers: [NotificationsService],

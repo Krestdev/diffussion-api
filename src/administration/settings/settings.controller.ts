@@ -15,9 +15,9 @@ import type { Response } from 'express';
 import { memoryStorage } from 'multer';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
+import { RequirePermissions } from '../../auth/access/decorators';
 import { AuthUser } from '../../auth/types/auth-user.type';
 import {
   DocumentIdentityService,
@@ -31,7 +31,7 @@ import { SettingsService } from './settings.service';
 
 @ApiTags('settings')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionsGuard)
 @Controller('settings')
 export class SettingsController {
   constructor(
@@ -40,14 +40,14 @@ export class SettingsController {
     private readonly notifications: ModuleNotificationsService,
   ) {}
 
-  // The caller's own site's settings, readable by every signed-in user;
-  // another site's (?siteId=) for whoever administers it.
+  // The caller's own company's settings, readable by every signed-in user;
+  // another company's (?companyId=) for whoever administers it.
   @Get()
   get(@Query() query: SettingsQueryDto, @CurrentUser() user: AuthUser) {
     return this.settings.getFor(query, user.sub);
   }
 
-  // A site's: its responsible or whoever holds ADMIN_MANAGE_SETTINGS
+  // A company's: its responsible or whoever holds ADMIN_MANAGE_SETTINGS
   // there; the common ones: a platform administrator — checked in
   // SettingsService.
   @Patch()
@@ -57,12 +57,12 @@ export class SettingsController {
 
   // PA·9 — the module's notifications: every event, in-app / email.
   @Get('notifications')
-  @RequirePermission(PermissionCode.SettingsRead)
+  @RequirePermissions(Permission.SETTINGS_READ)
   getNotifications(
     @Query() query: SettingsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.notifications.getFor(query.siteId, user.sub);
+    return this.notifications.getFor(query.companyId, user.sub);
   }
 
   @Patch('notifications')
@@ -76,7 +76,7 @@ export class SettingsController {
   // PA·3 — the documents' letterhead. Declared before any ':param'.
   @Get('document-identity')
   getIdentity(@Query() query: SettingsQueryDto, @CurrentUser() user: AuthUser) {
-    return this.identity.getFor(query.siteId, user.sub);
+    return this.identity.getFor(query.companyId, user.sub);
   }
 
   @Patch('document-identity')
@@ -108,7 +108,7 @@ export class DocumentLogoController {
 
   @Get('logo')
   async logo(@Query() query: SettingsQueryDto, @Res() res: Response) {
-    const file = await this.identity.logo(query.siteId ?? null);
+    const file = await this.identity.logo(query.companyId ?? null);
     if (file.contentType) res.setHeader('Content-Type', file.contentType);
     res.setHeader('Cache-Control', 'public, max-age=300');
     file.body.pipe(res);

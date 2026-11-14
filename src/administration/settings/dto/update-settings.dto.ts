@@ -23,26 +23,26 @@ const nullable = ValidateIf((_, value) => value !== null);
 export class SettingsQueryDto {
   @ApiPropertyOptional({
     description:
-      "This site's settings (its own, else the common ones). Left out: the caller's own site's — the common ones for a platform user",
+      "This company's settings (its own, else the common ones). Left out: the caller's own company's — the common ones for a platform user",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 }
 
 export class UpdateSettingsDto {
   @ApiPropertyOptional({
     description:
-      "Set this site's settings. Left out: the caller's site when they manage only one; the common settings for a platform administrator",
+      "Set this company's settings. Left out: the caller's company when they manage only one; the common settings for a platform administrator",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({
     type: [String],
     description:
-      'Settings this site gives up, to inherit the common value again',
+      'Settings this company gives up, to inherit the common value again',
   })
   @IsOptional()
   @IsArray()

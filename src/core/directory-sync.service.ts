@@ -7,13 +7,14 @@ import {
 import {
   AccessProfile,
   Prisma,
-  SiteStatus,
+  CompanyStatus,
   UserStatus,
 } from '../../generated/prisma/client';
 import { generateReference } from '../common/utils/generate-reference';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../database/database.service';
-import { setUpSite, siteAdminRoleId } from '../referentials/site/site.service';
+import { setUpCompany } from '../referentials/company/company.service';
+import { createDefaultRoles, giveAdminRole } from '../auth/default-roles';
 import { CoreClient, CoreDirectory } from './core-client';
 
 /** Serialises syncs across instances (pg advisory lock id). */
@@ -36,7 +37,7 @@ export interface CorePerson {
   lastSignInAt?: string | null;
 }
 
-/** A company of the core: a Diffusion site. */
+/** A company of the core (Diffusion keeps it under the same id). */
 export interface CoreCompany {
   id: string;
   name: string;
@@ -52,18 +53,18 @@ export interface SyncResult {
 }
 
 /**
- * Keeps Diffusion's sites and people equal to the core's companies and users (a site IS a company
- * of the core, same id). The core is their source of truth: a site's name and status, a person's
+ * Keeps Diffusion's companies and people equal to the core's companies and users (a company keeps
+ * of the core, same id). The core is their source of truth: a company's name and status, a person's
  * name, email, phone, job title, status and company are written here only. Every
  * CORE_SYNC_SECONDS, and at once when a token names a person Diffusion doesn't know yet. Nothing
  * is deleted: companies and people the core no longer lists are deactivated / suspended.
  *
- * Sites and accounts made in Diffusion before it moved onto the core are matched to the core's
- * (sites: CORE_SITE_LINKS, else the same name; people: the same email) and take the core's id
- * (every foreign key to "site" and "user" cascades on update).
+ * Companies and accounts made in Diffusion before it moved onto the core are matched to the core's
+ * (companies: CORE_COMPANY_LINKS, else the same name; people: the same email) and take the core's id
+ * (every foreign key to "company" and "user" cascades on update).
  *
- * Roles stay Diffusion's own: a new site gets the default roles; a company administrator with no
- * role yet gets the site's Admin role, and becomes the site's responsible if it has none.
+ * Roles stay Diffusion's own: a new company gets the default roles; a company administrator with no
+ * role yet gets the company's Admin role, and becomes the company's responsible if it has none.
  */
 @Injectable()
 export class DirectorySyncService
@@ -139,19 +140,19 @@ export class DirectorySyncService
   /** Applies a whole directory in one transaction (also used by the tests). */
   async apply(directory: CoreDirectory): Promise<SyncResult> {
     const now = new Date();
-    const links = this.config.get('CORE_SITE_LINKS');
+    const links = this.config.get('CORE_COMPANY_LINKS');
     await this.database.$transaction(
       async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SYNC_LOCK})`;
         for (const tenant of directory.tenants) {
-          await upsertSite(tx, tenant, now, links, this.logger);
+          await upsertCompany(tx, tenant, now, links, this.logger);
           for (const person of tenant.users) {
             await upsertPerson(tx, tenant.id, person, now, this.logger);
           }
           // People the core no longer lists for this company: suspended.
           await tx.user.updateMany({
             where: {
-              siteId: tenant.id,
+              companyId: tenant.id,
               coreSyncedAt: { not: null },
               id: { notIn: tenant.users.map((u) => u.id) },
               status: UserStatus.ACTIVE,
@@ -167,13 +168,13 @@ export class DirectorySyncService
           );
         }
         // Companies the core no longer entitles to Diffusion: deactivated, data kept.
-        const gone = await tx.site.updateMany({
+        const gone = await tx.company.updateMany({
           where: {
             coreSyncedAt: { not: null },
             id: { notIn: directory.tenants.map((t) => t.id) },
-            status: SiteStatus.ACTIVE,
+            status: CompanyStatus.ACTIVE,
           },
-          data: { status: SiteStatus.INACTIVE },
+          data: { status: CompanyStatus.INACTIVE },
         });
         if (gone.count > 0) {
           this.logger.warn(
@@ -193,11 +194,11 @@ export class DirectorySyncService
 }
 
 /**
- * The company's site: by id, else the site made before the core that CORE_SITE_LINKS names, or
- * the only one with the same name (it takes the core's id), else a new site with its default
+ * The company's company: by id, else the company made before the core that CORE_COMPANY_LINKS names, or
+ * the only one with the same name (it takes the core's id), else a new company with its default
  * roles and criteria.
  */
-export async function upsertSite(
+export async function upsertCompany(
   tx: Tx,
   company: CoreCompany,
   now: Date,
@@ -207,21 +208,23 @@ export async function upsertSite(
   const data = {
     name: company.name.slice(0, 100),
     status:
-      company.status === 'ACTIVE' ? SiteStatus.ACTIVE : SiteStatus.INACTIVE,
+      company.status === 'ACTIVE'
+        ? CompanyStatus.ACTIVE
+        : CompanyStatus.INACTIVE,
     coreSyncedAt: now,
   };
-  let exists = !!(await tx.site.findUnique({
+  let exists = !!(await tx.company.findUnique({
     where: { id: company.id },
     select: { id: true },
   }));
   if (!exists) {
     const linked = links[company.id];
     const candidates = linked
-      ? await tx.site.findMany({
+      ? await tx.company.findMany({
           where: { id: linked, coreSyncedAt: null },
           select: { id: true },
         })
-      : await tx.site.findMany({
+      : await tx.company.findMany({
           where: {
             coreSyncedAt: null,
             name: { equals: company.name.trim(), mode: 'insensitive' },
@@ -230,45 +233,45 @@ export async function upsertSite(
         });
     if (candidates.length === 1) {
       const legacy = candidates[0].id;
-      // Every foreign key to "site" cascades on update; the audit journal keeps plain ids.
-      await tx.$executeRaw`UPDATE "site" SET "id" = ${company.id} WHERE "id" = ${legacy}`;
-      await tx.$executeRaw`UPDATE "activity_log" SET "siteId" = ${company.id} WHERE "siteId" = ${legacy}`;
-      await tx.$executeRaw`UPDATE "audit_archive" SET "siteId" = ${company.id} WHERE "siteId" = ${legacy}`;
+      // Every foreign key to "company" cascades on update; the audit journal keeps plain ids.
+      await tx.$executeRaw`UPDATE "company" SET "id" = ${company.id} WHERE "id" = ${legacy}`;
+      await tx.$executeRaw`UPDATE "activity_log" SET "companyId" = ${company.id} WHERE "companyId" = ${legacy}`;
+      await tx.$executeRaw`UPDATE "audit_archive" SET "companyId" = ${company.id} WHERE "companyId" = ${legacy}`;
       logger?.log(
-        `site ${legacy} matched to the core's company ${company.name} (${company.id})`,
+        `company ${legacy} matched to the core's company ${company.name} (${company.id})`,
       );
       exists = true;
     } else if (candidates.length > 1) {
       logger?.warn(
-        `several sites are named "${company.name}": none matched to the core's company ${company.id} (set CORE_SITE_LINKS)`,
+        `several companies are named "${company.name}": none matched to the core's company ${company.id} (set CORE_COMPANY_LINKS)`,
       );
     }
   }
   if (exists) {
-    await tx.site.update({ where: { id: company.id }, data });
+    await tx.company.update({ where: { id: company.id }, data });
     return;
   }
-  await tx.site.create({
-    data: { id: company.id, code: await freeSiteCode(tx), ...data },
+  await tx.company.create({
+    data: { id: company.id, code: await freeCompanyCode(tx), ...data },
   });
-  await setUpSite(tx, company.id, null);
+  await setUpCompany(tx, company.id, null);
 }
 
-async function freeSiteCode(tx: Tx): Promise<string> {
+async function freeCompanyCode(tx: Tx): Promise<string> {
   for (;;) {
-    const code = generateReference('ST');
-    const taken = await tx.site.count({ where: { code } });
+    const code = generateReference('CO');
+    const taken = await tx.company.count({ where: { code } });
     if (!taken) return code;
   }
 }
 
 /**
  * The person's copy: by id, else the Diffusion account with their email made before the core
- * (it takes the core's id, its history follows), else a new one. Their site is their company.
+ * (it takes the core's id, its history follows), else a new one. Their company is the core's.
  */
 export async function upsertPerson(
   tx: Tx,
-  siteId: string,
+  companyId: string,
   person: CorePerson,
   now: Date,
   logger?: Logger,
@@ -319,7 +322,7 @@ export async function upsertPerson(
   const name = `${person.firstName} ${person.lastName}`.trim() || email;
   const lastLogin = latestOf(existing?.lastLogin ?? null, person.lastSignInAt);
   const data = {
-    siteId,
+    companyId,
     name,
     email,
     phone: person.phone?.slice(0, 30) ?? null,
@@ -362,36 +365,29 @@ export async function upsertPerson(
 }
 
 /**
- * The company's administrators: those holding no Diffusion role yet get the site's Admin role;
- * the first of them becomes the site's responsible (its administrator) when it has none.
+ * The company's administrators (the core's tenantAdmin) hold its protected ADMIN role (every
+ * permission, CDC G1) — the company gets its default roles first when it lacks them (a company
+ * made before permissions 2.0.0). The first of them becomes the company's responsible when it has
+ * none. Returns the people who were just given ADMIN.
  */
 export async function setUpAdmins(
   tx: Tx,
-  siteId: string,
+  companyId: string,
   adminIds: string[],
-): Promise<void> {
-  if (adminIds.length === 0) return;
-  const site = await tx.site.findUnique({
-    where: { id: siteId },
+): Promise<string[]> {
+  if (adminIds.length === 0) return [];
+  const company = await tx.company.findUnique({
+    where: { id: companyId },
     select: { responsibleId: true },
   });
-  if (site && !site.responsibleId) {
-    await tx.site.update({
-      where: { id: siteId },
+  if (company && !company.responsibleId) {
+    await tx.company.update({
+      where: { id: companyId },
       data: { responsibleId: adminIds[0] },
     });
   }
-  const without = await tx.user.findMany({
-    where: { id: { in: adminIds }, userRoles: { none: {} } },
-    select: { id: true },
-  });
-  if (without.length === 0) return;
-  const roleId = await siteAdminRoleId(tx, siteId);
-  if (!roleId) return;
-  await tx.userRole.createMany({
-    data: without.map((user) => ({ userId: user.id, roleId, siteId })),
-    skipDuplicates: true,
-  });
+  await createDefaultRoles(tx, companyId);
+  return giveAdminRole(tx, companyId, adminIds);
 }
 
 /**

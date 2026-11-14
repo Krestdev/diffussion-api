@@ -16,8 +16,8 @@ import {
 } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import {
   DEFAULT_TAKE,
@@ -30,11 +30,11 @@ import {
 } from '../../common/utils/livrable-history';
 import { visibleDossierWhere } from '../../common/utils/dossier-visibility';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
-import { assertSiteActive } from '../../common/utils/referential-guards';
+import { assertCompanyActive } from '../../common/utils/referential-guards';
 import {
-  assertProjectOfSite,
+  assertProjectOfCompany,
   assertProjectTakesDossiers,
-} from '../../common/utils/site-referentials';
+} from '../../common/utils/company-referentials';
 import { assertDossierTypeUsable } from '../../referentials/dossier-type/dossier-type.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
@@ -43,7 +43,7 @@ import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
 import { UpdateDossierDto } from './dto/update-dossier.dto';
 
 const dossierInclude = {
-  site: true,
+  company: true,
   category: true,
   project: true,
   contract: {
@@ -95,7 +95,7 @@ function paging(query: PaginationQueryDto) {
 export class DossierService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
     private readonly notifications: NotificationsService,
@@ -107,11 +107,11 @@ export class DossierService {
     operation: 'CREATE',
   })
   async create(dto: CreateDossierDto, createdById: string) {
-    await assertSiteActive(this.database, dto.siteId);
+    await assertCompanyActive(this.database, dto.companyId);
     const responsibleId = dto.responsibleId ?? createdById;
-    await this.assertEligibleResponsible(responsibleId, dto.siteId);
+    await this.assertEligibleResponsible(responsibleId, dto.companyId);
     if (dto.typeId) {
-      await assertDossierTypeUsable(this.database, dto.typeId, dto.siteId);
+      await assertDossierTypeUsable(this.database, dto.typeId, dto.companyId);
     }
 
     const projectId = await this.projectUnderContract(
@@ -119,7 +119,7 @@ export class DossierService {
       dto.projectId,
     );
     if (projectId) {
-      await assertProjectOfSite(this.database, projectId, dto.siteId);
+      await assertProjectOfCompany(this.database, projectId, dto.companyId);
       if (!dto.contractId) {
         await assertProjectTakesDossiers(this.database, projectId);
       }
@@ -165,7 +165,7 @@ export class DossierService {
     const where: Prisma.DossierWhereInput = {
       status: query.status,
       priority: query.priority,
-      siteId: query.siteId,
+      companyId: query.companyId,
       responsibleId: query.responsibleId,
       projectId: query.projectId,
       contractId: query.contractId,
@@ -185,12 +185,12 @@ export class DossierService {
     if (userId) {
       where.AND = [
         visibleDossierWhere(userId),
-        // Only the sites where the caller may read dossiers.
-        await this.rbac.siteFilter(
+        // Only the companies where the caller may read dossiers.
+        await this.access.companyFilter(
           userId,
-          PermissionCode.DossierRead,
-          (siteId) => ({
-            siteId,
+          Permission.DOSSIER_READ,
+          (companyId) => ({
+            companyId,
           }),
         ),
       ];
@@ -254,34 +254,37 @@ export class DossierService {
       );
     }
 
-    // RG-DOS-003: the owning site drives eligibility and access,
+    // RG-DOS-003: the owning company drives eligibility and access,
     // so moving a dossier is an administrative act, not a plain edit.
-    const siteChanged =
-      dto.siteId !== undefined && dto.siteId !== dossier.siteId;
-    if (siteChanged) {
-      const canMove = await this.rbac.hasPermission(
+    const companyChanged =
+      dto.companyId !== undefined && dto.companyId !== dossier.companyId;
+    if (companyChanged) {
+      const canMove = await this.access.has(
         actingUserId,
-        PermissionCode.AdminManageSites,
+        Permission.COMPANY_UPDATE,
       );
       if (!canMove) {
         throw new ForbiddenException(
-          `Moving a dossier to another site requires ${PermissionCode.AdminManageSites}`,
+          `Moving a dossier to another company requires ${Permission.COMPANY_UPDATE}`,
         );
       }
-      await assertSiteActive(this.database, dto.siteId!);
+      await assertCompanyActive(this.database, dto.companyId!);
     }
 
-    const targetSiteId = dto.siteId ?? dossier.siteId;
-    // Its kind stays one of its site's active types.
-    if (dto.typeId && (dto.typeId !== dossier.typeId || siteChanged)) {
-      await assertDossierTypeUsable(this.database, dto.typeId, targetSiteId);
+    const targetCompanyId = dto.companyId ?? dossier.companyId;
+    // Its kind stays one of its company's active types.
+    if (dto.typeId && (dto.typeId !== dossier.typeId || companyChanged)) {
+      await assertDossierTypeUsable(this.database, dto.typeId, targetCompanyId);
     }
     const targetResponsibleId = dto.responsibleId ?? dossier.responsibleId;
     if (
       targetResponsibleId &&
-      (siteChanged || targetResponsibleId !== dossier.responsibleId)
+      (companyChanged || targetResponsibleId !== dossier.responsibleId)
     ) {
-      await this.assertEligibleResponsible(targetResponsibleId, targetSiteId);
+      await this.assertEligibleResponsible(
+        targetResponsibleId,
+        targetCompanyId,
+      );
     }
 
     const retentionUntil =
@@ -296,11 +299,15 @@ export class DossierService {
             dto.projectId !== undefined ? dto.projectId : dossier.projectId,
           )
         : undefined;
-    // Its project is of its site.
+    // Its project is of its company.
     const targetProjectId =
       projectId !== undefined ? projectId : dossier.projectId;
-    if (targetProjectId && (projectId !== undefined || siteChanged)) {
-      await assertProjectOfSite(this.database, targetProjectId, targetSiteId);
+    if (targetProjectId && (projectId !== undefined || companyChanged)) {
+      await assertProjectOfCompany(
+        this.database,
+        targetProjectId,
+        targetCompanyId,
+      );
     }
     const targetContractId =
       dto.contractId !== undefined ? dto.contractId : dossier.contractId;
@@ -658,15 +665,15 @@ export class DossierService {
   }
 
   // RG-DOS-004: the responsible must be able to act on the dossier —
-  // an active user of its owning site (they validate its courriers, and
-  // notifications are resolved through the users' sites).
-  private async assertEligibleResponsible(userId: string, siteId: string) {
+  // an active user of its owning company (they validate its courriers, and
+  // notifications are resolved through the users' companies).
+  private async assertEligibleResponsible(userId: string, companyId: string) {
     const user = await this.database.user.findUnique({
       where: { id: userId },
       select: {
         name: true,
         status: true,
-        siteId: true,
+        companyId: true,
       },
     });
     if (!user) {
@@ -677,9 +684,9 @@ export class DossierService {
         `${user.name} is suspended and cannot be responsible for a dossier`,
       );
     }
-    if (user.siteId !== siteId) {
+    if (user.companyId !== companyId) {
       throw new BadRequestException(
-        `${user.name} does not belong to the dossier's site — pick another responsible`,
+        `${user.name} does not belong to the dossier's company — pick another responsible`,
       );
     }
   }

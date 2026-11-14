@@ -1,39 +1,37 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, UserStatus } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { assertInScope, RbacService } from '../../auth/rbac/rbac.service';
-import { generateReference } from '../../common/utils/generate-reference';
-import { DEFAULT_SITE_ROLES } from './default-site-roles';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
+import { createDefaultRoles } from '../../auth/default-roles';
 import { DatabaseService } from '../../database/database.service';
-import { UpdateSiteDto } from './dto/update-site.dto';
+import { UpdateCompanyDto } from './dto/update-company.dto';
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
-import { FindSitesQueryDto } from './dto/find-sites.query.dto';
+import { FindCompaniesQueryDto } from './dto/find-companies.query.dto';
 
 const includeResponsible = {
   responsible: {
     select: { id: true, name: true, email: true },
   },
-} satisfies Prisma.SiteInclude;
+} satisfies Prisma.CompanyInclude;
 
 /**
- * What every new site starts with (created here or from the core's directory): its own analysis
- * criteria, a copy of the common model it then adapts, and its default roles (Admin,
- * Réceptionniste, Dispatcher, Admin dispatcher). `adminId` (its responsible) holds Admin.
+ * What every new company starts with (created here or from the core's directory): its own analysis
+ * criteria, a copy of the common model it then adapts, and its default roles (ADMIN, holding every
+ * permission, Réceptionniste, Dispatcher, Admin dispatcher). `adminId` (its responsible) holds ADMIN.
  */
-export async function setUpSite(
+export async function setUpCompany(
   tx: Prisma.TransactionClient,
-  siteId: string,
+  companyId: string,
   adminId: string | null,
 ): Promise<void> {
   const model = await tx.analysisCriterionTemplate.findMany({
-    where: { siteId: null },
+    where: { companyId: null },
     select: {
       label: true,
       description: true,
@@ -44,68 +42,26 @@ export async function setUpSite(
   });
   if (model.length) {
     await tx.analysisCriterionTemplate.createMany({
-      data: model.map((criterion) => ({ ...criterion, siteId })),
+      data: model.map((criterion) => ({ ...criterion, companyId })),
     });
   }
-  const permissions = await tx.permission.findMany({
-    select: { id: true, code: true },
+  await createDefaultRoles(tx, companyId, {
+    adminIds: adminId ? [adminId] : [],
   });
-  const idOf = new Map(permissions.map((p) => [p.code, p.id]));
-  for (const role of DEFAULT_SITE_ROLES) {
-    const created = await tx.role.create({
-      data: {
-        code: generateReference('RO'),
-        name: role.name,
-        description: role.description,
-        siteId,
-        rolePermissions: {
-          create: role.permissions
-            .filter((code) => idOf.has(code))
-            .map((code) => ({ permissionId: idOf.get(code)! })),
-        },
-      },
-      select: { id: true },
-    });
-    if (role.forResponsible && adminId) {
-      await tx.userRole.createMany({
-        data: [{ userId: adminId, roleId: created.id, siteId }],
-        skipDuplicates: true,
-      });
-    }
-  }
-}
-
-/** The site's own Admin role (DEFAULT_SITE_ROLES' `forResponsible` one), if it still has it. */
-export async function siteAdminRoleId(
-  tx: Prisma.TransactionClient,
-  siteId: string,
-): Promise<string | null> {
-  const name = DEFAULT_SITE_ROLES.find((role) => role.forResponsible)?.name;
-  if (!name) return null;
-  const role = await tx.role.findFirst({
-    where: { siteId, name, archivedAt: null },
-    select: { id: true },
-  });
-  return role?.id ?? null;
 }
 
 @Injectable()
-export class SiteService {
+export class CompanyService {
   constructor(
     private readonly database: DatabaseService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
   ) {}
 
-  // The whole list for the platform; otherwise the user's own site, the one
-  // they are responsible of, and those delegated to them.
-  private async visibleTo(userId: string): Promise<Prisma.SiteWhereInput> {
-    const [sites, dashboards] = await Promise.all([
-      this.rbac.hasGlobalPermission(userId, PermissionCode.AdminManageSites),
-      this.rbac.hasGlobalPermission(userId, PermissionCode.DashboardGlobalRead),
-    ]);
-    if (sites || dashboards) return {};
+  // The user's own company, the one they are responsible of, and those
+  // delegated to them (permissions 2.0.0: nobody sees every company).
+  private visibleTo(userId: string): Prisma.CompanyWhereInput {
     return {
       OR: [
         { users: { some: { id: userId } } },
@@ -116,20 +72,20 @@ export class SiteService {
   }
 
   async findVisible(uuid: string, userId: string) {
-    const site = await this.database.site.findFirst({
-      where: { id: uuid, AND: [await this.visibleTo(userId)] },
+    const company = await this.database.company.findFirst({
+      where: { id: uuid, AND: [this.visibleTo(userId)] },
       include: includeResponsible,
     });
-    if (!site) throw new NotFoundException(`Site ${uuid} not found`);
-    return site;
+    if (!company) throw new NotFoundException(`Company ${uuid} not found`);
+    return company;
   }
 
-  async findAll(query: FindSitesQueryDto = {}, userId?: string) {
+  async findAll(query: FindCompaniesQueryDto = {}, userId?: string) {
     const contains = query.search
       ? { contains: query.search, mode: 'insensitive' as const }
       : undefined;
-    const where: Prisma.SiteWhereInput = {
-      AND: userId ? [await this.visibleTo(userId)] : [],
+    const where: Prisma.CompanyWhereInput = {
+      AND: userId ? [this.visibleTo(userId)] : [],
       status: query.status,
       responsibleId: query.responsibleId,
       city: query.city
@@ -146,69 +102,69 @@ export class SiteService {
     const take = query.take ?? DEFAULT_TAKE;
 
     const [data, total] = await this.database.$transaction([
-      this.database.site.findMany({
+      this.database.company.findMany({
         where,
         orderBy: { name: 'asc' },
         include: includeResponsible,
         skip,
         take,
       }),
-      this.database.site.count({ where }),
+      this.database.company.count({ where }),
     ]);
 
     return { data, total, skip, take };
   }
 
   async findOne(uuid: string) {
-    const site = await this.database.site.findUnique({
+    const company = await this.database.company.findUnique({
       where: { id: uuid },
       include: includeResponsible,
     });
-    if (!site) {
-      throw new NotFoundException(`Site ${uuid} not found`);
+    if (!company) {
+      throw new NotFoundException(`Company ${uuid} not found`);
     }
-    return site;
+    return company;
   }
 
-  @AuditLog({ action: 'site.updated', entityType: 'site', operation: 'UPDATE' })
-  async update(uuid: string, dto: UpdateSiteDto, actingUserId: string) {
-    const scope = await this.rbac.administeredSites(
+  @AuditLog({
+    action: 'company.updated',
+    entityType: 'company',
+    operation: 'UPDATE',
+  })
+  async update(uuid: string, dto: UpdateCompanyDto, actingUserId: string) {
+    // company.update in their own company: its city and its responsible.
+    await this.access.assertManages(
       actingUserId,
-      PermissionCode.AdminManageSites,
+      Permission.COMPANY_UPDATE,
+      uuid,
+      'Cette société',
     );
-    assertInScope(scope, uuid);
-    const site = await this.findOne(uuid);
+    const company = await this.findOne(uuid);
     const newResponsibleId =
-      dto.responsibleId && dto.responsibleId !== site.responsibleId
+      dto.responsibleId && dto.responsibleId !== company.responsibleId
         ? dto.responsibleId
         : null;
     if (newResponsibleId) {
-      // Naming the responsible names the site's administrator.
-      if (scope !== 'ALL') {
-        throw new ForbiddenException(
-          "Only a platform administrator can change a site's responsible",
-        );
-      }
       await this.assertEligibleResponsible(newResponsibleId, uuid);
     }
-    return this.database.site.update({
+    return this.database.company.update({
       where: { id: uuid },
       data: dto,
       include: includeResponsible,
     });
   }
 
-  // The responsible is the site's administrator (users, delegations, audit
-  // of that site — see RbacService.administeredSites): an active person of
-  // that company, responsible of no other site.
-  private async assertEligibleResponsible(userId: string, siteId: string) {
+  // The responsible is the company's administrator (users, delegations, audit
+  // of that company — its designation): an active person of
+  // that company, responsible of no other company.
+  private async assertEligibleResponsible(userId: string, companyId: string) {
     const user = await this.database.user.findUnique({
       where: { id: userId },
       select: {
         status: true,
         name: true,
-        siteId: true,
-        managedSites: { select: { id: true, name: true } },
+        companyId: true,
+        managedCompanies: { select: { id: true, name: true } },
       },
     });
     if (!user) {
@@ -216,19 +172,21 @@ export class SiteService {
     }
     if (user.status !== UserStatus.ACTIVE) {
       throw new BadRequestException(
-        `${user.name} is suspended and cannot be made site responsible`,
+        `${user.name} is suspended and cannot be made company responsible`,
       );
     }
-    // A site is a company of the core: its responsible works for it.
-    if (user.siteId !== siteId) {
+    // A company is a company of the core: its responsible works for it.
+    if (user.companyId !== companyId) {
       throw new BadRequestException(
         `${user.name} does not belong to this company and cannot be its responsible`,
       );
     }
-    const other = user.managedSites.find((managed) => managed.id !== siteId);
+    const other = user.managedCompanies.find(
+      (managed) => managed.id !== companyId,
+    );
     if (other) {
       throw new BadRequestException(
-        `${user.name} is already the responsible of site "${other.name}"`,
+        `${user.name} is already the responsible of company "${other.name}"`,
       );
     }
   }

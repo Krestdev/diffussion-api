@@ -12,17 +12,17 @@ export class CreateDelegationDto {
 
   @ApiProperty({
     description:
-      'Role handed over — the delegataire is treated as holding it at the site below, for the period',
+      'Role handed over — the delegataire is treated as holding it at the company below, for the period',
   })
   @IsUUID()
   roleId: string;
 
   @ApiProperty({
     description:
-      'Site the delegation applies to. The delegataire must already be assigned to it.',
+      'Company the delegation applies to. The delegataire must already be assigned to it.',
   })
   @IsUUID()
-  siteId: string;
+  companyId: string;
 
   @ApiPropertyOptional({
     example: 'Responsable de dossier',

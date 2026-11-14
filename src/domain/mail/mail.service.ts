@@ -28,9 +28,9 @@ import { assertCorrespondentActive } from '../../common/utils/referential-guards
 import { addDelay } from '../../common/utils/business-days';
 import { SettingsService } from '../../administration/settings/settings.service';
 import {
-  assertCanalOfSite,
-  assertProjectOfSite,
-} from '../../common/utils/site-referentials';
+  assertCanalOfCompany,
+  assertProjectOfCompany,
+} from '../../common/utils/company-referentials';
 import { DatabaseService } from '../../database/database.service';
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
 import { awaitingValidationBy } from '../../common/utils/courrier-validation';
@@ -54,10 +54,10 @@ import { CloseMailDto } from './dto/close-mail.dto';
 import { DischargeMailDto } from './dto/discharge-mail.dto';
 import { SendMailDto } from './dto/send-mail.dto';
 import { SignMailDto } from './dto/sign-mail.dto';
-import { RbacService } from '../../auth/rbac/rbac.service';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { AccessService } from '../../auth/access/access.service';
+import { Permission } from '../../auth/permissions';
 import { NotificationsService } from '../../notifications/notifications.service';
-import { courrierOfSite } from '../../common/utils/site-where';
+import { courrierOfCompany } from '../../common/utils/company-where';
 import { CreateMailDto } from './dto/create-mail.dto';
 import { CreateOutgoingMailDto } from './dto/create-outgoing-mail.dto';
 import { StorageService } from '../../storage/storage.service';
@@ -76,8 +76,8 @@ const mailInclude = {
   proposedBy: { select: { id: true, name: true, email: true } },
   dispatchValidatedBy: { select: { id: true, name: true, email: true } },
   // Who wrote it and who approved it, readable by whoever sees the effet.
-  // Its registrant's site is the effet's site until it has a dossier.
-  createdBy: { select: { id: true, name: true, siteId: true } },
+  // Its registrant's company is the effet's company until it has a dossier.
+  createdBy: { select: { id: true, name: true, companyId: true } },
   approvedBy: { select: { id: true, name: true } },
   // An entrant handed over / a sortant sent; a sortant's signature and
   // discharge, with their scans.
@@ -100,7 +100,7 @@ const mailInclude = {
       number: true,
       title: true,
       priority: true,
-      siteId: true,
+      companyId: true,
       contract: { select: { id: true, reference: true, title: true } },
     },
   },
@@ -183,20 +183,20 @@ export function formatCourrier<T extends Record<string, any>>(courrier: T) {
         : null
       : undefined;
 
-  // The effet's site: its dossier's, else its registrant's (see
-  // siteOfEffet) — the site its supervisor and agents are picked from.
+  // The effet's company: its dossier's, else its registrant's (see
+  // companyOfEffet) — the company its supervisor and agents are picked from.
   const { dossier, createdBy } = courrier as {
-    dossier?: { siteId?: string } | null;
-    createdBy?: { siteId?: string | null } | null;
+    dossier?: { companyId?: string } | null;
+    createdBy?: { companyId?: string | null } | null;
   };
-  const siteId =
+  const companyId =
     dossier !== undefined || createdBy !== undefined
-      ? (dossier?.siteId ?? createdBy?.siteId ?? null)
+      ? (dossier?.companyId ?? createdBy?.companyId ?? null)
       : undefined;
 
   return {
     ...courrier,
-    ...(siteId !== undefined ? { siteId } : {}),
+    ...(companyId !== undefined ? { companyId } : {}),
     // The status unarchive() gives back; same fallback for an effet archived
     // before that was recorded.
     ...(courrier.archivedFromStatus !== undefined
@@ -352,23 +352,23 @@ export class MailService {
   constructor(
     private readonly database: DatabaseService,
     private readonly notifications: NotificationsService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     private readonly storage: StorageService,
     private readonly activity: ActivityService,
     private readonly settings: SettingsService,
   ) {}
 
   /**
-   * A deadline `pick`'s days after `from`, from the settings of `siteId`
-   * (PA·8) — business days when the site counts only those.
+   * A deadline `pick`'s days after `from`, from the settings of `companyId`
+   * (PA·8) — business days when the company counts only those.
    */
   private async defaultDeadline(
-    siteId: string | null,
+    companyId: string | null,
     from: Date,
     pick:
       'defaultTreatmentDays' | 'outgoingReplyDays' | 'dischargeExpectedDays',
   ) {
-    const settings = await this.settings.get(siteId);
+    const settings = await this.settings.get(companyId);
     return addDelay(from, settings[pick], settings.businessDaysOnly);
   }
 
@@ -385,25 +385,28 @@ export class MailService {
     if (dto.dossierId) {
       await assertDossierOpenForActivity(this.database, dto.dossierId);
     } else {
-      await this.assertRegistrantHasSite(createdById);
+      await this.assertRegistrantHasCompany(createdById);
     }
-    const siteId = await this.siteOfEffet(dto.dossierId ?? null, createdById);
+    const companyId = await this.companyOfEffet(
+      dto.dossierId ?? null,
+      createdById,
+    );
     if (dto.correspondentId) {
       await assertCorrespondentActive(
         this.database,
         dto.correspondentId,
-        siteId,
+        companyId,
       );
     }
     if (dto.canalId) {
-      await assertCanalOfSite(this.database, dto.canalId, siteId);
+      await assertCanalOfCompany(this.database, dto.canalId, companyId);
     }
     if (dto.respondsToId) {
       await this.assertRespondsToValid(dto.respondsToId);
     }
     const typeId = await this.checkEffetFields(dto, {
       direction: dto.direction,
-      siteId,
+      companyId,
     });
     const {
       receivedAt,
@@ -421,16 +424,20 @@ export class MailService {
       : dto.direction === CourrierDirection.ENTRANT
         ? new Date()
         : undefined;
-    // Its deadline: the one given, else its site's default delay.
+    // Its deadline: the one given, else its company's default delay.
     const deadline = dueDate
       ? new Date(dueDate)
       : dto.direction === CourrierDirection.ENTRANT
         ? await this.defaultDeadline(
-            siteId,
+            companyId,
             received ?? new Date(),
             'defaultTreatmentDays',
           )
-        : await this.defaultDeadline(siteId, new Date(), 'outgoingReplyDays');
+        : await this.defaultDeadline(
+            companyId,
+            new Date(),
+            'outgoingReplyDays',
+          );
     const courrier = await createWithUniqueReference('M', (number) =>
       this.database.courrier.create({
         data: {
@@ -501,15 +508,15 @@ export class MailService {
   // number, not yet attached to a dossier. Everything else, dossier
   // included, is completed through update() before submitForVerification().
   async createOutgoingDraft(dto: CreateOutgoingMailDto, createdById: string) {
-    const siteId = await this.siteOfEffet(null, createdById);
+    const companyId = await this.companyOfEffet(null, createdById);
     const typeId = await this.checkEffetFields(
       { typeId: dto.typeId },
-      { direction: CourrierDirection.SORTANT, siteId },
+      { direction: CourrierDirection.SORTANT, companyId },
     );
     const now = new Date();
-    // To be sent within its site's reply delay (PA·8).
+    // To be sent within its company's reply delay (PA·8).
     const dueDate = await this.defaultDeadline(
-      siteId,
+      companyId,
       now,
       'outgoingReplyDays',
     );
@@ -551,14 +558,20 @@ export class MailService {
   }
 
   async findAll(query: FindMailsQueryDto, userId: string) {
-    const sites = await this.readableSites(userId);
-    const siteId = await this.siteScope(userId, query.siteId);
+    const companyId = await this.companyScope(userId, query.companyId);
+    const visibleIn = async (direction: CourrierDirection) =>
+      visibleMailsWhere(
+        direction,
+        userId,
+        await this.readableCompanies(userId, direction),
+        companyId,
+      );
     const visible: Prisma.CourrierWhereInput = query.direction
-      ? visibleMailsWhere(query.direction, userId, sites, siteId)
+      ? await visibleIn(query.direction)
       : {
           OR: [
-            visibleMailsWhere(CourrierDirection.ENTRANT, userId, sites, siteId),
-            visibleMailsWhere(CourrierDirection.SORTANT, userId, sites, siteId),
+            await visibleIn(CourrierDirection.ENTRANT),
+            await visibleIn(CourrierDirection.SORTANT),
           ],
         };
     const where: Prisma.CourrierWhereInput = {
@@ -607,8 +620,8 @@ export class MailService {
     const visible = visibleMailsWhere(
       CourrierDirection.ENTRANT,
       userId,
-      await this.readableSites(userId),
-      await this.siteScope(userId, query.siteId),
+      await this.readableCompanies(userId, CourrierDirection.ENTRANT),
+      await this.companyScope(userId, query.companyId),
     );
     const where = incomingWhere(query, visible);
 
@@ -781,8 +794,8 @@ export class MailService {
     const visible = visibleMailsWhere(
       CourrierDirection.SORTANT,
       userId,
-      await this.readableSites(userId),
-      await this.siteScope(userId, query.siteId),
+      await this.readableCompanies(userId, CourrierDirection.SORTANT),
+      await this.companyScope(userId, query.companyId),
     );
     const where: Prisma.CourrierWhereInput = {
       ...visible,
@@ -843,7 +856,7 @@ export class MailService {
 
   // GET /courriers/:id: the effet with who must approve it.
   // The effet page: only an effet the caller would see in their lists
-  // (their sites', a dossier open to them, or entrusted to them) — else
+  // (their companies', a dossier open to them, or entrusted to them) — else
   // 404, as if it didn't exist.
   async findOneDetailed(id: string, userId?: string) {
     if (userId) await this.assertVisible(id, userId);
@@ -893,11 +906,11 @@ export class MailService {
     if (dossierChanged) {
       await assertDossierOpenForActivity(this.database, dto.dossierId!);
     }
-    const siteId = await this.siteOfEffet(
+    const companyId = await this.companyOfEffet(
       dto.dossierId ?? courrier.dossierId,
       courrier.createdById,
     );
-    // Its canal and correspondent stay those of its site — checked when
+    // Its canal and correspondent stay those of its company — checked when
     // they change, or when it moves to another dossier.
     const correspondentId =
       dto.correspondentId !== undefined
@@ -907,11 +920,15 @@ export class MailService {
       correspondentId &&
       (correspondentId !== courrier.correspondentId || dossierChanged)
     ) {
-      await assertCorrespondentActive(this.database, correspondentId, siteId);
+      await assertCorrespondentActive(
+        this.database,
+        correspondentId,
+        companyId,
+      );
     }
     const canalId = dto.canalId !== undefined ? dto.canalId : courrier.canalId;
     if (canalId && (canalId !== courrier.canalId || dossierChanged)) {
-      await assertCanalOfSite(this.database, canalId, siteId);
+      await assertCanalOfCompany(this.database, canalId, companyId);
     }
     if (dto.respondsToId && dto.respondsToId !== courrier.respondsToId) {
       await this.assertRespondsToValid(dto.respondsToId, id);
@@ -931,7 +948,7 @@ export class MailService {
       dto,
       {
         direction: courrier.direction,
-        siteId,
+        companyId,
       },
       courrier,
     );
@@ -1016,7 +1033,7 @@ export class MailService {
     const validatorId = await this.validatorOf(courrier);
     if (!validatorId) {
       throw new BadRequestException(
-        'Nobody can validate this courrier: neither its dossier nor its site has a responsible — name one first',
+        'Nobody can validate this courrier: neither its dossier nor its company has a responsible — name one first',
       );
     }
     // Its reference, if it did not get one at its creation (a model needing
@@ -1104,7 +1121,7 @@ export class MailService {
           projectId: true,
           contractId: true,
           responsibleId: true,
-          site: { select: { responsibleId: true } },
+          company: { select: { responsibleId: true } },
         },
       });
       if (!dossier) {
@@ -1116,7 +1133,7 @@ export class MailService {
         );
       }
       designatedResponsibleId =
-        dossier.responsibleId ?? dossier.site.responsibleId ?? null;
+        dossier.responsibleId ?? dossier.company.responsibleId ?? null;
       resolvedDossierId = dto.dossierId;
       resolvedContractId = dossier.contractId ?? null;
     }
@@ -1127,8 +1144,8 @@ export class MailService {
         instructions: { select: { id: true } },
         dossier: {
           select: {
-            siteId: true,
-            site: { select: { responsibleId: true } },
+            companyId: true,
+            company: { select: { responsibleId: true } },
           },
         },
       },
@@ -1137,11 +1154,11 @@ export class MailService {
       throw new NotFoundException(`Courrier ${id} non trouvé`);
     }
 
-    // Only to a project of the effet's site.
-    await assertProjectOfSite(
+    // Only to a project of the effet's company.
+    await assertProjectOfCompany(
       this.database,
       dto.projectId,
-      await this.siteOfEffet(courrier.dossierId, courrier.createdById),
+      await this.companyOfEffet(courrier.dossierId, courrier.createdById),
     );
     const hasPermission = await this.canDispatch(userId, courrier);
     const status = courrier.status;
@@ -1244,22 +1261,23 @@ export class MailService {
   ) {
     const courrier = await this.database.courrier.findUnique({
       where: { id },
-      include: { dossier: { select: { site: true } } },
+      include: { dossier: { select: { company: true } } },
     });
     if (!courrier) {
       throw new NotFoundException(`Courrier ${id} non trouvé`);
     }
 
     const isOwner = courrier.ownerId === actingUserId;
-    const isSiteAdmin =
-      (await this.siteResponsibleOf(courrier)) === actingUserId;
-    const isAdmin = await this.rbac.hasGlobalPermission(
+    const isCompanyAdmin =
+      (await this.companyResponsibleOf(courrier)) === actingUserId;
+    const isAdmin = await this.hasPermissionAtCourrierCompany(
       actingUserId,
-      PermissionCode.AdminManageUsers,
+      Permission.ROLE_ASSIGN,
+      courrier,
     );
-    if (!isOwner && !isSiteAdmin && !isAdmin) {
+    if (!isOwner && !isCompanyAdmin && !isAdmin) {
       throw new ForbiddenException(
-        'Seul le responsable désigné (destinataire), le responsable du site ou un administrateur peut affecter un superviseur',
+        'Seul le responsable désigné (destinataire), le responsable de la société ou un administrateur peut affecter un superviseur',
       );
     }
 
@@ -1344,11 +1362,11 @@ export class MailService {
           select: {
             responsibleId: true,
             contractId: true,
-            site: { select: { responsibleId: true } },
+            company: { select: { responsibleId: true } },
           },
         });
         ownerId =
-          dossier?.responsibleId ?? dossier?.site?.responsibleId ?? null;
+          dossier?.responsibleId ?? dossier?.company?.responsibleId ?? null;
         if (!contractId && dossier?.contractId) {
           contractId = dossier.contractId;
         }
@@ -1471,7 +1489,7 @@ export class MailService {
     ]);
     if ((await this.validatorOf(courrier)) !== userId) {
       throw new ForbiddenException(
-        "Only this courrier's validator (its dossier's responsible, or the site's) can decide on it",
+        "Only this courrier's validator (its dossier's responsible, or the company's) can decide on it",
       );
     }
     const approved = decision === ValidationDecision.VALIDE;
@@ -1536,55 +1554,55 @@ export class MailService {
     courrier: {
       dossierId?: string | null;
       dossier?: {
-        siteId: string;
-        site?: { responsibleId: string | null };
+        companyId: string;
+        company?: { responsibleId: string | null };
       } | null;
       createdById?: string | null;
     },
   ): Promise<boolean> {
     if (
-      await this.rbac.hasGlobalPermission(
+      await this.hasPermissionAtCourrierCompany(
         userId,
-        PermissionCode.AdminManageUsers,
-      )
-    ) {
-      return true;
-    }
-    if (
-      await this.hasPermissionAtCourrierSite(
-        userId,
-        PermissionCode.CourrierDispatch,
+        Permission.ROLE_ASSIGN,
         courrier,
       )
     ) {
       return true;
     }
-    return (await this.siteResponsibleOf(courrier)) === userId;
+    if (
+      await this.hasPermissionAtCourrierCompany(
+        userId,
+        Permission.INCOMING_DISPATCH,
+        courrier,
+      )
+    ) {
+      return true;
+    }
+    return (await this.companyResponsibleOf(courrier)) === userId;
   }
 
-  // The effet's site is its dossier's, else its registrant's (siteOfEffet).
-  // With no site at all, only a global grant counts.
-  private async hasPermissionAtCourrierSite(
+  // The effet's company is its dossier's, else its registrant's (companyOfEffet):
+  // the permission counts there only if it is the person's own company. With no
+  // company at all, no permission counts.
+  private async hasPermissionAtCourrierCompany(
     userId: string,
-    code: PermissionCode,
+    code: Permission,
     courrier: { dossierId?: string | null; createdById?: string | null },
   ) {
-    const siteId = await this.siteOfEffet(
+    const companyId = await this.companyOfEffet(
       courrier.dossierId ?? null,
       courrier.createdById ?? null,
     );
-    return siteId
-      ? this.rbac.hasPermissionAtSite(userId, code, siteId)
-      : this.rbac.hasGlobalPermission(userId, code);
+    return this.access.hasAtCompany(userId, code, companyId);
   }
 
-  // The responsible of the effet's site, if it has one.
+  // The responsible of the effet's company, if it has one.
   /**
    * Closing or archiving an effet (and taking it out of the archives) is
    * for those answering for it: its designated responsible, its supervisor
-   * (a sortant: also its author), its site's responsible, a platform user
-   * administrator — or whoever holds `permission` (COURRIER_CLOSE,
-   * COURRIER_ARCHIVE) at its site. Merely seeing it is not enough: closing
+   * (a sortant: also its author), its company's responsible, an administrator
+   * of its company (role.assign) — or whoever holds `permission`
+   * (incoming.close, incoming.archive / outgoing.archive) in its company. Merely seeing it is not enough: closing
    * an entrant cancels its open tasks.
    */
   private async assertMayConclude(
@@ -1596,7 +1614,7 @@ export class MailService {
       createdById?: string | null;
     },
     userId: string,
-    permission: PermissionCode,
+    permission: Permission,
   ) {
     if (courrier.ownerId === userId || courrier.supervisorId === userId) {
       return;
@@ -1607,40 +1625,37 @@ export class MailService {
     ) {
       return;
     }
-    if ((await this.siteResponsibleOf(courrier)) === userId) return;
-    const siteId = await this.siteOfEffet(
+    if ((await this.companyResponsibleOf(courrier)) === userId) return;
+    const companyId = await this.companyOfEffet(
       courrier.dossierId ?? null,
       courrier.createdById ?? null,
     );
-    const sites = await this.rbac.sitesWithPermission(userId, permission);
-    if (sites === 'ALL' || (siteId && sites.includes(siteId))) return;
+    if (await this.access.hasAtCompany(userId, permission, companyId)) return;
+    // An administrator of its company (role.assign, formerly a platform user
+    // administrator).
     if (
-      await this.rbac.hasGlobalPermission(
-        userId,
-        PermissionCode.AdminManageUsers,
-      )
-    ) {
+      await this.access.hasAtCompany(userId, Permission.ROLE_ASSIGN, companyId)
+    )
       return;
-    }
     throw new ForbiddenException(
-      `Only its designated responsible, its supervisor, its site's responsible, an administrator or a holder of ${permission} can do this`,
+      `Only its designated responsible, its supervisor, its company's responsible, an administrator or a holder of ${permission} can do this`,
     );
   }
 
-  private async siteResponsibleOf(courrier: {
+  private async companyResponsibleOf(courrier: {
     dossierId?: string | null;
     createdById?: string | null;
   }) {
-    const siteId = await this.siteOfEffet(
+    const companyId = await this.companyOfEffet(
       courrier.dossierId ?? null,
       courrier.createdById ?? null,
     );
-    if (!siteId) return null;
-    const site = await this.database.site.findUnique({
-      where: { id: siteId },
+    if (!companyId) return null;
+    const company = await this.database.company.findUnique({
+      where: { id: companyId },
       select: { responsibleId: true },
     });
-    return site?.responsibleId ?? null;
+    return company?.responsibleId ?? null;
   }
 
   private async canValidateDispatch(
@@ -1656,26 +1671,27 @@ export class MailService {
     },
   ): Promise<boolean> {
     if (
-      await this.rbac.hasGlobalPermission(
+      await this.hasPermissionAtCourrierCompany(
         userId,
-        PermissionCode.AdminManageUsers,
-      )
-    ) {
-      return true;
-    }
-    if (
-      await this.hasPermissionAtCourrierSite(
-        userId,
-        PermissionCode.CourrierDispatch,
+        Permission.ROLE_ASSIGN,
         courrier,
       )
     ) {
       return true;
     }
     if (
-      await this.hasPermissionAtCourrierSite(
+      await this.hasPermissionAtCourrierCompany(
         userId,
-        PermissionCode.CourrierDispatchValidate,
+        Permission.INCOMING_DISPATCH,
+        courrier,
+      )
+    ) {
+      return true;
+    }
+    if (
+      await this.hasPermissionAtCourrierCompany(
+        userId,
+        Permission.INCOMING_DISPATCH_VALIDATE,
         courrier,
       )
     ) {
@@ -1684,31 +1700,34 @@ export class MailService {
     return false;
   }
 
-  // Who is told a dispatching awaits validation: the active users holding
-  // the dispatch (or dispatch-validation) permission at the effet's site,
-  // or globally.
+  // Who is told a dispatching awaits validation: the active users of the
+  // effet's company holding the dispatch (or dispatch-validation) permission
+  // through one of its roles.
   private async dispatchValidatorsOf(courrier: {
     dossierId?: string | null;
     createdById?: string | null;
   }) {
-    const siteId = await this.siteOfEffet(
+    const companyId = await this.companyOfEffet(
       courrier.dossierId ?? null,
       courrier.createdById ?? null,
     );
+    if (!companyId) return [];
     const users = await this.database.user.findMany({
       where: {
         status: UserStatus.ACTIVE,
+        companyId,
         userRoles: {
           some: {
-            OR: [{ siteId: null }, ...(siteId ? [{ siteId }] : [])],
             role: {
+              companyId,
+              archivedAt: null,
               rolePermissions: {
                 some: {
                   permission: {
                     code: {
                       in: [
-                        PermissionCode.CourrierDispatch,
-                        PermissionCode.CourrierDispatchValidate,
+                        Permission.INCOMING_DISPATCH,
+                        Permission.INCOMING_DISPATCH_VALIDATE,
                       ],
                     },
                   },
@@ -1740,13 +1759,13 @@ export class MailService {
         select: {
           responsibleId: true,
           contract: { select: { responsibleId: true } },
-          site: { select: { responsibleId: true } },
+          company: { select: { responsibleId: true } },
         },
       });
       return (
         dossier?.responsibleId ??
         dossier?.contract?.responsibleId ??
-        dossier?.site.responsibleId ??
+        dossier?.company.responsibleId ??
         null
       );
     }
@@ -1774,9 +1793,9 @@ export class MailService {
     if (courrier.createdById) {
       const creator = await this.database.user.findUnique({
         where: { id: courrier.createdById },
-        select: { site: { select: { responsibleId: true } } },
+        select: { company: { select: { responsibleId: true } } },
       });
-      return creator?.site?.responsibleId ?? null;
+      return creator?.company?.responsibleId ?? null;
     }
     return null;
   }
@@ -1836,24 +1855,26 @@ export class MailService {
 
   // Person in charge of the courrier ("Affectations"). Settable at creation
   // (CreateMailDto) or later, but only by the courrier's creator, the
-  // responsible of the dossier's owning site, or a platform admin.
+  // responsible of the dossier's owning company, or an administrator (role.assign) of its company.
   async setOwner(id: string, dto: SetOwnerDto, actingUserId: string) {
     const courrier = await this.database.courrier.findUnique({
       where: { id },
-      include: { dossier: { select: { site: true } } },
+      include: { dossier: { select: { company: true } } },
     });
     if (!courrier) {
       throw new NotFoundException(`Courrier ${id} not found`);
     }
     const isCreator = courrier.createdById === actingUserId;
-    const isSiteAdmin = courrier.dossier?.site.responsibleId === actingUserId;
-    const isPlatformAdmin = await this.rbac.hasGlobalPermission(
+    const isCompanyAdmin =
+      courrier.dossier?.company.responsibleId === actingUserId;
+    const isPlatformAdmin = await this.hasPermissionAtCourrierCompany(
       actingUserId,
-      PermissionCode.AdminManageUsers,
+      Permission.ROLE_ASSIGN,
+      courrier,
     );
-    if (!isCreator && !isSiteAdmin && !isPlatformAdmin) {
+    if (!isCreator && !isCompanyAdmin && !isPlatformAdmin) {
       throw new ForbiddenException(
-        'Only the creator, the site responsible, or a platform admin can assign who is in charge of this courrier',
+        'Only the creator, the company responsible, or an administrator of its company can assign who is in charge of this courrier',
       );
     }
     return this.database.courrier.update({
@@ -1920,15 +1941,15 @@ export class MailService {
   // transmission (BT-AAAA-NNNNNN).
   async send(id: string, dto: SendMailDto, userId: string) {
     const sortant = await this.requireSortant(id, SENDABLE_STATUSES);
-    const canal = await assertCanalOfSite(
+    const canal = await assertCanalOfCompany(
       this.database,
       dto.canalId,
-      await this.siteOfEffet(sortant.dossierId, sortant.createdById),
+      await this.companyOfEffet(sortant.dossierId, sortant.createdById),
     );
     const transmittedAt = new Date(dto.transmittedAt);
-    // Its discharge is expected within its site's delay (PA·8).
+    // Its discharge is expected within its company's delay (PA·8).
     const dischargeDueDate = await this.defaultDeadline(
-      await this.siteOfEffet(sortant.dossierId, sortant.createdById),
+      await this.companyOfEffet(sortant.dossierId, sortant.createdById),
       transmittedAt,
       'dischargeExpectedDays',
     );
@@ -1977,9 +1998,11 @@ export class MailService {
       include: {
         correspondent: { select: { name: true } },
         transmittedBy: {
-          select: { name: true, site: { select: { name: true } } },
+          select: { name: true, company: { select: { name: true } } },
         },
-        createdBy: { select: { name: true, site: { select: { name: true } } } },
+        createdBy: {
+          select: { name: true, company: { select: { name: true } } },
+        },
         children: {
           select: {
             number: true,
@@ -2002,7 +2025,10 @@ export class MailService {
       bordereauNumber: courrier.bordereauNumber,
       transmittedAt: courrier.transmittedAt,
       transmissionMode: courrier.transmissionMode,
-      issuer: { name: sender?.name ?? null, site: sender?.site?.name ?? null },
+      issuer: {
+        name: sender?.name ?? null,
+        company: sender?.company?.name ?? null,
+      },
       recipient: {
         correspondent: courrier.correspondent?.name ?? null,
         person: courrier.transmissionRecipient,
@@ -2049,11 +2075,7 @@ export class MailService {
       throw new BadRequestException('Only an incoming courrier can be closed');
     }
     if (userId) {
-      await this.assertMayConclude(
-        courrier,
-        userId,
-        PermissionCode.CourrierClose,
-      );
+      await this.assertMayConclude(courrier, userId, Permission.INCOMING_CLOSE);
     }
     const note = dto.note || null;
     const [{ count: cancelledInstructions }, updated] =
@@ -2094,7 +2116,9 @@ export class MailService {
       await this.assertMayConclude(
         courrier,
         userId,
-        PermissionCode.CourrierArchive,
+        courrier.direction === CourrierDirection.SORTANT
+          ? Permission.OUTGOING_ARCHIVE
+          : Permission.INCOMING_ARCHIVE,
       );
     }
     const allowed = ARCHIVABLE_STATUSES[courrier.direction];
@@ -2123,7 +2147,9 @@ export class MailService {
       await this.assertMayConclude(
         courrier,
         userId,
-        PermissionCode.CourrierArchive,
+        courrier.direction === CourrierDirection.SORTANT
+          ? Permission.OUTGOING_ARCHIVE
+          : Permission.INCOMING_ARCHIVE,
       );
     }
     const status =
@@ -2215,31 +2241,31 @@ export class MailService {
   // The global "Courrier" type, given to effets registered without a type.
   private async defaultEffetTypeId(): Promise<string | null> {
     const type = await this.database.effetType.findFirst({
-      where: { name: DEFAULT_EFFET_TYPE, siteId: null },
+      where: { name: DEFAULT_EFFET_TYPE, companyId: null },
       select: { id: true },
     });
     return type?.id ?? null;
   }
 
-  // The site an effet belongs to: its dossier's, or — registered without
+  // The company an effet belongs to: its dossier's, or — registered without
   // one — its registrant's.
-  private async siteOfEffet(
+  private async companyOfEffet(
     dossierId: string | null,
     createdById: string | null,
   ): Promise<string | null> {
     if (dossierId) {
       const dossier = await this.database.dossier.findUnique({
         where: { id: dossierId },
-        select: { siteId: true },
+        select: { companyId: true },
       });
-      return dossier?.siteId ?? null;
+      return dossier?.companyId ?? null;
     }
     if (!createdById) return null;
     const registrant = await this.database.user.findUnique({
       where: { id: createdById },
-      select: { siteId: true },
+      select: { companyId: true },
     });
-    return registrant?.siteId ?? null;
+    return registrant?.companyId ?? null;
   }
 
   // Type, physical fields and bordereau, checked before anything is
@@ -2248,7 +2274,7 @@ export class MailService {
   // to store.
   private async checkEffetFields(
     input: EffetFields,
-    effet: { direction: CourrierDirection; siteId: string | null },
+    effet: { direction: CourrierDirection; companyId: string | null },
     current?: EffetFields & { id: string; typeId: string | null },
   ): Promise<string | null> {
     const typeId =
@@ -2267,9 +2293,9 @@ export class MailService {
           `The effet type "${type.name}" is inactive and can no longer be chosen`,
         );
       }
-      if (type.siteId && type.siteId !== effet.siteId) {
+      if (type.companyId && type.companyId !== effet.companyId) {
         throw new BadRequestException(
-          `The effet type "${type.name}" belongs to another site`,
+          `The effet type "${type.name}" belongs to another company`,
         );
       }
     }
@@ -2505,10 +2531,10 @@ export class MailService {
     return this.getAccess(id);
   }
 
-  // The sites where the caller may read courriers: as dossiers, and as
+  // The companies where the caller may read courriers: as dossiers, and as
   // registrants (for entrants not yet attached to a dossier).
   // Editing, removing or cancelling: whoever made it or has it in charge, or
-  // the permission at its site. Seeing it is not enough.
+  // the permission at its company. Seeing it is not enough.
   async assertMayEdit(id: string, userId: string) {
     const courrier = await this.database.courrier.findUnique({
       where: { id },
@@ -2529,19 +2555,19 @@ export class MailService {
       return;
     }
     const codes = [
-      PermissionCode.CourrierUpdate,
-      PermissionCode.CourrierUpdateDraft,
+      Permission.INCOMING_UPDATE,
+      Permission.INCOMING_UPDATE_DRAFT,
       ...(courrier.direction === CourrierDirection.SORTANT
-        ? [PermissionCode.CourrierWriteSortant]
+        ? [Permission.OUTGOING_UPDATE]
         : []),
     ];
     for (const code of codes) {
-      if (await this.hasPermissionAtCourrierSite(userId, code, courrier)) {
+      if (await this.hasPermissionAtCourrierCompany(userId, code, courrier)) {
         return;
       }
     }
     throw new ForbiddenException(
-      `Missing permission at this site: ${PermissionCode.CourrierUpdate}`,
+      `Missing permission at this company: ${Permission.INCOMING_UPDATE}`,
     );
   }
 
@@ -2560,7 +2586,7 @@ export class MailService {
           ...visibleMailsWhere(
             courrier.direction,
             userId,
-            await this.readableSites(userId),
+            await this.readableCompanies(userId, courrier.direction),
           ),
         },
       }));
@@ -2569,46 +2595,51 @@ export class MailService {
     }
   }
 
-  // `?siteId=` on the lists: the caller's own site or one where they may read
-  // effets. Any other site gives nothing, even an effet entrusted to them
-  // personally — that one stays in their lists without the filter.
-  private async siteScope(userId: string, siteId?: string) {
-    if (!siteId) return undefined;
-    return (await this.rbac.worksAtSite(
-      userId,
-      PermissionCode.CourrierRead,
-      siteId,
-    ))
-      ? siteId
+  // `?companyId=` on the lists: the caller's own company. Any other company
+  // gives nothing, even an effet entrusted to them personally — that one stays
+  // in their lists without the filter.
+  private async companyScope(userId: string, companyId?: string) {
+    if (!companyId) return undefined;
+    return (await this.access.worksAtCompany(userId, companyId))
+      ? companyId
       : { in: [] };
   }
 
-  private async readableSites(userId: string): Promise<ReadableSites> {
+  // The caller's company when they may read effets of that direction
+  // (incoming.read / outgoing.read), else none.
+  private async readableCompanies(
+    userId: string,
+    direction: CourrierDirection,
+  ): Promise<ReadableCompanies> {
+    const read =
+      direction === CourrierDirection.SORTANT
+        ? Permission.OUTGOING_READ
+        : Permission.INCOMING_READ;
     const [dossier, registrant] = await Promise.all([
-      this.rbac.siteFilter(
+      this.access.companyFilter(
         userId,
-        PermissionCode.CourrierRead,
-        (siteId): Prisma.DossierWhereInput => ({ siteId }),
+        read,
+        (companyId): Prisma.DossierWhereInput => ({ companyId }),
       ),
-      this.rbac.siteFilter(
+      this.access.companyFilter(
         userId,
-        PermissionCode.CourrierRead,
-        (siteId): Prisma.UserWhereInput => ({ siteId }),
+        read,
+        (companyId): Prisma.UserWhereInput => ({ companyId }),
       ),
     ]);
     return { dossier, registrant };
   }
 
   // An entrant registered without its dossier belongs to the registrant's
-  // site — so the registrant needs one.
-  private async assertRegistrantHasSite(userId: string) {
+  // company — so the registrant needs one.
+  private async assertRegistrantHasCompany(userId: string) {
     const registrant = await this.database.user.findUnique({
       where: { id: userId },
-      select: { siteId: true },
+      select: { companyId: true },
     });
-    if (!registrant?.siteId) {
+    if (!registrant?.companyId) {
       throw new BadRequestException(
-        'dossierId is required: you belong to no site the courrier could be registered on',
+        'dossierId is required: you belong to no company the courrier could be registered on',
       );
     }
   }
@@ -2770,8 +2801,8 @@ export class MailService {
     const visible = visibleMailsWhere(
       CourrierDirection.ENTRANT,
       userId,
-      await this.readableSites(userId),
-      await this.siteScope(userId, query.siteId),
+      await this.readableCompanies(userId, CourrierDirection.ENTRANT),
+      await this.companyScope(userId, query.companyId),
     );
     const where = incomingWhere(query, visible);
 
@@ -2873,47 +2904,47 @@ function assertTransmittable(
   }
 }
 
-type ReadableSites = {
+type ReadableCompanies = {
   dossier: Prisma.DossierWhereInput;
   registrant: Prisma.UserWhereInput;
 };
 
 // Incoming/outgoing courriers the caller may see: those in dossiers visible
-// to them (see visibleDossierWhere) on the sites they may read courriers at,
+// to them (see visibleDossierWhere) on the companies they may read courriers at,
 // their own drafts not yet attached to a dossier, and the entrants
-// registered on those sites still waiting for their dossier — someone has
+// registered on those companies still waiting for their dossier — someone has
 // to see them to attach it.
 function visibleMailsWhere(
   direction: CourrierDirection,
   userId: string,
-  sites: ReadableSites,
-  siteId?: string | { in: string[] },
+  companies: ReadableCompanies,
+  companyId?: string | { in: string[] },
 ): Prisma.CourrierWhereInput {
   const branches: Prisma.CourrierWhereInput[] = [
-    { dossier: { AND: [visibleDossierWhere(userId), sites.dossier] } },
+    { dossier: { AND: [visibleDossierWhere(userId), companies.dossier] } },
     { dossierId: null, createdById: userId },
     // Whoever it is entrusted to — its designated responsible (e.g. a
     // contract's, when dispatched to a contract) and its supervisor —
     // sees it, wherever it sits.
     { ownerId: userId },
     { supervisorId: userId },
-    // Without a dossier: its registrant's site's effets — for a sortant,
+    // Without a dossier: its registrant's company's effets — for a sortant,
     // once submitted (its validator, e.g. a contract's responsible, must
     // open it); a draft stays its author's own.
     direction === CourrierDirection.ENTRANT
-      ? { dossierId: null, createdBy: sites.registrant }
+      ? { dossierId: null, createdBy: companies.registrant }
       : {
           dossierId: null,
           status: { not: CourrierStatus.BROUILLON },
-          createdBy: sites.registrant,
+          createdBy: companies.registrant,
         },
   ];
   // Kept as a single OR at the top level: callers spread this next to their
-  // own AND. `siteId` only narrows what the caller may already see.
+  // own AND. `companyId` only narrows what the caller may already see.
   return {
     direction,
-    OR: siteId
-      ? [{ AND: [{ OR: branches }, courrierOfSite(siteId)] }]
+    OR: companyId
+      ? [{ AND: [{ OR: branches }, courrierOfCompany(companyId)] }]
       : branches,
   };
 }

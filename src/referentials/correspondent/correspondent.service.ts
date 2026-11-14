@@ -7,12 +7,12 @@ import { Prisma } from '../../../generated/prisma/client';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
 import {
-  assertSiteExists,
-  siteReferentialsWhere,
-} from '../../common/utils/site-referentials';
+  assertCompanyExists,
+  companyReferentialsWhere,
+} from '../../common/utils/company-referentials';
 import { DatabaseService } from '../../database/database.service';
 import {
   DEFAULT_TAKE,
@@ -28,7 +28,7 @@ import { UpdateCorrespondantDto } from './dto/update-correspondent.dto';
 
 const includeType = {
   type: true,
-  site: { select: { id: true, code: true, name: true } },
+  company: { select: { id: true, code: true, name: true } },
 } satisfies Prisma.CorrespondentInclude;
 
 const contactSelect = {
@@ -42,15 +42,15 @@ const contactSelect = {
 } satisfies Prisma.CorrespondentContactSelect;
 
 /**
- * A correspondent belongs to one site: only that site's effets use it. Made
- * and managed by whoever holds ADMIN_MANAGE_REFERENTIALS at that site (or
- * globally); everyone else sees their own site's.
+ * A correspondent belongs to one company: only that company's effets use it. Made
+ * and managed by whoever holds the correspondent codes in that company;
+ * everyone sees their own company's.
  */
 @Injectable()
 export class CorrespondantService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
   ) {}
@@ -62,12 +62,12 @@ export class CorrespondantService {
   })
   async create(dto: CreateCorrespondentDto, actingUserId: string) {
     await this.assertManages(
-      dto.siteId,
+      dto.companyId,
       actingUserId,
-      PermissionCode.CorrespondentCreate,
+      Permission.CORRESPONDENT_CREATE,
     );
-    await assertSiteExists(this.database, dto.siteId);
-    if (dto.typeId) await this.assertTypeUsable(dto.typeId, dto.siteId);
+    await assertCompanyExists(this.database, dto.companyId);
+    if (dto.typeId) await this.assertTypeUsable(dto.typeId, dto.companyId);
     return createWithUniqueReference('CP', (code) =>
       this.database.correspondent.create({
         data: {
@@ -87,11 +87,11 @@ export class CorrespondantService {
       ? { contains: query.search, mode: 'insensitive' as const }
       : undefined;
     const where: Prisma.CorrespondentWhereInput = {
-      ...(await siteReferentialsWhere(
-        this.rbac,
+      ...(await companyReferentialsWhere(
+        this.access,
         this.database,
         userId,
-        query.siteId,
+        query.companyId,
       )),
       typeId: query.typeId,
       city: query.city
@@ -126,7 +126,7 @@ export class CorrespondantService {
       where: {
         id: uuid,
         ...(userId
-          ? await siteReferentialsWhere(this.rbac, this.database, userId)
+          ? await companyReferentialsWhere(this.access, this.database, userId)
           : {}),
       },
       // The counts for its card only: @AuditLog compares the bare row.
@@ -159,9 +159,9 @@ export class CorrespondantService {
       dto.status !== undefined && dto.status !== existing.status;
     if (statusChanges) {
       await this.assertManages(
-        existing.siteId,
+        existing.companyId,
         actingUserId,
-        PermissionCode.CorrespondentArchive,
+        Permission.CORRESPONDENT_ARCHIVE,
       );
     }
     const changesOtherFields = Object.entries(dto).some(
@@ -169,13 +169,13 @@ export class CorrespondantService {
     );
     if (!statusChanges || changesOtherFields) {
       await this.assertManages(
-        existing.siteId,
+        existing.companyId,
         actingUserId,
-        PermissionCode.CorrespondentUpdate,
+        Permission.CORRESPONDENT_UPDATE,
       );
     }
     if (dto.typeId && dto.typeId !== existing.typeId) {
-      await this.assertTypeUsable(dto.typeId, existing.siteId);
+      await this.assertTypeUsable(dto.typeId, existing.companyId);
     }
     const contactToAdd = await this.newMainContact(
       uuid,
@@ -200,9 +200,9 @@ export class CorrespondantService {
   async remove(uuid: string, actingUserId: string) {
     const existing = await this.findOne(uuid);
     await this.assertManages(
-      existing.siteId,
+      existing.companyId,
       actingUserId,
-      PermissionCode.CorrespondentArchive,
+      Permission.CORRESPONDENT_ARCHIVE,
     );
     try {
       await this.database.correspondent.delete({ where: { id: uuid } });
@@ -310,10 +310,10 @@ export class CorrespondantService {
 
   private async assertManagesContacts(correspondentId: string, userId: string) {
     const correspondent = await this.findOne(correspondentId);
-    await this.rbac.assertManagesSite(
+    await this.access.assertManages(
       userId,
-      PermissionCode.CorrespondentUpdate,
-      correspondent.siteId,
+      Permission.CORRESPONDENT_UPDATE,
+      correspondent.companyId,
       'Cet expéditeur',
     );
   }
@@ -333,30 +333,30 @@ export class CorrespondantService {
   }
 
   private async assertManages(
-    siteId: string,
+    companyId: string,
     userId: string,
-    permission: PermissionCode,
+    permission: Permission,
   ) {
-    await this.rbac.assertManagesSite(
+    await this.access.assertManages(
       userId,
       permission,
-      siteId,
+      companyId,
       'Cet expéditeur',
     );
   }
 
-  // A correspondent's kind: an active type of its own site.
-  private async assertTypeUsable(typeId: string, siteId: string) {
+  // A correspondent's kind: an active type of its own company.
+  private async assertTypeUsable(typeId: string, companyId: string) {
     const type = await this.database.correspondentType.findUnique({
       where: { id: typeId },
-      select: { name: true, siteId: true, active: true },
+      select: { name: true, companyId: true, active: true },
     });
     if (!type) {
       throw new BadRequestException(`Correspondent type ${typeId} not found`);
     }
-    if (type.siteId !== siteId) {
+    if (type.companyId !== companyId) {
       throw new BadRequestException(
-        `The correspondent type « ${type.name} » belongs to another site`,
+        `The correspondent type « ${type.name} » belongs to another company`,
       );
     }
     if (!type.active) {

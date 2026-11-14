@@ -287,7 +287,7 @@ describe('dashboard overview', () => {
 
   it('compares with the same dates a year earlier on request', () => {
     const { current: window, previous: compared } = resolveWindows(
-      { siteId: 's-1', period: '7d', compare: 'lastYear' },
+      { companyId: 's-1', period: '7d', compare: 'lastYear' },
       NOW,
     );
 
@@ -298,7 +298,7 @@ describe('dashboard overview', () => {
   it('includes the whole last day of a custom period', () => {
     const { current: window } = resolveWindows(
       {
-        siteId: 's-1',
+        companyId: 's-1',
         period: 'custom',
         from: '2026-10-01',
         to: '2026-10-31',
@@ -314,14 +314,14 @@ describe('dashboard overview', () => {
     expect(bucketsOf({ from: daysAgo(70), to: NOW })).toHaveLength(10);
   });
 
-  it('always stays on the requested site, and HAUTE matches nothing', () => {
-    const where = overviewWhere({ siteId: 's-1', priority: 'HAUTE' });
+  it('always stays on the requested company, and HAUTE matches nothing', () => {
+    const where = overviewWhere({ companyId: 's-1', priority: 'HAUTE' });
 
     expect(where.AND).toEqual([
       {
         OR: [
-          { dossier: { siteId: 's-1' } },
-          { dossierId: null, createdBy: { siteId: 's-1' } },
+          { dossier: { companyId: 's-1' } },
+          { dossierId: null, createdBy: { companyId: 's-1' } },
         ],
       },
       { id: { in: [] } },

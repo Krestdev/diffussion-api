@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ClsService } from 'nestjs-cls';
 import { ActivityService } from './activity.service';
 import { DatabaseService } from '../database/database.service';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
 import { StorageService } from '../storage/storage.service';
 
 describe('ActivityService', () => {
@@ -12,30 +12,32 @@ describe('ActivityService', () => {
     user: Record<string, jest.Mock>;
     role: Record<string, jest.Mock>;
   };
-  let rbac: { resolveSiteId: jest.Mock };
+  let rbac: { resolveCompanyId: jest.Mock };
   let clsValues: Record<string, unknown>;
 
   const created = () =>
     (
       database.activityLog.create.mock.calls[0][0] as {
-        data: { siteId: string | null; ip: string | null };
+        data: { companyId: string | null; ip: string | null };
       }
     ).data;
 
   beforeEach(async () => {
     database = {
       activityLog: { create: jest.fn().mockResolvedValue({ id: 'log-1' }) },
-      user: { findUnique: jest.fn().mockResolvedValue({ siteId: 's-author' }) },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({ companyId: 's-author' }),
+      },
       role: { findUnique: jest.fn() },
     };
-    rbac = { resolveSiteId: jest.fn().mockResolvedValue(undefined) };
+    rbac = { resolveCompanyId: jest.fn().mockResolvedValue(undefined) };
     clsValues = {};
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ActivityService,
         { provide: DatabaseService, useValue: database },
-        { provide: RbacService, useValue: rbac },
+        { provide: AccessService, useValue: rbac },
         { provide: StorageService, useValue: {} },
         {
           provide: ClsService,
@@ -50,10 +52,10 @@ describe('ActivityService', () => {
     service = module.get<ActivityService>(ActivityService);
   });
 
-  describe('site and IP of an entry', () => {
-    it("takes its object's site, and the author's IP", async () => {
+  describe('company and IP of an entry', () => {
+    it("takes its object's company, and the author's IP", async () => {
       clsValues = { userId: 'u-1', ip: '192.168.1.78' };
-      rbac.resolveSiteId.mockResolvedValue('s-effet');
+      rbac.resolveCompanyId.mockResolvedValue('s-effet');
 
       await service.record({
         action: 'COURRIER_VALIDE',
@@ -62,22 +64,22 @@ describe('ActivityService', () => {
       });
 
       expect(created()).toMatchObject({
-        siteId: 's-effet',
+        companyId: 's-effet',
         ip: '192.168.1.78',
       });
     });
 
-    it("falls back to its author's site", async () => {
+    it("falls back to its author's company", async () => {
       clsValues = { userId: 'u-1' };
 
       await service.record({ action: 'POST /something' });
 
-      expect(created().siteId).toBe('s-author');
+      expect(created().companyId).toBe('s-author');
     });
 
-    it('keeps a global role out of every site', async () => {
+    it('keeps a global role out of every company', async () => {
       clsValues = { userId: 'u-1' };
-      database.role.findUnique.mockResolvedValue({ siteId: null });
+      database.role.findUnique.mockResolvedValue({ companyId: null });
 
       await service.record({
         action: 'role.updated',
@@ -85,7 +87,7 @@ describe('ActivityService', () => {
         entityId: 'r-1',
       });
 
-      expect(created().siteId).toBeNull();
+      expect(created().companyId).toBeNull();
     });
   });
 

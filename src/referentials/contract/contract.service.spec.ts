@@ -1,11 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { ActivityService } from '../../activity/activity.service';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { AccessService } from '../../auth/access/access.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { ContractService } from './contract.service';
-import { withScopeChecks } from '../../auth/rbac/rbac.testing-spec';
+import { accessMock } from '../access-mock.testing-spec';
 
 describe('ContractService', () => {
   let service: ContractService;
@@ -31,7 +31,9 @@ describe('ContractService', () => {
         delete: jest.fn(),
       },
       project: {
-        findUnique: jest.fn().mockResolvedValue({ id: 'p-1', siteId: 's-1' }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'p-1', companyId: 's-1' }),
       },
       dossier: {
         updateMany: jest.fn(),
@@ -55,11 +57,10 @@ describe('ContractService', () => {
           useValue: { notifyAccessChanged: jest.fn() },
         },
         {
-          provide: RbacService,
-          useValue: withScopeChecks({
-            hasGlobalPermission: jest.fn().mockResolvedValue(false),
-            managedSites: jest.fn().mockResolvedValue('ALL'),
-          }),
+          provide: AccessService,
+          // Every permission, in their company s-1; a super-administrator, for
+          // the contracts without project.
+          useValue: accessMock({ platformAdmin: true }),
         },
       ],
     }).compile();
@@ -101,7 +102,7 @@ describe('ContractService', () => {
   it('refuses a project made of dossiers', async () => {
     database.project.findUnique.mockResolvedValue({
       id: 'p-1',
-      siteId: 's-1',
+      companyId: 's-1',
       name: 'P',
       contentType: 'DOSSIERS',
     });

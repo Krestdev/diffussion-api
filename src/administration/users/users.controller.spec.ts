@@ -1,14 +1,7 @@
-import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { NotificationsService } from '../../notifications/notifications.service';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { RbacService } from '../../auth/rbac/rbac.service';
-import { DatabaseService } from '../../database/database.service';
-import { RealtimeGateway } from '../../realtime/realtime.gateway';
-import { AppAccessService } from '../../core/app-access.service';
+import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
-import { ActivityService } from '../../activity/activity.service';
 
 describe('UsersController', () => {
   let controller: UsersController;
@@ -16,27 +9,8 @@ describe('UsersController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
-      providers: [
-        UsersService,
-        { provide: NotificationsService, useValue: {} },
-        {
-          provide: ActivityService,
-          useValue: { tryRecord: jest.fn().mockResolvedValue(null) },
-        },
-        { provide: DatabaseService, useValue: {} },
-        {
-          provide: AppAccessService,
-          useValue: { refresh: jest.fn() },
-        },
-        {
-          provide: RealtimeGateway,
-          useValue: { emitToUsers: jest.fn(), broadcast: jest.fn() },
-        },
-        { provide: RbacService, useValue: {} },
-      ],
+      providers: [{ provide: UsersService, useValue: {} }],
     })
-      .overrideGuard(PermissionGuard)
-      .useValue({ canActivate: () => true })
       .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
       .compile();

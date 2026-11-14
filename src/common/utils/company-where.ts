@@ -1,27 +1,34 @@
 import { Prisma } from '../../../generated/prisma/client';
 
-type SiteFilter = string | { in: string[] };
+type CompanyFilter = string | { in: string[] };
 
-// Prisma filters for "belongs to this site", following the rule of
-// RbacService.resolveSiteId. Each one is an OR: put it inside an AND.
+// Prisma filters for "belongs to this company", following the rule of
+// AccessService.resolveCompanyId. Each one is an OR: put it inside an AND.
 
-/** An effet's site: its dossier's, else its registrant's. */
-export function courrierOfSite(siteId: SiteFilter): Prisma.CourrierWhereInput {
+/** An effet's company: its dossier's, else its registrant's. */
+export function courrierOfCompany(
+  companyId: CompanyFilter,
+): Prisma.CourrierWhereInput {
   return {
-    OR: [{ dossier: { siteId } }, { dossierId: null, createdBy: { siteId } }],
+    OR: [
+      { dossier: { companyId } },
+      { dossierId: null, createdBy: { companyId } },
+    ],
   };
 }
 
-/** A task's site: its dossier's, else its effet's, else its contract's project's. */
-export function taskOfSite(siteId: SiteFilter): Prisma.InstructionWhereInput {
+/** A task's company: its dossier's, else its effet's, else its contract's project's. */
+export function taskOfCompany(
+  companyId: CompanyFilter,
+): Prisma.InstructionWhereInput {
   return {
     OR: [
-      { dossier: { siteId } },
-      { dossierId: null, courrier: courrierOfSite(siteId) },
+      { dossier: { companyId } },
+      { dossierId: null, courrier: courrierOfCompany(companyId) },
       {
         dossierId: null,
         courrierId: null,
-        contract: { project: { siteId } },
+        contract: { project: { companyId } },
       },
     ],
   };

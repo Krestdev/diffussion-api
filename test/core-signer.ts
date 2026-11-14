@@ -1,7 +1,11 @@
 import type { INestApplication } from '@nestjs/common';
 import { generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { AppConfigService } from '../src/config/app-config.service';
-import { CORE_AUDIENCE, CoreJwks } from '../src/core/core-tokens.service';
+import {
+  appAdminAudience,
+  CORE_AUDIENCE,
+  CoreJwks,
+} from '../src/core/core-tokens.service';
 import { DatabaseService } from '../src/database/database.service';
 import {
   sessionKey,
@@ -19,7 +23,7 @@ import {
  * Stands in for the CREAPP core in the e2e tests: an RSA key made in-process whose public half
  * replaces the core's JWKS, and tokens signed with it exactly as the core signs them (RS256, iss,
  * aud, sub, tid, sid, amr). It also writes the session store as the core does at sign-in, from
- * Diffusion's own copies (the person and their site = their company).
+ * Diffusion's own copies (the person and their company = their company).
  */
 export class LocalCoreSigner {
   private readonly kid = `local-${randomUUID().slice(0, 8)}`;
@@ -67,10 +71,11 @@ export class LocalCoreSigner {
         email: true,
         name: true,
         status: true,
-        site: { select: { id: true, name: true, code: true, status: true } },
+        company: { select: { id: true, name: true, code: true, status: true } },
       },
     });
-    if (!user.site) throw new Error(`${user.email} has no site (company)`);
+    if (!user.company)
+      throw new Error(`${user.email} has no company (company)`);
     const [firstName, ...rest] = user.name.split(' ');
     const now = new Date();
     const record: StoredUser = {
@@ -84,10 +89,10 @@ export class LocalCoreSigner {
       tenantAdmin: options.tenantAdmin ?? false,
       mustChangePassword: false,
       tenant: {
-        id: user.site.id,
-        name: user.site.name,
-        slug: user.site.code.toLowerCase(),
-        status: user.site.status === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED',
+        id: user.company.id,
+        name: user.company.name,
+        slug: user.company.code.toLowerCase(),
+        status: user.company.status === 'ACTIVE' ? 'ACTIVE' : 'SUSPENDED',
         currency: 'XAF',
         defaultLanguage: 'fr',
         brandColor: null,
@@ -152,6 +157,24 @@ export class LocalCoreSigner {
       aud: CORE_AUDIENCE,
       iat: now,
       exp: now + 600,
+      ...overrides,
+    });
+  }
+
+  /** A core app-admin token for Diffusion (the console managing a company's roles, 1 minute). */
+  appAdmin(companyId: string, overrides: Record<string, unknown> = {}): string {
+    if (!this.app) throw new Error('install() the signer first');
+    const now = Math.floor(Date.now() / 1000);
+    return this.signed({
+      sub: randomUUID(),
+      name: 'console@e2e.test',
+      tid: companyId,
+      platform: false,
+      typ: 'app-admin',
+      iss: this.issuer,
+      aud: appAdminAudience(this.app.get(AppConfigService).get('CORE_APP_ID')),
+      iat: now,
+      exp: now + 60,
       ...overrides,
     });
   }

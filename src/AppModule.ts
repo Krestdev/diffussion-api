@@ -14,7 +14,7 @@ import { AuthModule } from './auth/auth.module';
 import { AppConfigModule } from './config/app-config.service';
 import { CoreModule } from './core/core.module';
 import { SessionStoreModule } from './session-store/session-store.module';
-import { RbacModule } from './auth/rbac/rbac.module';
+import { AccessModule } from './auth/access/access.module';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DatabaseModule } from './database/database.module';
@@ -46,7 +46,7 @@ import { SupportModule } from './support/support.module';
     ]),
     DatabaseModule,
     // The CREAPP core: settings, shared session store, token checks and
-    // the directory sync (companies = sites, people).
+    // the directory sync (companies = companies, people).
     AppConfigModule,
     SessionStoreModule,
     CoreModule,
@@ -56,7 +56,7 @@ import { SupportModule } from './support/support.module';
     // is automatically promoted to root in the audit-log view.
     ActivityModule,
     AuthModule,
-    RbacModule,
+    AccessModule,
     ReferentialsModule,
     InstructionsModule,
     DomainModule,
@@ -83,7 +83,7 @@ import { SupportModule } from './support/support.module';
 })
 export class AppModule implements NestModule {
   // Authentication/authorization is enforced per-controller via
-  // @UseGuards(CoreAuthGuard, PermissionGuard) + @RequirePermission(...)
+  // @UseGuards(CoreAuthGuard, PermissionsGuard) + @RequirePermissions(...)
   // rather than a global middleware, so each route can declare its own
   // permission requirement.
   configure(consumer: MiddlewareConsumer) {

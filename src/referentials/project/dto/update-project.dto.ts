@@ -3,9 +3,9 @@ import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 import { ProjectStatus } from '../../../../generated/prisma/client';
 import { CreateProjectDto } from './create-project.dto';
 
-// Its site never changes.
+// Its company never changes.
 export class UpdateProjectDto extends PartialType(
-  OmitType(CreateProjectDto, ['siteId'] as const),
+  OmitType(CreateProjectDto, ['companyId'] as const),
 ) {
   @ApiPropertyOptional({
     enum: ProjectStatus,

@@ -11,9 +11,9 @@ export class FindUsersQueryDto extends PaginationQueryDto {
 
   @ApiPropertyOptional({
     description:
-      'Only the users of this site. A site administrator only ever sees their own site.',
+      'Only the users of this company. A company administrator only ever sees their own company.',
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 }

@@ -28,14 +28,15 @@ import {
 import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
 import {
-  SiteScope,
+  RequireAnyPermission,
+  RequirePermissions,
+  SameCompany,
   fromBody,
   fromParam,
-} from '../../auth/rbac/site-scope.decorator';
+} from '../../auth/access/decorators';
 import { AuthUser } from '../../auth/types/auth-user.type';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { SetOwnerDto } from '../../common/dto/set-owner.dto';
@@ -58,16 +59,16 @@ import { MailService } from './mail.service';
 
 @ApiTags('courriers')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
-// Permissions are checked at the site of the targeted resource.
-@SiteScope(fromParam('courrier'))
+@UseGuards(CoreAuthGuard, PermissionsGuard)
+// The targeted effet must belong to the person's company.
+@SameCompany(fromParam('courrier'))
 @Controller('courriers')
 export class MailController {
   constructor(private readonly mailService: MailService) {}
 
   @Post()
-  @RequirePermission(PermissionCode.CourrierRegisterEntrant)
-  @SiteScope(fromBody('dossier', 'dossierId'))
+  @RequirePermissions(Permission.INCOMING_CREATE)
+  @SameCompany(fromBody('dossier', 'dossierId'))
   @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({
     schema: {
@@ -111,7 +112,7 @@ export class MailController {
   // Sortant draft from its subject alone — returns its generated number,
   // in BROUILLON; the rest is filled in through PATCH /courriers/:id.
   @Post('sortants')
-  @RequirePermission(PermissionCode.CourrierWriteSortant)
+  @RequirePermissions(Permission.OUTGOING_CREATE)
   createOutgoing(
     @Body() dto: CreateOutgoingMailDto,
     @CurrentUser() user: AuthUser,
@@ -119,17 +120,17 @@ export class MailController {
     return this.mailService.createOutgoingDraft(dto, user.sub);
   }
 
-  // Only what the caller may see: their sites' effets (see
+  // Only what the caller may see: their companies' effets (see
   // visibleMailsWhere), like the entrants / sortants lists.
   @Get()
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequireAnyPermission(Permission.INCOMING_READ, Permission.OUTGOING_READ)
   findAll(@Query() query: FindMailsQueryDto, @CurrentUser() user: AuthUser) {
     return this.mailService.findAll(query, user.sub);
   }
 
   // Declared before @Get(':id') so "entrants" isn't parsed as an id.
   @Get('entrants')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequirePermissions(Permission.INCOMING_READ)
   findIncoming(
     @Query() query: FindIncomingMailsQueryDto,
     @CurrentUser() user: AuthUser,
@@ -138,7 +139,7 @@ export class MailController {
   }
 
   @Get('sortants')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequirePermissions(Permission.OUTGOING_READ)
   findOutgoing(
     @Query() query: FindOutgoingMailsQueryDto,
     @CurrentUser() user: AuthUser,
@@ -154,7 +155,7 @@ export class MailController {
 
   // Declared before @Get(':id') so static segments aren't parsed as UUIDs.
   @Get('entrants/export')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequirePermissions(Permission.INCOMING_READ)
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async exportIncoming(
     @Query() query: FindIncomingMailsQueryDto,
@@ -171,7 +172,7 @@ export class MailController {
 
   // Same filters as GET /courriers/sortants, every page.
   @Get('sortants/export')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequirePermissions(Permission.OUTGOING_READ)
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async exportOutgoing(
     @Query() query: FindOutgoingMailsQueryDto,
@@ -197,7 +198,7 @@ export class MailController {
   // The PDF of an authorized sortant (VALIDE, SIGNE, ENVOYE, DECHARGE, or
   // archived from one of them), with its SOR reference.
   @Get(':id/pdf')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequirePermissions(Permission.OUTGOING_READ)
   @Header('Content-Type', 'application/pdf')
   async pdf(
     @Param('id', ParseUUIDPipe) id: string,
@@ -211,7 +212,7 @@ export class MailController {
 
   // The bordereau de transmission (model S·12) of a sent sortant.
   @Get(':id/bordereau')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequirePermissions(Permission.OUTGOING_READ)
   @Header('Content-Type', 'application/pdf')
   async bordereau(
     @Param('id', ParseUUIDPipe) id: string,
@@ -224,7 +225,7 @@ export class MailController {
   }
 
   @Get(':id/historique')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequireAnyPermission(Permission.INCOMING_READ, Permission.OUTGOING_READ)
   historique(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -262,7 +263,7 @@ export class MailController {
   }
 
   @Post(':id/transmit')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequireAnyPermission(Permission.INCOMING_READ, Permission.OUTGOING_READ)
   transmit(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -271,7 +272,7 @@ export class MailController {
   }
 
   @Post(':id/dispatch')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequirePermissions(Permission.INCOMING_READ)
   dispatch(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DispatchMailDto,
@@ -281,7 +282,7 @@ export class MailController {
   }
 
   @Post(':id/dispatch/validate')
-  @RequirePermission(PermissionCode.CourrierDispatchValidate)
+  @RequirePermissions(Permission.INCOMING_DISPATCH_VALIDATE)
   validateDispatch(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -290,7 +291,7 @@ export class MailController {
   }
 
   @Post(':id/supervisor')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequireAnyPermission(Permission.INCOMING_READ, Permission.OUTGOING_READ)
   assignSupervisor(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AssignSupervisorDto,
@@ -300,9 +301,9 @@ export class MailController {
   }
 
   // Sends the courrier to its validator (the dossier's responsible, or the
-  // site's), who then validates it or asks for corrections below.
+  // company's), who then validates it or asks for corrections below.
   @Post(':id/submit-for-validation')
-  @RequirePermission(PermissionCode.CourrierWriteSortant)
+  @RequirePermissions(Permission.OUTGOING_UPDATE)
   submitForValidation(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -331,7 +332,7 @@ export class MailController {
 
   // VALIDE -> SIGNE: the signed scan, its signatory, its date.
   @Post(':id/sign')
-  @RequirePermission(PermissionCode.CourrierSend)
+  @RequirePermissions(Permission.OUTGOING_SEND)
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -360,7 +361,7 @@ export class MailController {
 
   // SIGNE -> ENVOYE, under a new bordereau BT-AAAA-NNNNNN.
   @Post(':id/send')
-  @RequirePermission(PermissionCode.CourrierSend)
+  @RequirePermissions(Permission.OUTGOING_SEND)
   send(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SendMailDto,
@@ -382,11 +383,11 @@ export class MailController {
   }
 
   // Its open instructions are cancelled with it. Optional { note }. By its
-  // designated responsible, its supervisor, its site's responsible, a
-  // platform administrator, or COURRIER_CLOSE at its site — checked in the
+  // designated responsible, its supervisor, its company's responsible, a
+  // holder of role.assign, or incoming.close in its company — checked in the
   // service.
   @Post(':id/close')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequirePermissions(Permission.INCOMING_READ)
   close(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CloseMailDto,
@@ -398,7 +399,7 @@ export class MailController {
   // An entrant once CLOTURE; a sortant once DECHARGE or ANNULE. Optional
   // { reason }.
   @Post(':id/archive')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequireAnyPermission(Permission.INCOMING_READ, Permission.OUTGOING_READ)
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
@@ -408,7 +409,7 @@ export class MailController {
   }
 
   @Post(':id/unarchive')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequireAnyPermission(Permission.INCOMING_READ, Permission.OUTGOING_READ)
   unarchive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RestoreNoteDto,
@@ -420,7 +421,7 @@ export class MailController {
   // A physical effet expected back is handed back — physical custody is the
   // reception's job, hence the registration permission.
   @Post(':id/return')
-  @RequirePermission(PermissionCode.CourrierRegisterEntrant)
+  @RequirePermissions(Permission.INCOMING_CREATE)
   markReturned(@Param('id', ParseUUIDPipe) id: string) {
     return this.mailService.markReturned(id);
   }
@@ -459,8 +460,8 @@ export class MailController {
     return this.mailService.discharge(id, user.sub, dto, file);
   }
 
-  // Authorization (creator / site responsible / platform admin) is enforced
-  // inside MailService.setOwner — no blanket @RequirePermission here.
+  // Authorization (creator / company responsible / company administrator) is enforced
+  // inside MailService.setOwner — no blanket @RequirePermissions here.
   @Patch(':id/owner')
   setOwner(
     @Param('id', ParseUUIDPipe) id: string,
@@ -471,13 +472,13 @@ export class MailController {
   }
 
   @Get(':id/access')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequireAnyPermission(Permission.INCOMING_READ, Permission.OUTGOING_READ)
   getAccess(@Param('id', ParseUUIDPipe) id: string) {
     return this.mailService.getAccess(id);
   }
 
   @Put(':id/access')
-  @RequirePermission(PermissionCode.CourrierRead)
+  @RequireAnyPermission(Permission.INCOMING_READ, Permission.OUTGOING_READ)
   setAccess(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SetAccessDto) {
     return this.mailService.setAccess(id, dto);
   }

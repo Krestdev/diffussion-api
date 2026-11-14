@@ -20,12 +20,12 @@ import {
 } from '../../common/dto/pagination.query.dto';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import { assertAdministers, RbacService } from '../../auth/rbac/rbac.service';
+import { AccessService } from '../../auth/access/access.service';
 import {
-  assertSiteExists,
-  ownSiteFilter,
-} from '../../common/utils/site-referentials';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
+  assertCompanyExists,
+  ownCompanyFilter,
+} from '../../common/utils/company-referentials';
+import { Permission } from '../../auth/permissions';
 import {
   assertActiveUsers,
   visibleProjectWhere,
@@ -43,7 +43,7 @@ import { FindProjectsQueryDto } from './dto/find-projects.query.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 
 const projectInclude = {
-  site: { select: { id: true, code: true, name: true } },
+  company: { select: { id: true, code: true, name: true } },
   maitreOuvrage: { select: { id: true, name: true } },
   responsible: { select: { id: true, name: true } },
   _count: { select: { contracts: true, dossiers: true } },
@@ -62,9 +62,8 @@ const NEXT_STATUSES: Record<ProjectStatus, ProjectStatus[]> = {
 export { COURRIER_DONE };
 
 /**
- * Projects. Each belongs to one site: seen by that site's users only, and
- * managed by that site's responsible or a platform administrator (who sees
- * every site's). Within its site, it may list the users allowed to open it
+ * Projects. Each belongs to one company: seen by that company's users only, and
+ * managed by whoever holds the project codes there. Within its company, it may list the users allowed to open it
  * (ProjectAccess, see visibleProjectWhere).
  */
 @Injectable()
@@ -73,7 +72,7 @@ export class ProjectService {
     private readonly database: DatabaseService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     private readonly notifications: NotificationsService,
   ) {}
 
@@ -87,40 +86,31 @@ export class ProjectService {
       startDate,
       endDate,
       maitreOuvrageName,
-      siteId: requestedSiteId,
+      companyId: requestedCompanyId,
       ...data
     } = dto;
-    const scope = await this.rbac.managedSites(
+    const companyId =
+      requestedCompanyId ?? (await this.access.companyOf(actingUserId));
+    if (!companyId) throw new BadRequestException('companyId is required');
+    await this.access.assertManages(
       actingUserId,
-      PermissionCode.ProjectCreate,
-    );
-    assertAdministers(scope);
-    let siteId = requestedSiteId;
-    if (!siteId) {
-      if (scope === 'ALL' || scope.length !== 1) {
-        throw new BadRequestException('siteId is required');
-      }
-      siteId = scope[0];
-    }
-    await this.rbac.explainOutOfScope(
-      scope,
-      siteId,
+      Permission.PROJECT_CREATE,
+      companyId,
       'Ce projet',
-      PermissionCode.ProjectCreate,
     );
-    await assertSiteExists(this.database, siteId);
-    await this.assertLinks(data, undefined, siteId);
+    await assertCompanyExists(this.database, companyId);
+    await this.assertLinks(data, undefined, companyId);
     const dates = toDates(startDate, endDate);
     assertDateOrder(dates.startDate, dates.endDate);
     return this.database.project.create({
       data: {
         ...data,
         ...dates,
-        siteId,
+        companyId,
         maitreOuvrageId: await this.maitreOuvrageId(
           data,
           maitreOuvrageName,
-          siteId,
+          companyId,
         ),
       },
       include: projectInclude,
@@ -136,12 +126,12 @@ export class ProjectService {
     const contains = query.search
       ? { contains: query.search, mode: 'insensitive' as const }
       : undefined;
-    const site = await ownSiteFilter(this.rbac, this.database, userId);
-    // Platform administrators: every site's, or the one asked for.
-    const siteScope: Prisma.ProjectWhereInput =
-      site ?? (query.siteId ? { siteId: query.siteId } : {});
+    const company = await ownCompanyFilter(this.access, this.database, userId);
+    // Platform administrators: every company's, or the one asked for.
+    const companyScope: Prisma.ProjectWhereInput =
+      company ?? (query.companyId ? { companyId: query.companyId } : {});
     const where: Prisma.ProjectWhereInput = {
-      ...siteScope,
+      ...companyScope,
       status: query.status,
       OR: contains && [{ name: contains }, { reference: contains }],
       AND: [await this.visibleTo(userId)],
@@ -160,7 +150,7 @@ export class ProjectService {
         }),
         this.database.project.count({ where }),
       ]),
-      this.metrics(siteScope),
+      this.metrics(companyScope),
     ]);
 
     return { data, total, skip, take, metrics };
@@ -218,9 +208,9 @@ export class ProjectService {
         project.status === ProjectStatus.ARCHIVED);
     if (archiving) {
       await this.assertManages(
-        project.siteId,
+        project.companyId,
         actingUserId,
-        PermissionCode.ProjectArchive,
+        Permission.PROJECT_ARCHIVE,
       );
     }
     // Archiving alone needs PROJECT_ARCHIVE only.
@@ -231,9 +221,9 @@ export class ProjectService {
       maitreOuvrageName,
     }).some((value) => value !== undefined);
     if (!archiving || changesOtherFields) {
-      await this.assertManages(project.siteId, actingUserId);
+      await this.assertManages(project.companyId, actingUserId);
     }
-    await this.assertLinks(data, project, project.siteId);
+    await this.assertLinks(data, project, project.companyId);
     await this.assertContentFits(project, data.contentType);
     const dates = toDates(startDate, endDate);
     assertDateOrder(
@@ -259,7 +249,7 @@ export class ProjectService {
     const maitreOuvrageId = await this.maitreOuvrageId(
       data,
       maitreOuvrageName,
-      project.siteId,
+      project.companyId,
     );
     const save = (db: Prisma.TransactionClient) =>
       db.project.update({
@@ -286,9 +276,9 @@ export class ProjectService {
   async remove(id: string, actingUserId: string) {
     const project = await this.findOne(id);
     await this.assertManages(
-      project.siteId,
+      project.companyId,
       actingUserId,
-      PermissionCode.ProjectArchive,
+      Permission.PROJECT_ARCHIVE,
     );
     try {
       await this.database.project.delete({ where: { id } });
@@ -310,16 +300,20 @@ export class ProjectService {
     return this.accessList(id);
   }
 
-  // Replaces the list. A platform administrator or the project's
-  // responsible may.
+  // Replaces the list. The project's responsible, or an administrator of its
+  // company (settings.update there), may.
   async setAccess(id: string, userIds: string[], actingUserId: string) {
     const project = await this.findOne(id);
     if (
       project.responsibleId !== actingUserId &&
-      !(await this.isAdmin(actingUserId))
+      !(await this.access.hasAtCompany(
+        actingUserId,
+        Permission.SETTINGS_UPDATE,
+        project.companyId,
+      ))
     ) {
       throw new ForbiddenException(
-        "Only the project's responsible or a platform administrator can change who may open it",
+        "Only the project's responsible or an administrator can change who may open it",
       );
     }
     const before = (await this.accessList(id)).map((user) => user.id);
@@ -354,7 +348,8 @@ export class ProjectService {
         skip: query.skip,
         take: query.take,
       },
-      'ALL',
+      // Seen by them, so of their company: its entries are that company's.
+      [(await this.access.companyOf(userId)) ?? ''].filter(Boolean),
     );
   }
 
@@ -366,28 +361,19 @@ export class ProjectService {
     });
   }
 
-  private isAdmin(userId: string) {
-    return this.rbac.hasGlobalPermission(
-      userId,
-      PermissionCode.AdminManageReferentials,
-    );
-  }
-
-  // Its own site's projects (open to them) — all of them for a platform
-  // administrator.
+  // Its own company's projects (open to them).
   private async visibleTo(userId: string): Promise<Prisma.ProjectWhereInput> {
-    const site = await ownSiteFilter(this.rbac, this.database, userId);
-    return site ? { ...site, ...visibleProjectWhere(userId) } : {};
+    const company = await ownCompanyFilter(this.access, this.database, userId);
+    return company ? { ...company, ...visibleProjectWhere(userId) } : {};
   }
 
-  // A project is managed by its site's responsible, whoever holds the
-  // permission at its site, or a platform administrator.
+  // A project is managed by whoever holds the permission in its company.
   private async assertManages(
-    siteId: string,
+    companyId: string,
     userId: string,
-    permission = PermissionCode.ProjectUpdate,
+    permission: Permission = Permission.PROJECT_UPDATE,
   ) {
-    await this.rbac.assertManagesSite(userId, permission, siteId, 'Ce projet');
+    await this.access.assertManages(userId, permission, companyId, 'Ce projet');
   }
 
   // A project the user may not open is reported as not found.
@@ -400,7 +386,7 @@ export class ProjectService {
     }
   }
 
-  private async metrics(siteScope: Prisma.ProjectWhereInput) {
+  private async metrics(companyScope: Prisma.ProjectWhereInput) {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     // Weeks start on Monday.
@@ -410,7 +396,7 @@ export class ProjectService {
       now.getDate() - ((now.getDay() + 6) % 7),
     );
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const inProject = { project: siteScope };
+    const inProject = { project: companyScope };
 
     const [
       byStatusRows,
@@ -423,11 +409,11 @@ export class ProjectService {
     ] = await Promise.all([
       this.database.project.groupBy({
         by: ['status'],
-        where: siteScope,
+        where: companyScope,
         _count: true,
       }),
       this.database.project.count({
-        where: { ...siteScope, createdAt: { gte: startOfMonth } },
+        where: { ...companyScope, createdAt: { gte: startOfMonth } },
       }),
       this.database.contract.count({ where: inProject }),
       this.database.contract.count({
@@ -439,7 +425,7 @@ export class ProjectService {
       }),
       this.database.project.count({
         where: {
-          ...siteScope,
+          ...companyScope,
           status: ProjectStatus.ACTIVE,
           responsibleId: null,
         },
@@ -556,12 +542,12 @@ export class ProjectService {
   }
 
   // The maître d'ouvrage given by name: found or created — on the
-  // project's site. `undefined` keeps the one given by id, or the current
+  // project's company. `undefined` keeps the one given by id, or the current
   // one.
   private async maitreOuvrageId(
     data: { maitreOuvrageId?: string },
     name: string | undefined,
-    siteId: string,
+    companyId: string,
   ) {
     if (name === undefined) return data.maitreOuvrageId;
     if (data.maitreOuvrageId) {
@@ -569,7 +555,7 @@ export class ProjectService {
         'Give the maître d’ouvrage by id or by name, not both',
       );
     }
-    return findOrCreateCorrespondent(this.database, name, siteId);
+    return findOrCreateCorrespondent(this.database, name, companyId);
   }
 
   // The maître d'ouvrage must be an active correspondent and the
@@ -579,9 +565,9 @@ export class ProjectService {
     current:
       | { maitreOuvrageId: string | null; responsibleId: string | null }
       | undefined,
-    siteId: string,
+    companyId: string,
   ) {
-    // The maître d'ouvrage is a correspondent of the project's site.
+    // The maître d'ouvrage is a correspondent of the project's company.
     if (
       dto.maitreOuvrageId &&
       dto.maitreOuvrageId !== current?.maitreOuvrageId
@@ -589,7 +575,7 @@ export class ProjectService {
       await assertCorrespondentActive(
         this.database,
         dto.maitreOuvrageId,
-        siteId,
+        companyId,
       );
     }
     if (dto.responsibleId && dto.responsibleId !== current?.responsibleId) {

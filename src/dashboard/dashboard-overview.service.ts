@@ -8,10 +8,13 @@ import {
   Prisma,
   SubscriptionDecision,
 } from '../../generated/prisma/client';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RbacService } from '../auth/rbac/rbac.service';
-import { assertSiteExists } from '../common/utils/site-referentials';
-import { courrierOfSite, taskOfSite } from '../common/utils/site-where';
+import { Permission } from '../auth/permissions';
+import { AccessService } from '../auth/access/access.service';
+import { assertCompanyExists } from '../common/utils/company-referentials';
+import {
+  courrierOfCompany,
+  taskOfCompany,
+} from '../common/utils/company-where';
 import { DatabaseService } from '../database/database.service';
 import { overdueWhere } from '../instructions/instruction-overdue';
 import { localToday, zonedMidnight } from './dashboard.service';
@@ -98,10 +101,10 @@ const rowSelect = {
       responsibleId: true,
       project: projectName,
       contract: { select: { responsibleId: true, project: projectName } },
-      site: { select: { responsibleId: true } },
+      company: { select: { responsibleId: true } },
     },
   },
-  createdBy: { select: { site: { select: { responsibleId: true } } } },
+  createdBy: { select: { company: { select: { responsibleId: true } } } },
 } satisfies Prisma.CourrierSelect;
 
 export type OverviewRow = Prisma.CourrierGetPayload<{
@@ -288,21 +291,21 @@ export function computeKpis(
   };
 }
 
-// The site responsible is the last resort: same order as
+// The company responsible is the last resort: same order as
 // MailService.validatorOf.
 function validatorOf(row: OverviewRow) {
   if (row.dossier) {
     return (
       row.dossier.responsibleId ??
       row.dossier.contract?.responsibleId ??
-      row.dossier.site.responsibleId
+      row.dossier.company.responsibleId
     );
   }
   return (
     row.contract?.responsibleId ??
     row.contract?.project?.responsibleId ??
     row.project?.responsibleId ??
-    row.createdBy?.site?.responsibleId ??
+    row.createdBy?.company?.responsibleId ??
     null
   );
 }
@@ -672,7 +675,9 @@ function priorityWhere(priority: OverviewPriority): Prisma.CourrierWhereInput {
 export function overviewWhere(
   query: DashboardOverviewQueryDto,
 ): Prisma.CourrierWhereInput {
-  const filters: Prisma.CourrierWhereInput[] = [courrierOfSite(query.siteId)];
+  const filters: Prisma.CourrierWhereInput[] = [
+    courrierOfCompany(query.companyId),
+  ];
   if (query.direction) filters.push({ direction: query.direction });
   if (query.typeIds?.length) filters.push({ typeId: { in: query.typeIds } });
   if (query.supervisorId) filters.push({ supervisorId: query.supervisorId });
@@ -701,18 +706,18 @@ export function overviewWhere(
 }
 
 /**
- * The global dashboards (T·1, T·4, T·5), for one site: whoever holds
- * DASHBOARD_GLOBAL_READ globally or at that site, or that site's responsible.
+ * The global dashboards (T·1, T·4, T·5), for one company: whoever holds
+ * DASHBOARD_GLOBAL_READ globally or at that company, or that company's responsible.
  */
 @Injectable()
 export class DashboardOverviewService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
   ) {}
 
   async overview(query: DashboardOverviewQueryDto, userId: string) {
-    await this.assertAllowed(query.siteId, userId);
+    await this.assertAllowed(query.companyId, userId);
     const now = new Date();
     const { current, previous, earliest } = resolveWindows(query, now);
     const [rows, teams] = await Promise.all([
@@ -734,7 +739,7 @@ export class DashboardOverviewService {
         select: rowSelect,
       }),
       this.database.role.findMany({
-        where: { siteId: query.siteId, archivedAt: null },
+        where: { companyId: query.companyId, archivedAt: null },
         select: { id: true, name: true },
         orderBy: { name: 'asc' },
       }),
@@ -763,12 +768,12 @@ export class DashboardOverviewService {
     };
   }
 
-  /** Open tasks per agent of the site, and how many are overdue. */
-  async workload(siteId: string) {
+  /** Open tasks per agent of the company, and how many are overdue. */
+  async workload(companyId: string) {
     const now = new Date();
     const open = {
       AND: [
-        taskOfSite(siteId),
+        taskOfCompany(companyId),
         {
           status: {
             notIn: [InstructionStatus.TERMINEE, InstructionStatus.ANNULEE],
@@ -811,13 +816,13 @@ export class DashboardOverviewService {
     return [...agents.values()].sort((a, b) => b.open - a.open);
   }
 
-  private async assertAllowed(siteId: string, userId: string) {
-    await this.rbac.assertManagesSite(
+  private async assertAllowed(companyId: string, userId: string) {
+    await this.access.assertManages(
       userId,
-      PermissionCode.DashboardGlobalRead,
-      siteId,
+      Permission.DASHBOARD_READ_ALL,
+      companyId,
       'Ce tableau de bord',
     );
-    await assertSiteExists(this.database, siteId);
+    await assertCompanyExists(this.database, companyId);
   }
 }

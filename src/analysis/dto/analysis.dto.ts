@@ -386,11 +386,11 @@ export class CreateCriterionTemplateDto {
 
   @ApiPropertyOptional({
     description:
-      "The site whose fiches it serves. Left out: a common criterion (platform administrator), or the caller's site when they manage only one",
+      "The company whose fiches it serves. Left out: a common criterion (platform administrator), or the caller's company when they manage only one",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -417,39 +417,39 @@ export class CreateCriterionTemplateDto {
   appliedByDefault?: boolean;
 }
 
-// Its site never changes.
+// Its company never changes.
 export class UpdateCriterionTemplateDto extends PartialType(
-  OmitType(CreateCriterionTemplateDto, ['siteId'] as const),
+  OmitType(CreateCriterionTemplateDto, ['companyId'] as const),
 ) {}
 
 export class FindCriteriaQueryDto {
   @ApiPropertyOptional({
     description:
-      "The common criteria plus this site's — what a fiche of that site offers. Left out: the common ones plus the caller's site's (every site's for a platform administrator)",
+      "The common criteria plus this company's — what a fiche of that company offers. Left out: the common ones plus the caller's company's (every company's for a platform administrator)",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 }
 
 export class AnalysisSettingsQueryDto {
   @ApiPropertyOptional({
     description:
-      "This site's settings (its own, else the common ones). Left out: the common ones",
+      "This company's settings (its own, else the common ones). Left out: the common ones",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 }
 
 export class UpdateAnalysisSettingsDto {
   @ApiPropertyOptional({
     description:
-      'Set the settings of this site only. Left out: the common ones (platform administrator)',
+      'Set the settings of this company only. Left out: the common ones (platform administrator)',
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiProperty({
     description:

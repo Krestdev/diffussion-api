@@ -16,9 +16,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AuthUser } from '../auth/types/auth-user.type';
 import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../auth/rbac/permission.guard';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RequirePermission } from '../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../auth/access/permissions.guard';
+import { Permission } from '../auth/permissions';
+import { RequirePermissions } from '../auth/access/decorators';
 import { CriterionTemplateService } from './criterion-template.service';
 import {
   CreateCriterionTemplateDto,
@@ -30,11 +30,11 @@ import {
 
 // Reading the grid is open to anyone who may read a fiche — the frontend
 // needs it to render the form. Editing it is an administration act: the
-// common criteria by a platform administrator, a site's own by whoever
+// common criteria by a platform administrator, a company's own by whoever
 // manages its criteria (checked in the service).
 @ApiTags('analysis-criteria')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionsGuard)
 @Controller('analysis-criteria')
 export class CriterionTemplateController {
   constructor(private readonly templates: CriterionTemplateService) {}
@@ -47,21 +47,21 @@ export class CriterionTemplateController {
     return this.templates.create(dto, user.sub);
   }
 
-  // ?siteId=: what a fiche of that site offers (common + its own).
+  // ?companyId=: what a fiche of that company offers (common + its own).
   @Get()
-  @RequirePermission(PermissionCode.AnalysisRead)
+  @RequirePermissions(Permission.ANALYSIS_READ)
   findAll(@Query() query: FindCriteriaQueryDto, @CurrentUser() user: AuthUser) {
     return this.templates.findAll(query, user.sub);
   }
 
   // Declared before ':id' so "settings" isn't parsed as an id.
   @Get('settings')
-  @RequirePermission(PermissionCode.AnalysisRead)
+  @RequirePermissions(Permission.ANALYSIS_READ)
   getSettings(
     @Query() query: AnalysisSettingsQueryDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.templates.getSettingsFor(query.siteId, user.sub);
+    return this.templates.getSettingsFor(query.companyId, user.sub);
   }
 
   @Patch('settings')
@@ -73,7 +73,7 @@ export class CriterionTemplateController {
   }
 
   @Get(':id')
-  @RequirePermission(PermissionCode.AnalysisRead)
+  @RequirePermissions(Permission.ANALYSIS_READ)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,

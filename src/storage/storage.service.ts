@@ -35,9 +35,13 @@ function requireEnv(name: string): string {
   return value;
 }
 
-// Thin wrapper around RustFS (S3-compatible object storage) so other
+// Thin wrapper around the S3-compatible document storage (dochub) so other
 // modules can upload/download/delete files without touching the AWS SDK
-// directly. Configured entirely from RUSTFS_* env vars.
+// directly. Configured from the S3_* env vars, named as in EXPENZO:
+// S3_BUCKET, S3_REGION, S3_ENDPOINT, S3_FORCE_PATH_STYLE, S3_ACCESS_KEY_ID,
+// S3_SECRET_ACCESS_KEY, S3_KEY_PREFIX (this environment's folder in a shared
+// bucket) and, optionally, S3_PUBLIC_ENDPOINT (the address browsers use, when
+// it differs from the API's).
 @Injectable()
 export class StorageService implements OnModuleInit {
   private readonly logger = new Logger(StorageService.name);
@@ -45,35 +49,43 @@ export class StorageService implements OnModuleInit {
   private readonly publicClient: S3Client;
   private readonly bucket: string;
 
+  private readonly keyPrefix: string;
+
   constructor() {
-    this.bucket = requireEnv('RUSTFS_BUCKET');
+    this.bucket = requireEnv('S3_BUCKET');
+    this.keyPrefix = (process.env.S3_KEY_PREFIX ?? '').replace(
+      /^\/+|\/+$/g,
+      '',
+    );
     const credentials = {
-      accessKeyId: requireEnv('RUSTFS_ACCESS_KEY'),
-      secretAccessKey: requireEnv('RUSTFS_SECRET_KEY'),
+      accessKeyId: requireEnv('S3_ACCESS_KEY_ID'),
+      secretAccessKey: requireEnv('S3_SECRET_ACCESS_KEY'),
     };
+    const region = process.env.S3_REGION || 'us-east-1';
+    const forcePathStyle = process.env.S3_FORCE_PATH_STYLE !== 'false';
     this.client = new S3Client({
-      endpoint: requireEnv('RUSTFS_ENDPOINT'),
-      region: process.env.RUSTFS_REGION ?? 'us-east-1',
-      forcePathStyle: true,
+      endpoint: requireEnv('S3_ENDPOINT'),
+      region,
+      forcePathStyle,
       credentials,
     });
     // Presigned URLs must be signed with the endpoint the client will actually
     // call — the host is part of the signature. Use a dedicated client pointed
     // at the public endpoint when one is configured.
-    const publicEndpoint = process.env.RUSTFS_PUBLIC_ENDPOINT;
+    const publicEndpoint = process.env.S3_PUBLIC_ENDPOINT;
     this.publicClient = publicEndpoint
       ? new S3Client({
           endpoint: publicEndpoint,
-          region: process.env.RUSTFS_REGION ?? 'us-east-1',
-          forcePathStyle: true,
+          region,
+          forcePathStyle,
           credentials,
         })
       : this.client;
   }
 
   /**
-   * Creates the bucket on a fresh RustFS so the first upload doesn't fail
-   * with NoSuchBucket. Never blocks startup: if RustFS is down, the rest of
+   * Creates the bucket on a fresh storage so the first upload doesn't fail
+   * with NoSuchBucket. Never blocks startup: if the storage is down, the rest of
    * the API still works and only file routes fail — logged here so the
    * cause is obvious instead of a bare ECONNREFUSED on the first upload.
    */
@@ -85,7 +97,7 @@ export class StorageService implements OnModuleInit {
         .$metadata?.httpStatusCode;
       if (status !== 404) {
         this.logger.warn(
-          `Object storage unreachable at ${process.env.RUSTFS_ENDPOINT} (${(error as Error).name || 'connection error'}) — file uploads/downloads will fail until RustFS is running`,
+          `Object storage unreachable at ${process.env.S3_ENDPOINT} (${(error as Error).name || 'connection error'}) — file uploads/downloads will fail until it is reachable`,
         );
         return;
       }

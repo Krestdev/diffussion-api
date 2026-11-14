@@ -6,11 +6,11 @@ import { InstructionStatus } from 'generated/prisma/enums';
 export class FindInstructionsQueryDto {
   @ApiPropertyOptional({
     description:
-      "Only this site's tasks — a user only ever sees their own site's",
+      "Only this company's tasks — a user only ever sees their own company's",
   })
   @IsOptional()
   @IsUUID()
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -2,10 +2,10 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 /**
- * What Diffusion decides about a site. A site is a company of the CREAPP core: it is created,
+ * What Diffusion decides about a company. A company is the CREAPP core's: it is created,
  * named, (de)activated and removed there (DirectorySyncService).
  */
-export class UpdateSiteDto {
+export class UpdateCompanyDto {
   @ApiPropertyOptional({ example: 'Douala' })
   @IsOptional()
   @IsString()
@@ -14,7 +14,7 @@ export class UpdateSiteDto {
 
   @ApiPropertyOptional({
     description:
-      'Person responsible for this site ("Responsable du site"): an active person of the company',
+      'Person responsible for this company ("Responsable de la société"): an active person of the company',
   })
   @IsOptional()
   @IsUUID()

@@ -1,36 +1,45 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  ArrayUnique,
+  ArrayMaxSize,
   IsArray,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
+  MinLength,
+  ValidateIf,
 } from 'class-validator';
 
+/** A role of the person's company (its company is theirs, or the core console token's). */
 export class CreateRoleDto {
   @ApiProperty({ example: 'Exécutant' })
   @IsString()
+  @MinLength(1)
   @MaxLength(50)
   name: string;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ nullable: true })
   @IsOptional()
+  @ValidateIf((_, value) => value !== null)
   @IsString()
-  description?: string;
+  @MaxLength(300)
+  description?: string | null;
 
   @ApiPropertyOptional({
-    description:
-      "The site this role belongs to. A site's responsible may omit it (their own site is used) and can't pick another; omitted by a platform administrator: a global role, usable on every site.",
+    description: "Starts from another role's permissions",
   })
   @IsOptional()
-  @IsUUID('4')
-  siteId?: string;
+  @IsUUID('all')
+  copyFromId?: string;
 
-  @ApiPropertyOptional({ type: [String], description: 'Permission ids' })
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Permission codes (e.g. incoming.read); the reads each action implies are added',
+  })
   @IsOptional()
   @IsArray()
-  @ArrayUnique()
-  @IsUUID('4', { each: true })
-  permissionIds?: string[];
+  @IsString({ each: true })
+  @ArrayMaxSize(500)
+  permissions?: string[];
 }

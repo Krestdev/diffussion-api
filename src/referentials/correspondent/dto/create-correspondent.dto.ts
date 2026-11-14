@@ -16,10 +16,10 @@ export class CreateCorrespondentDto {
   name: string;
 
   @ApiProperty({
-    description: "The site it belongs to: only that site's effets use it",
+    description: "The company it belongs to: only that company's effets use it",
   })
   @IsUUID('4')
-  siteId: string;
+  companyId: string;
 
   @ApiPropertyOptional({ description: 'CorrespondentType id' })
   @IsOptional()

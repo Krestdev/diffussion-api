@@ -2,6 +2,7 @@ import {
   ExceptionFilter,
   Catch,
   ArgumentsHost,
+  BadRequestException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -103,9 +104,28 @@ export class AllExceptionsFilter implements ExceptionFilter {
     // A machine-readable reason the UI acts on (NO_APP_ACCESS, UNAUTHENTICATED…).
     const response =
       exception instanceof HttpException ? exception.getResponse() : null;
-    const code =
+    const given =
       response && typeof response === 'object' && 'code' in response
         ? String(response.code)
+        : undefined;
+    // Otherwise the generic reasons the core's console knows (app-admin API): a rejected body,
+    // a name already taken, a record that doesn't exist.
+    const code =
+      given ??
+      (exception instanceof BadRequestException && Array.isArray(message)
+        ? 'VALIDATION_FAILED'
+        : prismaError?.status === Number(HttpStatus.CONFLICT)
+          ? 'UNIQUE_CONSTRAINT'
+          : Number(status) === Number(HttpStatus.NOT_FOUND)
+            ? 'NOT_FOUND'
+            : undefined);
+    const params =
+      response &&
+      typeof response === 'object' &&
+      'params' in response &&
+      response.params &&
+      typeof response.params === 'object'
+        ? (response.params as Record<string, unknown>)
         : undefined;
 
     const stack = exception instanceof Error ? exception.stack : undefined;
@@ -131,6 +151,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       statusCode: status,
       message,
       ...(code ? { code } : {}),
+      ...(params ? { params } : {}),
       requestId: this.cls.get('requestId') ?? null,
     });
   }

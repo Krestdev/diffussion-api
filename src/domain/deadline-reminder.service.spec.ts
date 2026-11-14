@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { SettingsService } from '../administration/settings/settings.service';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DeadlineReminderService } from './deadline-reminder.service';
@@ -24,7 +24,7 @@ const effet = (over: Record<string, unknown> = {}) => ({
   overdueRemindedAt: null,
   dischargeRemindedAt: null,
   dossier: null,
-  createdBy: { siteId: 's-1' },
+  createdBy: { companyId: 's-1' },
   ...over,
 });
 
@@ -89,8 +89,8 @@ describe('DeadlineReminderService', () => {
           useValue: { get: jest.fn(() => Promise.resolve(settings)) },
         },
         {
-          provide: RbacService,
-          useValue: { resolveSiteId: jest.fn().mockResolvedValue('s-1') },
+          provide: AccessService,
+          useValue: { resolveCompanyId: jest.fn().mockResolvedValue('s-1') },
         },
       ],
     }).compile();
@@ -165,7 +165,7 @@ describe('DeadlineReminderService', () => {
     expect(sent().filter((n) => n.type === 'COURRIER_OVERDUE')).toHaveLength(2);
   });
 
-  it('never relaunches when the site turned relaunches off', async () => {
+  it('never relaunches when the company turned relaunches off', async () => {
     settings.overdueReminderFrequency = null;
     courriers.overdue = [
       effet({
@@ -179,7 +179,7 @@ describe('DeadlineReminderService', () => {
     expect(sent()).toHaveLength(0);
   });
 
-  it('also tells the designated responsible when the site says so', async () => {
+  it('also tells the designated responsible when the company says so', async () => {
     settings.remindDesignatedResponsible = true;
     courriers.overdue = [effet({ dueDate: new Date(NOW.getTime() - DAY) })];
 

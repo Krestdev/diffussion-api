@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -10,42 +9,41 @@ import {
   UserStatus,
 } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import {
-  assertAdministers,
-  assertInScope,
-  RbacService,
-  SiteScopeList,
-} from '../../auth/rbac/rbac.service';
+  AccessService,
+  activeDelegationsFilter,
+} from '../../auth/access/access.service';
+import { forbidden } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
-import { AppAccessService } from '../../core/app-access.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { RealtimeGateway } from '../../realtime/realtime.gateway';
+import { RoleService } from '../role/role.service';
 import { FindDirectoryQueryDto } from './dto/find-directory.query.dto';
 import { FindUsersQueryDto } from './dto/find-users.query.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 
 const userInclude = {
   userRoles: { include: { role: true } },
-  site: true,
+  company: true,
   deactivatedBy: { select: { id: true, name: true } },
 } satisfies Prisma.UserInclude;
 
 function toView(user: Prisma.UserGetPayload<{ include: typeof userInclude }>) {
   const { userRoles, ...rest } = user;
-  return { ...rest, roles: userRoles.map((ur) => ur.role) };
-}
-
-// A user's roles are all held at their site, or globally for a platform
-// user (no site) — see UserRole.
-function grantsAt(roleIds: string[], siteId: string | null) {
-  return roleIds.map((roleId) => ({ roleId, siteId }));
+  return {
+    ...rest,
+    // The roles of their company (a role belongs to one company), in use.
+    roles: userRoles
+      .map((ur) => ur.role)
+      .filter((role) => role.companyId === user.companyId && !role.archivedAt),
+  };
 }
 
 /**
  * People as Diffusion sees them. Who they are (name, email, phone, job
- * title, status, company = site) comes from the CREAPP core's directory
+ * title, status, company) comes from the CREAPP core's directory
  * (DirectorySyncService): they are created, invited, suspended and edited in
  * the core's console. Diffusion gives them its roles.
  */
@@ -53,11 +51,11 @@ function grantsAt(roleIds: string[], siteId: string | null) {
 export class UsersService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     private readonly realtime: RealtimeGateway,
     private readonly activity: ActivityService,
     private readonly notifications: NotificationsService,
-    private readonly appAccess: AppAccessService,
+    private readonly roles: RoleService,
   ) {}
 
   // The audit journal (AU·1): role grants and profiles.
@@ -76,14 +74,18 @@ export class UsersService {
       ...extra,
     });
   }
+  /** The administration list: the people of the person's company (user.read). */
   async findAll(query: FindUsersQueryDto, actingUserId: string) {
-    const scope = await this.adminScope(actingUserId);
+    const companyId = await this.adminCompany(
+      actingUserId,
+      Permission.USER_READ,
+    );
     const skip = query.skip ?? 0;
     const take = query.take ?? DEFAULT_TAKE;
     const where: Prisma.UserWhereInput = {
       AND: [
-        scope === 'ALL' ? {} : { siteId: { in: scope } },
-        query.siteId ? { siteId: query.siteId } : {},
+        { companyId },
+        query.companyId ? { companyId: query.companyId } : {},
       ],
       status: query.status,
       OR: query.search
@@ -113,7 +115,10 @@ export class UsersService {
   }
 
   async findOne(id: string, actingUserId: string) {
-    const scope = await this.adminScope(actingUserId);
+    const companyId = await this.adminCompany(
+      actingUserId,
+      Permission.USER_READ,
+    );
     const user = await this.database.user.findUnique({
       where: { id },
       include: userInclude,
@@ -121,118 +126,92 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException(`User ${id} not found`);
     }
-    assertInScope(scope, user.siteId);
+    if (user.companyId !== companyId) {
+      throw new ForbiddenException('This person belongs to another company');
+    }
     return toView(user);
   }
 
+  /**
+   * Their roles (role.assign; CDC G3 no self-edit, G4 only roles within one's own permissions —
+   * RoleService.setUserRoles) and their profile. SUPER_ADMIN is given or taken by a
+   * super-administrator only.
+   */
   async update(id: string, dto: UpdateUserDto, actingUserId: string) {
-    const scope = await this.adminScope(actingUserId);
-    const existing = await this.ensureExists(id);
-    assertInScope(scope, existing.siteId);
-    // A platform administrator's profile is theirs to change only.
-    if (
-      dto.accessProfile !== undefined ||
-      existing.accessProfile === AccessProfile.SUPER_ADMIN
-    ) {
-      this.assertProfileAllowed(
-        scope,
-        dto.accessProfile ?? existing.accessProfile,
-      );
-    }
-    const { roleIds, accessProfile } = dto;
-    const siteId = existing.siteId;
-    await this.assertRolesGrantable(roleIds, siteId);
-
-    const rolesBefore = (
-      await this.database.userRole.findMany({
-        where: { userId: id },
-        select: { role: { select: { name: true } } },
-      })
-    )
-      .map((grant) => grant.role?.name)
-      .filter((name): name is string => Boolean(name))
-      .sort();
-
-    // A global grant isn't turned into a grant at the user's site: it stays
-    // if the role is still listed, and always for a site administrator, who
-    // has no say on platform rights.
-    const keptGlobal = roleIds
-      ? (
-          await this.database.userRole.findMany({
-            where: { userId: id, siteId: null },
-            select: { roleId: true },
-          })
-        )
-          .map((grant) => grant.roleId)
-          .filter(
-            (roleId) =>
-              siteId !== null && (scope !== 'ALL' || roleIds.includes(roleId)),
-          )
-      : [];
-
-    // Guarded: replacing the role set may strip the last admin's rights.
-    const user = await this.rbac.withAdminCoverage((tx) =>
-      tx.user.update({
-        where: { id },
-        data: {
-          accessProfile,
-          userRoles: roleIds
-            ? {
-                deleteMany: keptGlobal.length
-                  ? { NOT: { siteId: null, roleId: { in: keptGlobal } } }
-                  : {},
-                create: grantsAt(
-                  [...new Set(roleIds)].filter(
-                    (roleId) => !keptGlobal.includes(roleId),
-                  ),
-                  siteId,
-                ),
-              }
-            : undefined,
-        },
-        include: userInclude,
-      }),
+    const companyId = await this.adminCompany(
+      actingUserId,
+      Permission.ROLE_ASSIGN,
     );
-    this.realtime.broadcast('user:update', { id: user.id });
-    const view = toView(user);
-    const rolesAfter = view.roles.map((role) => role.name).sort();
-    const added = rolesAfter.filter((name) => !rolesBefore.includes(name));
-    const removed = rolesBefore.filter((name) => !rolesAfter.includes(name));
-    if (added.length || removed.length) {
-      await this.journal('user.roles.updated', id, {
-        changes: { roles: [rolesBefore, rolesAfter] },
-        metadata: { added, removed },
-      });
-      // The core's launcher and the person's other tabs follow at once.
-      await this.appAccess.refresh([id]);
-      await this.notifications.notifyAccessChanged(
-        [id],
-        actingUserId,
-        [
-          added.length ? `Rôle attribué : ${added.join(', ')}.` : '',
-          removed.length ? `Rôle retiré : ${removed.join(', ')}.` : '',
-        ]
-          .filter(Boolean)
-          .join(' '),
+    const existing = await this.ensureExists(id);
+    if (existing.companyId !== companyId) {
+      throw new ForbiddenException('This person belongs to another company');
+    }
+    const profileChanges =
+      dto.accessProfile !== undefined &&
+      dto.accessProfile !== existing.accessProfile;
+    if (
+      profileChanges &&
+      (dto.accessProfile === AccessProfile.SUPER_ADMIN ||
+        existing.accessProfile === AccessProfile.SUPER_ADMIN) &&
+      !(await this.access.isPlatformAdmin(actingUserId))
+    ) {
+      throw new ForbiddenException(
+        'Only a Diffusion super-administrator can manage a SUPER_ADMIN profile',
       );
     }
-    if (existing.accessProfile !== user.accessProfile) {
+
+    if (dto.roleIds) {
+      const before = await this.roleNames(id, companyId);
+      await this.roles.setUserRoles(companyId, id, dto.roleIds);
+      const after = await this.roleNames(id, companyId);
+      const added = after.filter((name) => !before.includes(name));
+      const removed = before.filter((name) => !after.includes(name));
+      if (added.length || removed.length) {
+        await this.notifications.notifyAccessChanged(
+          [id],
+          actingUserId,
+          [
+            added.length ? `Rôle attribué : ${added.join(', ')}.` : '',
+            removed.length ? `Rôle retiré : ${removed.join(', ')}.` : '',
+          ]
+            .filter(Boolean)
+            .join(' '),
+        );
+      }
+    }
+    if (profileChanges) {
+      await this.database.user.update({
+        where: { id },
+        data: { accessProfile: dto.accessProfile },
+      });
       await this.journal('user.access-profile.updated', id, {
-        changes: {
-          accessProfile: [existing.accessProfile, user.accessProfile],
-        },
+        changes: { accessProfile: [existing.accessProfile, dto.accessProfile] },
       });
     }
-    return view;
+    const user = await this.database.user.findUniqueOrThrow({
+      where: { id },
+      include: userInclude,
+    });
+    this.realtime.broadcast('user:update', { id: user.id });
+    return toView(user);
   }
+
+  private async roleNames(userId: string, companyId: string) {
+    const grants = await this.database.userRole.findMany({
+      where: { userId, role: { companyId, archivedAt: null } },
+      select: { role: { select: { name: true } } },
+    });
+    return grants.map((grant) => grant.role.name).sort();
+  }
+
   // -------------------------------------------------------------- directory
 
   /**
    * The people pickers (superviseur, agents, validateur, signataire...):
    * readable by every signed-in user, unlike the administration list. The
-   * active people of the caller's own site — any site for a platform
+   * active people of the caller's own company — any company for a platform
    * administrator — with only what a picker shows. `ids` resolves people
-   * already chosen, whatever their site or status.
+   * already chosen, whatever their company or status.
    */
   async directory(query: FindDirectoryQueryDto, actingUserId: string) {
     const select = {
@@ -240,7 +219,7 @@ export class UsersService {
       name: true,
       email: true,
       function: true,
-      siteId: true,
+      companyId: true,
       status: true,
     } satisfies Prisma.UserSelect;
     const take = query.take ?? 200;
@@ -253,25 +232,15 @@ export class UsersService {
       });
     }
 
-    const global = await this.rbac.hasGlobalPermission(
-      actingUserId,
-      PermissionCode.AdminManageUsers,
-    );
-    let siteId = query.siteId;
-    if (!global) {
-      const me = await this.database.user.findUnique({
-        where: { id: actingUserId },
-        select: { siteId: true },
-      });
-      // Their own site's people only.
-      if (!me?.siteId || (siteId && siteId !== me.siteId)) return [];
-      siteId = me.siteId;
-    }
+    // Their own company's people only.
+    const own = await this.access.companyOf(actingUserId);
+    if (!own || (query.companyId && query.companyId !== own)) return [];
+    const companyId = own;
 
-    const now = new Date();
     const holds = query.permission
       ? {
           role: {
+            companyId,
             archivedAt: null,
             rolePermissions: {
               some: { permission: { code: query.permission } },
@@ -281,32 +250,18 @@ export class UsersService {
       : undefined;
     const where: Prisma.UserWhereInput = {
       status: UserStatus.ACTIVE,
-      ...(siteId ? { siteId } : {}),
+      companyId,
       AND: [
         holds
           ? {
               OR: [
-                {
-                  userRoles: {
-                    some: {
-                      ...holds,
-                      ...(siteId ? { OR: [{ siteId }, { siteId: null }] } : {}),
-                    },
-                  },
-                },
+                { userRoles: { some: holds } },
                 {
                   delegationsReceived: {
                     some: {
                       ...holds,
-                      ...(siteId ? { siteId } : {}),
-                      startDate: { lte: now },
-                      endDate: {
-                        gte: new Date(
-                          now.getFullYear(),
-                          now.getMonth(),
-                          now.getDate(),
-                        ),
-                      },
+                      companyId,
+                      ...activeDelegationsFilter(),
                     },
                   },
                 },
@@ -332,27 +287,14 @@ export class UsersService {
     });
   }
 
-  // SUPER_ADMIN is granted by a platform administrator only.
-  private assertProfileAllowed(
-    scope: SiteScopeList,
-    profile: AccessProfile | undefined,
-  ) {
-    if (profile === AccessProfile.SUPER_ADMIN && scope !== 'ALL') {
-      throw new ForbiddenException(
-        'Only a platform administrator can manage a SUPER_ADMIN profile',
-      );
-    }
-  }
-
-  // 'ALL' for a platform administrator, else the site they are the
-  // responsible of; anyone else is refused.
-  private async adminScope(actingUserId: string): Promise<SiteScopeList> {
-    const scope = await this.rbac.administeredSites(
-      actingUserId,
-      PermissionCode.AdminManageUsers,
-    );
-    assertAdministers(scope);
-    return scope;
+  /** The person's company, when they hold `permission` there (403 otherwise). */
+  private async adminCompany(
+    actingUserId: string,
+    permission: Permission,
+  ): Promise<string> {
+    const [companyId] = await this.access.scope(actingUserId, permission);
+    if (!companyId) throw forbidden(permission);
+    return companyId;
   }
 
   private async ensureExists(id: string) {
@@ -361,35 +303,5 @@ export class UsersService {
       throw new NotFoundException(`User ${id} not found`);
     }
     return user;
-  }
-
-  // Known, not archived, global or of the user's own site.
-  private async assertRolesGrantable(
-    roleIds: string[] | undefined,
-    siteId: string | null,
-  ) {
-    if (!roleIds?.length) return;
-    const found = await this.database.role.findMany({
-      where: { id: { in: roleIds } },
-      select: { id: true, name: true, siteId: true, archivedAt: true },
-    });
-    const missing = roleIds.filter((id) => !found.some((r) => r.id === id));
-    if (missing.length) {
-      throw new BadRequestException(`Unknown role ids: ${missing.join(', ')}`);
-    }
-    const archived = found.filter((role) => role.archivedAt);
-    if (archived.length) {
-      throw new BadRequestException(
-        `Archived roles cannot be granted: ${archived.map((role) => role.name).join(', ')}`,
-      );
-    }
-    const elsewhere = found.filter(
-      (role) => role.siteId !== null && role.siteId !== siteId,
-    );
-    if (elsewhere.length) {
-      throw new BadRequestException(
-        `Roles of another site: ${elsewhere.map((role) => role.name).join(', ')}`,
-      );
-    }
   }
 }

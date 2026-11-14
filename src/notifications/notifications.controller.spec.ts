@@ -1,11 +1,8 @@
 import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PermissionGuard } from '../auth/rbac/permission.guard';
-import {
-  PERMISSION_METADATA_KEY,
-  PermissionCode,
-} from '../auth/rbac/rbac.constants';
-import { PLATFORM_ONLY_METADATA_KEY } from '../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../auth/access/permissions.guard';
+import { Permission } from '../auth/permissions';
+import { PERMISSIONS_KEY, PLATFORM_ADMIN_KEY } from '../auth/access/decorators';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 import { NotificationStatus } from '../../generated/prisma/client';
@@ -26,7 +23,7 @@ describe('NotificationsController', () => {
       controllers: [NotificationsController],
       providers: [{ provide: NotificationsService, useValue: service }],
     })
-      .overrideGuard(PermissionGuard)
+      .overrideGuard(PermissionsGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
@@ -44,10 +41,10 @@ describe('NotificationsController', () => {
       NotificationsController.prototype,
       'create',
     )!.value as object;
-    expect(Reflect.getMetadata(PERMISSION_METADATA_KEY, handler)).toBe(
-      PermissionCode.AdminManageUsers,
-    );
-    expect(Reflect.getMetadata(PLATFORM_ONLY_METADATA_KEY, handler)).toBe(true);
+    expect(Reflect.getMetadata(PERMISSIONS_KEY, handler)).toEqual([
+      Permission.ROLE_ASSIGN,
+    ]);
+    expect(Reflect.getMetadata(PLATFORM_ADMIN_KEY, handler)).toBe(true);
   });
 
   it('leaves the inbox routes open to every user', () => {
@@ -61,9 +58,7 @@ describe('NotificationsController', () => {
         NotificationsController.prototype,
         route,
       )!.value as object;
-      expect(
-        Reflect.getMetadata(PERMISSION_METADATA_KEY, handler),
-      ).toBeUndefined();
+      expect(Reflect.getMetadata(PERMISSIONS_KEY, handler)).toBeUndefined();
     }
   });
 
@@ -72,9 +67,11 @@ describe('NotificationsController', () => {
       sub: 'u-1',
       email: 'u@x.com',
       name: 'U',
-      siteId: 's-1',
+      companyId: 's-1',
       sid: 'sid-1',
       impersonator: null,
+      permissions: new Set<string>(),
+      platformAdmin: false,
     });
     expect(service.markStatus).toHaveBeenCalledWith(
       'n-1',

@@ -2,16 +2,16 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException } from '@nestjs/common';
 import { DeliverableService } from './deliverable.service';
 import { DatabaseService } from '../../database/database.service';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { AccessService } from '../../auth/access/access.service';
 import { ActivityService } from '../../activity/activity.service';
 import {
   InstructionStatus,
   LivrableStatus,
 } from '../../../generated/prisma/client';
 
-// Dossier-state rules (RG-DOS-007, site activity, progress) are covered by
+// Dossier-state rules (RG-DOS-007, company activity, progress) are covered by
 // the DossierService spec; here they're stubbed so fixtures don't need a
-// full dossier/site graph.
+// full dossier/company graph.
 jest.mock('../../common/utils/dossier-lifecycle', () => ({
   assertDossierOpenForActivity: jest.fn(),
   markDossierInProgress: jest.fn(),
@@ -25,11 +25,11 @@ describe('DeliverableService', () => {
     instruction: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
-  let rbac: { siteFilter: jest.Mock };
+  let access: { companyFilter: jest.Mock };
 
   beforeEach(async () => {
     // A global grant unless a test says otherwise.
-    rbac = { siteFilter: jest.fn().mockResolvedValue({}) };
+    access = { companyFilter: jest.fn().mockResolvedValue({}) };
     database = {
       livrable: {
         create: jest.fn(),
@@ -61,7 +61,7 @@ describe('DeliverableService', () => {
       providers: [
         DeliverableService,
         { provide: DatabaseService, useValue: database },
-        { provide: RbacService, useValue: rbac },
+        { provide: AccessService, useValue: access },
         {
           provide: ActivityService,
           useValue: { tryRecord: jest.fn().mockResolvedValue('log-1') },
@@ -99,8 +99,8 @@ describe('DeliverableService', () => {
       });
     });
 
-    it("also lists the livrables of a contract's task, which has no site", async () => {
-      rbac.siteFilter.mockImplementation((_u, _code, toWhere) =>
+    it("also lists the livrables of a contract's task, which has no company", async () => {
+      access.companyFilter.mockImplementation((_u, _code, toWhere) =>
         Promise.resolve(toWhere({ in: ['s-1'] })),
       );
 
@@ -108,7 +108,7 @@ describe('DeliverableService', () => {
 
       const or = listed().OR as Record<string, unknown>[];
       expect(or[0]).toEqual({
-        instruction: { dossier: { siteId: { in: ['s-1'] } } },
+        instruction: { dossier: { companyId: { in: ['s-1'] } } },
       });
       expect(or[1]).toMatchObject({
         instruction: {

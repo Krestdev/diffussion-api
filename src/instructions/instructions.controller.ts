@@ -27,10 +27,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../auth/rbac/permission.guard';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RequirePermission } from '../auth/rbac/require-permission.decorator';
-import { SiteScope, fromParam } from '../auth/rbac/site-scope.decorator';
+import { PermissionsGuard } from '../auth/access/permissions.guard';
+import { Permission } from '../auth/permissions';
+import { RequirePermissions } from '../auth/access/decorators';
+import { SameCompany, fromParam } from '../auth/access/decorators';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AuthUser } from '../auth/types/auth-user.type';
 import { AssignInstructionDto } from './dto/assign-instruction.dto';
@@ -50,9 +50,9 @@ import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 
 @ApiTags('instructions')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
-// Permissions are checked at the site of the targeted resource.
-@SiteScope(fromParam('instruction'))
+@UseGuards(CoreAuthGuard, PermissionsGuard)
+// Permissions are checked at the company of the targeted resource.
+@SameCompany(fromParam('instruction'))
 // Livrables come back as their current version, with earlier versions in
 // `history` (see LivrableHistoryInterceptor).
 @UseInterceptors(LivrableHistoryInterceptor)
@@ -60,7 +60,7 @@ import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 export class InstructionsController {
   constructor(private readonly instructionsService: InstructionsService) {}
 
-  // INSTRUCTION_CREATE at the dossier's site, or the effet's supervisor:
+  // INSTRUCTION_CREATE at the dossier's company, or the effet's supervisor:
   // checked in the service.
   @Post()
   create(@Body() dto: CreateInstructionsDto, @CurrentUser() user: AuthUser) {
@@ -87,7 +87,7 @@ export class InstructionsController {
   }
 
   // Instructions in progress per agent, with their capacity. Declared
-  // before ':id'. Scoped in the service to the sites where the caller may
+  // before ':id'. Scoped in the service to the companies where the caller may
   // assign tasks.
   @Get('workload')
   workload(
@@ -117,7 +117,7 @@ export class InstructionsController {
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.InstructionUpdate)
+  @RequirePermissions(Permission.INSTRUCTION_UPDATE)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateInstructionDto,
@@ -139,7 +139,7 @@ export class InstructionsController {
     );
   }
 
-  // INSTRUCTION_ASSIGN at the task's site, or the supervisor of its effet:
+  // INSTRUCTION_ASSIGN at the task's company, or the supervisor of its effet:
   // checked in the service.
   @Post(':id/assign')
   assign(
@@ -263,7 +263,7 @@ export class InstructionsController {
   }
 
   @Patch(':id/close')
-  @RequirePermission(PermissionCode.InstructionClose)
+  @RequirePermissions(Permission.INSTRUCTION_CLOSE)
   close(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CloseInstructionDto,
@@ -272,7 +272,7 @@ export class InstructionsController {
   }
 
   @Patch(':id/cancel')
-  @RequirePermission(PermissionCode.InstructionCancel)
+  @RequirePermissions(Permission.INSTRUCTION_CANCEL)
   cancel(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CancelInstructionDto,

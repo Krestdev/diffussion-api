@@ -24,8 +24,8 @@ export class DashboardController {
     private readonly overviewService: DashboardOverviewService,
   ) {}
 
-  // One site's global dashboards: DASHBOARD_GLOBAL_READ globally or at that
-  // site, or its responsible.
+  // One company's global dashboards: DASHBOARD_GLOBAL_READ globally or at that
+  // company, or its responsible.
   @Get('overview')
   overview(
     @Query() query: DashboardOverviewQueryDto,
@@ -42,7 +42,7 @@ export class DashboardController {
   ) {
     const { format, sections, ...filters } = query;
     const overview = await this.overviewService.overview(filters, user.sub);
-    const workload = await this.overviewService.workload(query.siteId);
+    const workload = await this.overviewService.workload(query.companyId);
     const tables = exportTables(
       overview,
       workload,

@@ -14,12 +14,12 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
 import {
-  PlatformOnly,
-  RequirePermission,
-} from '../../auth/rbac/require-permission.decorator';
+  PlatformAdmin,
+  RequirePermissions,
+} from '../../auth/access/decorators';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { CourrierNatureService } from './courrier-nature.service';
 import { CreateCourrierNatureDto } from './dto/create-courrier-nature.dto';
@@ -27,14 +27,14 @@ import { UpdateCourrierNatureDto } from './dto/update-courrier-nature.dto';
 
 @ApiTags('courrier-natures')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionsGuard)
 @Controller('courrier-natures')
 export class CourrierNatureController {
   constructor(private readonly courrierNatureService: CourrierNatureService) {}
 
   @Post()
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  @PlatformOnly()
+  @RequirePermissions(Permission.SETTINGS_UPDATE)
+  @PlatformAdmin()
   create(@Body() dto: CreateCourrierNatureDto) {
     return this.courrierNatureService.create(dto);
   }
@@ -50,8 +50,8 @@ export class CourrierNatureController {
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  @PlatformOnly()
+  @RequirePermissions(Permission.SETTINGS_UPDATE)
+  @PlatformAdmin()
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCourrierNatureDto,
@@ -61,8 +61,8 @@ export class CourrierNatureController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  @PlatformOnly()
+  @RequirePermissions(Permission.SETTINGS_UPDATE)
+  @PlatformAdmin()
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.courrierNatureService.remove(id);
   }

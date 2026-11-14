@@ -19,7 +19,7 @@ import type {
 import { DatabaseService } from '../database/database.service';
 import { taskOverdueWhere } from '../instructions/instruction-overdue';
 import { NotificationsService } from '../notifications/notifications.service';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
 
 const SWEEP_INTERVAL_MS = 10 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -61,8 +61,8 @@ const courrierSelect = {
   dischargeDueDate: true,
   overdueRemindedAt: true,
   dischargeRemindedAt: true,
-  dossier: { select: { siteId: true } },
-  createdBy: { select: { siteId: true } },
+  dossier: { select: { companyId: true } },
+  createdBy: { select: { companyId: true } },
 } satisfies Prisma.CourrierSelect;
 type CourrierRow = Prisma.CourrierGetPayload<{ select: typeof courrierSelect }>;
 
@@ -80,7 +80,7 @@ const taskSelect = {
 } satisfies Prisma.InstructionSelect;
 
 /**
- * The PA·8 reminders, by each object's site settings:
+ * The PA·8 reminders, by each object's company settings:
  *  - before a deadline (reminderDaysBefore): an effet's, a task's — once;
  *  - once overdue: an effet's deadline, a sortant's discharge, then again
  *    every overdueReminderFrequency (never again when null) — tasks get
@@ -102,7 +102,7 @@ export class DeadlineReminderService
     private readonly database: DatabaseService,
     private readonly notifications: NotificationsService,
     private readonly settings: SettingsService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
   ) {}
 
   onApplicationBootstrap() {
@@ -116,11 +116,12 @@ export class DeadlineReminderService
   }
 
   async sweep(now = new Date()) {
-    // One read of each site's settings per sweep.
+    // One read of each company's settings per sweep.
     const cache = new Map<string | null, Promise<GeneralSettings>>();
-    const settingsOf = (siteId: string | null) => {
-      if (!cache.has(siteId)) cache.set(siteId, this.settings.get(siteId));
-      return cache.get(siteId)!;
+    const settingsOf = (companyId: string | null) => {
+      if (!cache.has(companyId))
+        cache.set(companyId, this.settings.get(companyId));
+      return cache.get(companyId)!;
     };
     for (const [label, step] of [
       ['effets due soon', () => this.courriersDueSoon(now, settingsOf)],
@@ -144,9 +145,9 @@ export class DeadlineReminderService
 
   private async courriersDueSoon(
     now: Date,
-    settingsOf: (siteId: string | null) => Promise<GeneralSettings>,
+    settingsOf: (companyId: string | null) => Promise<GeneralSettings>,
   ) {
-    // The widest window any site may use; each site's is checked below.
+    // The widest window any company may use; each company's is checked below.
     const horizon = new Date(now.getTime() + 61 * DAY_MS);
     const rows = await this.database.courrier.findMany({
       where: {
@@ -160,7 +161,7 @@ export class DeadlineReminderService
       select: courrierSelect,
     });
     for (const row of rows) {
-      const settings = await settingsOf(courrierSite(row));
+      const settings = await settingsOf(courrierCompany(row));
       const deadline = (row.supervisorDueDate ?? row.dueDate)!;
       if (!withinDays(now, deadline, settings.reminderDaysBefore)) continue;
       const { count } = await this.database.courrier.updateMany({
@@ -179,7 +180,7 @@ export class DeadlineReminderService
 
   private async courriersOverdue(
     now: Date,
-    settingsOf: (siteId: string | null) => Promise<GeneralSettings>,
+    settingsOf: (companyId: string | null) => Promise<GeneralSettings>,
   ) {
     const rows = await this.database.courrier.findMany({
       where: {
@@ -192,7 +193,7 @@ export class DeadlineReminderService
       select: courrierSelect,
     });
     for (const row of rows) {
-      const settings = await settingsOf(courrierSite(row));
+      const settings = await settingsOf(courrierCompany(row));
       if (!isDue(row.overdueRemindedAt, now, settings)) continue;
       if (!(await this.claimCourrier(row, 'overdueRemindedAt', now))) continue;
       const deadline = (row.supervisorDueDate ?? row.dueDate)!;
@@ -207,7 +208,7 @@ export class DeadlineReminderService
 
   private async dischargesLate(
     now: Date,
-    settingsOf: (siteId: string | null) => Promise<GeneralSettings>,
+    settingsOf: (companyId: string | null) => Promise<GeneralSettings>,
   ) {
     const rows = await this.database.courrier.findMany({
       where: {
@@ -218,7 +219,7 @@ export class DeadlineReminderService
       select: courrierSelect,
     });
     for (const row of rows) {
-      const settings = await settingsOf(courrierSite(row));
+      const settings = await settingsOf(courrierCompany(row));
       if (!isDue(row.dischargeRemindedAt, now, settings)) continue;
       if (!(await this.claimCourrier(row, 'dischargeRemindedAt', now))) {
         continue;
@@ -257,7 +258,7 @@ export class DeadlineReminderService
 
   private async tasksDueSoon(
     now: Date,
-    settingsOf: (siteId: string | null) => Promise<GeneralSettings>,
+    settingsOf: (companyId: string | null) => Promise<GeneralSettings>,
   ) {
     const horizon = new Date(now.getTime() + 61 * DAY_MS);
     const rows = await this.database.instruction.findMany({
@@ -269,7 +270,7 @@ export class DeadlineReminderService
       select: taskSelect,
     });
     for (const row of rows) {
-      const settings = await settingsOf(await this.taskSite(row.id));
+      const settings = await settingsOf(await this.taskCompany(row.id));
       if (!withinDays(now, row.dueDate!, settings.reminderDaysBefore)) continue;
       const { count } = await this.database.instruction.updateMany({
         where: { id: row.id, dueReminderSentAt: null },
@@ -295,14 +296,14 @@ export class DeadlineReminderService
   // after it are sent here.
   private async tasksOverdue(
     now: Date,
-    settingsOf: (siteId: string | null) => Promise<GeneralSettings>,
+    settingsOf: (companyId: string | null) => Promise<GeneralSettings>,
   ) {
     const rows = await this.database.instruction.findMany({
       where: { ...taskOverdueWhere(now), overdueNotifiedAt: { not: null } },
       select: taskSelect,
     });
     for (const row of rows) {
-      const settings = await settingsOf(await this.taskSite(row.id));
+      const settings = await settingsOf(await this.taskCompany(row.id));
       const last = row.overdueRemindedAt ?? row.overdueNotifiedAt;
       if (!settings.overdueReminderFrequency) continue;
       if (
@@ -337,8 +338,8 @@ export class DeadlineReminderService
     }
   }
 
-  private async taskSite(id: string) {
-    return (await this.rbac.resolveSiteId('instruction', id)) ?? null;
+  private async taskCompany(id: string) {
+    return (await this.access.resolveCompanyId('instruction', id)) ?? null;
   }
 
   // ------------------------------------------------------------------ send
@@ -373,14 +374,14 @@ export class DeadlineReminderService
   }
 }
 
-// An effet's site: its dossier's, else its registrant's.
-function courrierSite(row: CourrierRow): string | null {
-  return row.dossier?.siteId ?? row.createdBy?.siteId ?? null;
+// An effet's company: its dossier's, else its registrant's.
+function courrierCompany(row: CourrierRow): string | null {
+  return row.dossier?.companyId ?? row.createdBy?.companyId ?? null;
 }
 
 // Who hears about an effet's deadline: its supervisor (else its designated
 // responsible), a sortant's author, and its designated responsible too when
-// the site says so.
+// the company says so.
 function courrierRecipients(row: CourrierRow, alsoResponsible: boolean) {
   return [
     row.supervisorId ?? row.ownerId,

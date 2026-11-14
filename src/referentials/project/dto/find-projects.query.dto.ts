@@ -12,9 +12,9 @@ export class FindProjectsQueryDto extends PaginationQueryDto {
 
   @ApiPropertyOptional({
     description:
-      "Only this site's projects (a platform administrator; anyone else only ever sees their own site's)",
+      "Only this company's projects (one only ever sees their own company's)",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 }

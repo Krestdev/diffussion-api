@@ -13,14 +13,14 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
 import {
-  SiteScope,
+  RequirePermissions,
+  SameCompany,
   fromBody,
   fromParam,
-} from '../../auth/rbac/site-scope.decorator';
+} from '../../auth/access/decorators';
 import { AuthUser } from '../../auth/types/auth-user.type';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
@@ -33,28 +33,28 @@ import { UpdateDossierDto } from './dto/update-dossier.dto';
 
 @ApiTags('dossiers')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
-// Permissions are checked at the site of the targeted resource.
-@SiteScope(fromParam('dossier'))
+@UseGuards(CoreAuthGuard, PermissionsGuard)
+// Permissions are checked at the company of the targeted resource.
+@SameCompany(fromParam('dossier'))
 @Controller('dossiers')
 export class DossierController {
   constructor(private readonly dossierService: DossierService) {}
 
   @Get()
-  @RequirePermission(PermissionCode.DossierRead)
+  @RequirePermissions(Permission.DOSSIER_READ)
   findAll(@Query() query: FindDossiersQueryDto, @CurrentUser() user: AuthUser) {
     return this.dossierService.findAll(query, user.sub);
   }
 
   @Post()
-  @RequirePermission(PermissionCode.DossierCreate)
-  @SiteScope(fromBody('site', 'siteId'))
+  @RequirePermissions(Permission.DOSSIER_CREATE)
+  @SameCompany(fromBody('company', 'companyId'))
   create(@Body() dto: CreateDossierDto, @CurrentUser() user: AuthUser) {
     return this.dossierService.create(dto, user.sub);
   }
 
   @Get(':id')
-  @RequirePermission(PermissionCode.DossierRead)
+  @RequirePermissions(Permission.DOSSIER_READ)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -63,8 +63,8 @@ export class DossierController {
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.DossierUpdate)
-  @SiteScope(fromParam('dossier'), fromBody('site', 'siteId'))
+  @RequirePermissions(Permission.DOSSIER_UPDATE)
+  @SameCompany(fromParam('dossier'), fromBody('company', 'companyId'))
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDossierDto,
@@ -74,19 +74,19 @@ export class DossierController {
   }
 
   @Post(':id/close')
-  @RequirePermission(PermissionCode.DossierClose)
+  @RequirePermissions(Permission.DOSSIER_CLOSE)
   close(@Param('id', ParseUUIDPipe) id: string) {
     return this.dossierService.close(id);
   }
 
   @Post(':id/reopen')
-  @RequirePermission(PermissionCode.DossierReopen)
+  @RequirePermissions(Permission.DOSSIER_REOPEN)
   reopen(@Param('id', ParseUUIDPipe) id: string) {
     return this.dossierService.reopen(id);
   }
 
   @Post(':id/archive')
-  @RequirePermission(PermissionCode.DossierArchive)
+  @RequirePermissions(Permission.DOSSIER_ARCHIVE)
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
@@ -95,7 +95,7 @@ export class DossierController {
   }
 
   @Post(':id/unarchive')
-  @RequirePermission(PermissionCode.DossierArchive)
+  @RequirePermissions(Permission.DOSSIER_ARCHIVE)
   unarchive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RestoreNoteDto,
@@ -104,7 +104,7 @@ export class DossierController {
   }
 
   @Get(':id/courriers')
-  @RequirePermission(PermissionCode.DossierRead)
+  @RequirePermissions(Permission.DOSSIER_READ)
   getCourriers(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
@@ -114,7 +114,7 @@ export class DossierController {
   }
 
   @Get(':id/instructions')
-  @RequirePermission(PermissionCode.DossierRead)
+  @RequirePermissions(Permission.DOSSIER_READ)
   getInstructions(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
@@ -124,7 +124,7 @@ export class DossierController {
   }
 
   @Get(':id/livrables')
-  @RequirePermission(PermissionCode.DossierRead)
+  @RequirePermissions(Permission.DOSSIER_READ)
   getLivrables(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,
@@ -134,7 +134,7 @@ export class DossierController {
   }
 
   @Get(':id/historique')
-  @RequirePermission(PermissionCode.AuditRead)
+  @RequirePermissions(Permission.AUDIT_READ)
   getHistorique(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -143,7 +143,7 @@ export class DossierController {
   }
 
   @Get(':id/progression')
-  @RequirePermission(PermissionCode.DossierRead)
+  @RequirePermissions(Permission.DOSSIER_READ)
   getProgression(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -152,7 +152,7 @@ export class DossierController {
   }
 
   @Get(':id/access')
-  @RequirePermission(PermissionCode.DossierRead)
+  @RequirePermissions(Permission.DOSSIER_READ)
   getAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -161,7 +161,7 @@ export class DossierController {
   }
 
   @Put(':id/access')
-  @RequirePermission(PermissionCode.DossierUpdate)
+  @RequirePermissions(Permission.DOSSIER_UPDATE)
   setAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetAccessDto,

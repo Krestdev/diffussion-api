@@ -20,7 +20,7 @@ export class CreateOutgoingMailDto {
 
   @ApiPropertyOptional({
     description:
-      'Effet type (GET /effet-types): a global type or one of its site. Defaults to "Courrier". The reference is given at once from this type\'s model, so the type can no longer change afterwards.',
+      'Effet type (GET /effet-types): a global type or one of its company. Defaults to "Courrier". The reference is given at once from this type\'s model, so the type can no longer change afterwards.',
   })
   @IsOptional()
   @EmptyToUndefined()

@@ -6,11 +6,11 @@ import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 export class FindRolesQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     description:
-      'Only the roles of this site. Everyone only ever sees the global roles plus those of their own site.',
+      'Kept for older clients: a role belongs to one company and everyone only sees the roles of their own company (another company gives an empty list).',
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({
     description:

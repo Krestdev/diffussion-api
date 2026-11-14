@@ -5,8 +5,8 @@ import {
   InstructionStatus,
   Prisma,
 } from '../../generated/prisma/client';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RbacService, SiteScopeList } from '../auth/rbac/rbac.service';
+import { Permission } from '../auth/permissions';
+import { AccessService } from '../auth/access/access.service';
 import { awaitingValidationBy } from '../common/utils/courrier-validation';
 import { overdueWhere } from '../instructions/instruction-overdue';
 import { visibleDossierWhere } from '../common/utils/dossier-visibility';
@@ -109,7 +109,7 @@ const TODO_STATUSES: InstructionStatus[] = [
 export class DashboardService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
   ) {}
 
   /**
@@ -126,23 +126,20 @@ export class DashboardService {
     const days = query.days ?? 7;
     const timeZone = query.tz ?? 'UTC';
     const global = query.scope === 'global';
-    // Held globally: every site. Held at a site, or as its responsible: that
-    // site only.
-    const sites = global
-      ? await this.rbac.managedSites(userId, PermissionCode.DashboardGlobalRead)
+    // dashboard.read.all: the person's whole company (a person acts only in their own).
+    const companies = global
+      ? await this.access.scope(userId, Permission.DASHBOARD_READ_ALL)
       : null;
-    if (sites?.length === 0) {
+    if (companies?.length === 0) {
       throw new ForbiddenException(
-        'The global dashboard requires DASHBOARD_GLOBAL_READ',
+        'The global dashboard requires dashboard.read.all',
       );
     }
-    const permissions = global
-      ? []
-      : await this.rbac.getPermissionCodes(userId);
+    // The entrants counted: incoming.read.
     const canReadCourriers =
-      global || permissions.includes(PermissionCode.CourrierRead);
+      global || (await this.access.has(userId, Permission.INCOMING_READ));
     const incoming = canReadCourriers
-      ? await this.incomingScope(userId, sites)
+      ? await this.incomingScope(userId, companies)
       : null;
 
     const [tasks, approvals, courriers, trend, activity] = await Promise.all([
@@ -165,21 +162,20 @@ export class DashboardService {
     };
   }
 
-  // The entrants counted: every one or those of some sites (global, `sites`
+  // The entrants counted: those of the person's company (global, `companies`
   // given), else those in the dossiers the caller sees. An entrant without a
-  // dossier yet is on its registrant's site.
+  // dossier yet is on its registrant's company.
   private async incomingScope(
     userId: string,
-    sites: SiteScopeList | null,
+    companies: string[] | null,
   ): Promise<Prisma.CourrierWhereInput> {
     const direction = CourrierDirection.ENTRANT;
-    if (sites === 'ALL') return { direction };
-    if (sites) {
+    if (companies) {
       return {
         direction,
         OR: [
-          { dossier: { siteId: { in: sites } } },
-          { dossierId: null, createdBy: { siteId: { in: sites } } },
+          { dossier: { companyId: { in: companies } } },
+          { dossierId: null, createdBy: { companyId: { in: companies } } },
         ],
       };
     }
@@ -307,16 +303,16 @@ export class DashboardService {
     return { awaitingMyDecision };
   }
 
-  // Dossiers the caller sees, on the sites where they may read courriers.
+  // Dossiers the caller sees, on the companies where they may read courriers.
   private async courrierDossiers(
     userId: string,
   ): Promise<Prisma.DossierWhereInput> {
-    const sites = await this.rbac.siteFilter(
+    const companies = await this.access.companyFilter(
       userId,
-      PermissionCode.CourrierRead,
-      (siteId): Prisma.DossierWhereInput => ({ siteId }),
+      Permission.INCOMING_READ,
+      (companyId): Prisma.DossierWhereInput => ({ companyId }),
     );
-    return { AND: [visibleDossierWhere(userId), sites] };
+    return { AND: [visibleDossierWhere(userId), companies] };
   }
 
   private async getCourriers(incoming: Prisma.CourrierWhereInput) {

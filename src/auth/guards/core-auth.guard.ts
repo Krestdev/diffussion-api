@@ -101,7 +101,7 @@ export class CoreAuthGuard implements CanActivate {
         message: 'You have no access to Diffusion',
       });
     }
-    const { account, session } = result;
+    const { account, session, permissions, platformAdmin } = result;
     const impersonator = session.impersonator
       ? { name: session.impersonator.name, email: session.impersonator.email }
       : null;
@@ -109,12 +109,18 @@ export class CoreAuthGuard implements CanActivate {
       sub: account.id,
       email: account.email,
       name: `${account.firstName} ${account.lastName}`.trim(),
-      siteId: account.tenant.id,
+      companyId: account.tenant.id,
       sid: session.sid,
       impersonator,
+      permissions: new Set(permissions),
+      platformAdmin,
     };
     request.core = { account, session };
     this.cls.set('userId', account.id);
+    // For can()/assertCan() and AccessService: the person's codes in their company.
+    this.cls.set('permissions', permissions);
+    this.cls.set('companyId', account.tenant.id);
+    this.cls.set('platformAdmin', platformAdmin);
     this.cls.set(
       'actorLabel',
       impersonator

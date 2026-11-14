@@ -24,11 +24,11 @@ export class CreateProjectDto {
 
   @ApiPropertyOptional({
     description:
-      "The site it belongs to. A site's responsible may leave it out (their own site); a platform administrator names it",
+      "The company it belongs to: the person's own (may be left out)",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({ example: 'PRJ-2026-07', description: 'Réf Projet' })
   @IsOptional()

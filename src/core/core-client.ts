@@ -55,6 +55,19 @@ export class CoreClient {
     return (await res.json()) as CoreDirectory;
   }
 
+  /** The user's interface language, changed in the core with their own token. */
+  async setLanguage(token: string, language: string): Promise<void> {
+    const res = await this.call('/api/v1/auth/me', {
+      method: 'PATCH',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ language }),
+    });
+    if (!res.ok) throw new CoreUnavailableError(`language: ${res.status}`);
+  }
+
   private async call(path: string, init: RequestInit): Promise<Response> {
     try {
       return await fetch(new URL(path, this.config.get('CORE_URL')), {

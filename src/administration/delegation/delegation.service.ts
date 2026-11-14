@@ -1,22 +1,26 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
   Prisma,
-  SiteStatus,
+  CompanyStatus,
   UserStatus,
 } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import {
-  assertAdministers,
-  assertInScope,
-  RbacService,
-  SiteScopeList,
-} from '../../auth/rbac/rbac.service';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
+import { forbidden } from '../../auth/access/permissions.guard';
+
+/** 403 unless `companyId` is the administrator's own company. */
+function assertInScope(scope: string[], companyId: string | null) {
+  if (companyId === null || !scope.includes(companyId)) {
+    throw new ForbiddenException('This belongs to another company');
+  }
+}
 import {
   DEFAULT_TAKE,
   PaginationQueryDto,
@@ -29,7 +33,7 @@ const include = {
   delegant: { select: { id: true, name: true } },
   delegataire: { select: { id: true, name: true } },
   role: { select: { id: true, name: true } },
-  site: { select: { id: true, name: true } },
+  company: { select: { id: true, name: true } },
 } satisfies Prisma.DelegationInclude;
 
 // What a delegation resolves to once validated — the shape the checks below
@@ -38,7 +42,7 @@ type DelegationShape = {
   delegantId: string;
   delegataireId: string;
   roleId: string;
-  siteId: string;
+  companyId: string;
   startDate: Date;
   endDate: Date;
 };
@@ -49,7 +53,7 @@ export class DelegationService {
     private readonly database: DatabaseService,
     // Required by @AuditLog, which reads `this.activity`.
     private readonly activity: ActivityService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
   ) {}
 
   @AuditLog({
@@ -58,13 +62,13 @@ export class DelegationService {
     operation: 'CREATE',
   })
   async create(dto: CreateDelegationDto, actingUserId: string) {
-    assertInScope(await this.adminScope(actingUserId), dto.siteId);
+    assertInScope(await this.adminScope(actingUserId), dto.companyId);
     const { startDate, endDate, ...data } = dto;
     const shape: DelegationShape = {
       delegantId: dto.delegantId,
       delegataireId: dto.delegataireId,
       roleId: dto.roleId,
-      siteId: dto.siteId,
+      companyId: dto.companyId,
       // The DTO carries ISO date *strings*; Prisma needs Date objects.
       startDate: new Date(startDate),
       endDate: new Date(endDate),
@@ -96,12 +100,16 @@ export class DelegationService {
               },
             },
             { role: { name: { contains: query.search, mode: 'insensitive' } } },
-            { site: { name: { contains: query.search, mode: 'insensitive' } } },
+            {
+              company: {
+                name: { contains: query.search, mode: 'insensitive' },
+              },
+            },
           ],
         }
       : {};
     const where: Prisma.DelegationWhereInput = {
-      AND: [search, scope === 'ALL' ? {} : { siteId: { in: scope } }],
+      AND: [search, { companyId: { in: scope } }],
     };
     const [data, total] = await this.database.$transaction([
       this.database.delegation.findMany({
@@ -125,7 +133,7 @@ export class DelegationService {
     if (!delegation) {
       throw new NotFoundException(`Delegation ${id} not found`);
     }
-    assertInScope(scope, delegation.siteId);
+    assertInScope(scope, delegation.companyId);
     return delegation;
   }
 
@@ -141,11 +149,11 @@ export class DelegationService {
       delegantId: dto.delegantId ?? existing.delegantId,
       delegataireId: dto.delegataireId ?? existing.delegataireId,
       roleId: dto.roleId ?? existing.roleId,
-      siteId: dto.siteId ?? existing.siteId,
+      companyId: dto.companyId ?? existing.companyId,
       startDate: startDate ? new Date(startDate) : existing.startDate,
       endDate: endDate ? new Date(endDate) : existing.endDate,
     };
-    assertInScope(await this.adminScope(actingUserId), shape.siteId);
+    assertInScope(await this.adminScope(actingUserId), shape.companyId);
     await this.assertValid(shape, id);
 
     return this.database.delegation.update({
@@ -169,22 +177,19 @@ export class DelegationService {
     await this.database.delegation.delete({ where: { id } });
   }
 
-  // Managing delegations is an administration act over people: same scope
-  // as user management — a site's responsible only touches their site's.
-  private async adminScope(actingUserId: string): Promise<SiteScopeList> {
-    const scope = await this.rbac.administeredSites(
-      actingUserId,
-      PermissionCode.AdminManageUsers,
-    );
-    assertAdministers(scope);
+  // Managing delegations is an administration act over people: same right as
+  // giving roles (role.assign), in the administrator's own company only.
+  private async adminScope(actingUserId: string): Promise<string[]> {
+    const scope = await this.access.scope(actingUserId, Permission.ROLE_ASSIGN);
+    if (scope.length === 0) throw forbidden(Permission.ROLE_ASSIGN);
     return scope;
   }
 
   /**
    * A delegation only makes sense if the receiver can actually stand in for
-   * the giver: real, active people, a real role, and the site both of them
-   * belong to (a delegated role only counts at that site, so a delegation
-   * to someone outside the site would grant nothing).
+   * the giver: real, active people, a real role, and the company both of them
+   * belong to (a delegated role only counts at that company, so a delegation
+   * to someone outside the company would grant nothing).
    */
   private async assertValid(shape: DelegationShape, ignoreId?: string) {
     if (shape.endDate.getTime() < shape.startDate.getTime()) {
@@ -194,21 +199,21 @@ export class DelegationService {
       throw new BadRequestException('A user cannot delegate to themselves');
     }
 
-    const [delegant, delegataire, role, site] = await Promise.all([
+    const [delegant, delegataire, role, company] = await Promise.all([
       this.database.user.findUnique({
         where: { id: shape.delegantId },
         select: { name: true, status: true },
       }),
       this.database.user.findUnique({
         where: { id: shape.delegataireId },
-        select: { name: true, status: true, siteId: true },
+        select: { name: true, status: true, companyId: true },
       }),
       this.database.role.findUnique({
         where: { id: shape.roleId },
-        select: { name: true },
+        select: { name: true, companyId: true, archivedAt: true },
       }),
-      this.database.site.findUnique({
-        where: { id: shape.siteId },
+      this.database.company.findUnique({
+        where: { id: shape.companyId },
         select: { name: true, status: true },
       }),
     ]);
@@ -232,50 +237,55 @@ export class DelegationService {
     if (!role) {
       throw new BadRequestException(`Role ${shape.roleId} not found`);
     }
-    if (!site) {
-      throw new BadRequestException(`Site ${shape.siteId} not found`);
+    if (!company) {
+      throw new BadRequestException(`Company ${shape.companyId} not found`);
     }
-    if (site.status !== SiteStatus.ACTIVE) {
+    // Roles belong to one company: only that company's roles are delegated there.
+    if (role.companyId !== shape.companyId) {
       throw new BadRequestException(
-        `Site "${site.name}" is inactive — no new activity can be recorded on it`,
+        `The role "${role.name}" is not a role of company "${company.name}"`,
       );
     }
-    if (delegataire.siteId !== shape.siteId) {
+    if (role.archivedAt) {
       throw new BadRequestException(
-        `${delegataire.name} does not belong to site "${site.name}" — a role can only be delegated within the site`,
+        `The role "${role.name}" is archived — it can't be delegated`,
+      );
+    }
+    if (company.status !== CompanyStatus.ACTIVE) {
+      throw new BadRequestException(
+        `Company "${company.name}" is inactive — no new activity can be recorded on it`,
+      );
+    }
+    if (delegataire.companyId !== shape.companyId) {
+      throw new BadRequestException(
+        `${delegataire.name} does not belong to company "${company.name}" — a role can only be delegated within the company`,
       );
     }
 
-    // One can only hand over what one holds: the role at that site, or the
-    // role globally while belonging there.
+    // One can only hand over what one holds: the role (of that company), while
+    // belonging there.
     const held = await this.database.userRole.findFirst({
       where: {
         userId: shape.delegantId,
         roleId: shape.roleId,
-        OR: [
-          { siteId: shape.siteId },
-          {
-            siteId: null,
-            user: { siteId: shape.siteId },
-          },
-        ],
+        user: { companyId: shape.companyId },
       },
       select: { id: true },
     });
     if (!held) {
       throw new BadRequestException(
-        `${delegant.name} does not hold the role "${role.name}" at site "${site.name}" — nothing to delegate`,
+        `${delegant.name} does not hold the role "${role.name}" at company "${company.name}" — nothing to delegate`,
       );
     }
 
-    // Two open delegations of the same role, at the same site, to the same
+    // Two open delegations of the same role, at the same company, to the same
     // person would grant nothing extra and make the register ambiguous.
     const overlap = await this.database.delegation.findFirst({
       where: {
         id: ignoreId ? { not: ignoreId } : undefined,
         delegataireId: shape.delegataireId,
         roleId: shape.roleId,
-        siteId: shape.siteId,
+        companyId: shape.companyId,
         startDate: { lte: shape.endDate },
         endDate: { gte: shape.startDate },
       },
@@ -283,7 +293,7 @@ export class DelegationService {
     });
     if (overlap) {
       throw new BadRequestException(
-        `${delegataire.name} already holds this role at "${site.name}" from ${overlap.startDate.toISOString().slice(0, 10)} to ${overlap.endDate.toISOString().slice(0, 10)}`,
+        `${delegataire.name} already holds this role at "${company.name}" from ${overlap.startDate.toISOString().slice(0, 10)} to ${overlap.endDate.toISOString().slice(0, 10)}`,
       );
     }
   }

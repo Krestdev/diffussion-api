@@ -22,7 +22,7 @@ export class FindDossiersQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsUUID()
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

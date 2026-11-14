@@ -30,8 +30,8 @@ export class CreateCanalDto {
 
   @ApiProperty({
     description:
-      "The site it belongs to: only that site's effets use it (a name is unique within a site)",
+      "The company it belongs to: only that company's effets use it (a name is unique within a company)",
   })
   @IsUUID('4')
-  siteId: string;
+  companyId: string;
 }

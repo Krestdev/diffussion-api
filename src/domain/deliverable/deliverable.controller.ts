@@ -15,10 +15,13 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
-import { SiteScope, fromParam } from '../../auth/rbac/site-scope.decorator';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
+import {
+  RequirePermissions,
+  SameCompany,
+  fromParam,
+} from '../../auth/access/decorators';
 import { AuthUser } from '../../auth/types/auth-user.type';
 import { RejectLivrableDto } from '../../instructions/dto/request-corrections.dto';
 import { InstructionsService } from '../../instructions/instructions.service';
@@ -31,9 +34,9 @@ import { UpdateDeliverableDto } from './dto/update-deliverable.dto';
 
 @ApiTags('livrables')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
-// Permissions are checked at the site of the targeted resource.
-@SiteScope(fromParam('livrable'))
+@UseGuards(CoreAuthGuard, PermissionsGuard)
+// The targeted livrable must belong to the person's company.
+@SameCompany(fromParam('livrable'))
 @Controller('deliverables')
 export class DeliverableController {
   constructor(
@@ -43,7 +46,7 @@ export class DeliverableController {
 
   // Preparing a task's livrables (create, edit, new version, remove): the
   // executant who subscribed to it, or the holders of the permission at its
-  // site. Depositing and submitting: the subscriber only. See
+  // company. Depositing and submitting: the subscriber only. See
   // InstructionsService.assertMayWorkOn / assertSubscriber.
   @Post()
   async create(
@@ -53,13 +56,13 @@ export class DeliverableController {
     await this.instructionsService.assertMayWorkOn(
       dto.instructionId,
       user.sub,
-      [PermissionCode.LivrableDeposit],
+      [Permission.DELIVERABLE_CREATE],
     );
     return this.deliverableService.create(dto, user.sub);
   }
 
   @Get()
-  @RequirePermission(PermissionCode.LivrableRead)
+  @RequirePermissions(Permission.DELIVERABLE_READ)
   findAll(
     @Query() query: FindDeliverableQueryDto,
     @CurrentUser() user: AuthUser,
@@ -68,7 +71,7 @@ export class DeliverableController {
   }
 
   @Get(':id')
-  @RequirePermission(PermissionCode.LivrableRead)
+  @RequirePermissions(Permission.DELIVERABLE_READ)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.deliverableService.findOneWithHistory(id);
   }
@@ -80,7 +83,7 @@ export class DeliverableController {
     @CurrentUser() user: AuthUser,
   ) {
     await this.assertMayWorkOnLivrable(id, user.sub, [
-      PermissionCode.LivrableDeposit,
+      Permission.DELIVERABLE_CREATE,
     ]);
     return this.deliverableService.update(id, dto);
   }
@@ -92,7 +95,7 @@ export class DeliverableController {
     @CurrentUser() user: AuthUser,
   ) {
     await this.assertMayWorkOnLivrable(id, user.sub, [
-      PermissionCode.LivrableNewVersion,
+      Permission.DELIVERABLE_UPDATE,
     ]);
     return this.deliverableService.newVersion(id, dto, user.sub);
   }
@@ -104,7 +107,7 @@ export class DeliverableController {
     @CurrentUser() user: AuthUser,
   ) {
     await this.assertMayWorkOnLivrable(id, user.sub, [
-      PermissionCode.LivrableDeposit,
+      Permission.DELIVERABLE_CREATE,
     ]);
     return this.deliverableService.remove(id);
   }
@@ -137,7 +140,7 @@ export class DeliverableController {
   private async assertMayWorkOnLivrable(
     livrableId: string,
     userId: string,
-    permissions: PermissionCode[],
+    permissions: Permission[],
   ) {
     const { instructionId } = await this.deliverableService.findOne(livrableId);
     await this.instructionsService.assertMayWorkOn(

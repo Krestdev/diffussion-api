@@ -8,10 +8,14 @@ import { DbLogger } from './logging/db.logger';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { ClsService } from 'nestjs-cls';
 import { corsOrigins } from './common/cors';
+import { API_PREFIX, API_PREFIX_OPTIONS } from './common/api-prefix';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
   app.useLogger(app.get(DbLogger));
+  // Every route under /api/v1, as EXPENZO and the core (the core's console calls
+  // /api/v1/app-admin/...). The root stays where the health check reads it.
+  app.setGlobalPrefix(API_PREFIX, API_PREFIX_OPTIONS);
 
   // The Next.js frontend runs on a different origin (localhost:4000) and
   // sends the CREAPP core's access cookie (creapp_access) with each call:

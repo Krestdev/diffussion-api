@@ -32,7 +32,7 @@ export class DashboardStatsQueryDto {
     enum: DASHBOARD_SCOPES,
     default: 'mine',
     description:
-      'mine: what the caller sees. global: every site (Supervision générale) — requires DASHBOARD_GLOBAL_READ, held globally',
+      'mine: what the caller sees. global: every company (Supervision générale) — requires DASHBOARD_GLOBAL_READ, held globally',
   })
   @IsOptional()
   @IsIn(DASHBOARD_SCOPES)

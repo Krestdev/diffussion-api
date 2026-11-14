@@ -10,8 +10,8 @@ import { SetOwnerDto } from '../common/dto/set-owner.dto';
 import { assertDossierOpenForActivity } from '../common/utils/dossier-lifecycle';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
-import { RbacService } from '../auth/rbac/rbac.service';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
+import { AccessService } from '../auth/access/access.service';
+import { Permission } from '../auth/permissions';
 import { FindDocumentsQueryDto } from './dto/find-documents.query.dto';
 import { UploadDocumentDto } from './dto/upload-document.dto';
 
@@ -24,7 +24,7 @@ export class DocumentsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly storage: StorageService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
   ) {}
 
   async upload(
@@ -51,7 +51,7 @@ export class DocumentsService {
     if (dto.contractId) {
       await this.assertContractOpen(dto.contractId);
     }
-    await this.assertOnCallersSite(dto, uploadedById);
+    await this.assertOnCallersCompany(dto, uploadedById);
 
     // Null only for a sortant draft not yet attached to its dossier: its
     // letter can be uploaded before the dossier is chosen.
@@ -97,26 +97,27 @@ export class DocumentsService {
    * caller could not open anyway.
    */
   async findAll(query: FindDocumentsQueryDto, actingUserId: string) {
-    const isAdmin = await this.rbac.hasGlobalPermission(
+    // An administrator (role.assign) sees every document of their company.
+    const [adminOf] = await this.access.scope(
       actingUserId,
-      PermissionCode.AdminManageUsers,
+      Permission.ROLE_ASSIGN,
     );
     const where: Prisma.DocumentWhereInput = {
       dossierId: query.dossierId,
       courrierId: query.courrierId,
       livrableId: query.livrableId,
       contractId: query.contractId,
-      ...(isAdmin
-        ? {}
+      ...(adminOf
+        ? documentOfCompany(adminOf)
         : {
             OR: [
               { uploadedById: actingUserId },
               { ownerId: actingUserId },
               { accesses: { some: { userId: actingUserId } } },
-              { dossier: { site: { responsibleId: actingUserId } } },
+              { dossier: { company: { responsibleId: actingUserId } } },
               {
                 courrier: {
-                  dossier: { site: { responsibleId: actingUserId } },
+                  dossier: { company: { responsibleId: actingUserId } },
                 },
               },
               { contract: { responsibleId: actingUserId } },
@@ -149,8 +150,8 @@ export class DocumentsService {
     const document = await this.database.document.findUnique({
       where: { id },
       include: {
-        dossier: { select: { site: true } },
-        courrier: { select: { dossier: { select: { site: true } } } },
+        dossier: { select: { company: true } },
+        courrier: { select: { dossier: { select: { company: true } } } },
         contract: { select: { responsibleId: true } },
         accesses: { where: { userId: actingUserId } },
       },
@@ -176,43 +177,37 @@ export class DocumentsService {
     await this.database.document.delete({ where: { id } });
   }
 
-  // Nothing is added to another site's dossier, effet, livrable or contract.
-  private async assertOnCallersSite(dto: UploadDocumentDto, userId: string) {
-    const siteId = dto.contractId
+  // Nothing is added to another company's dossier, effet, livrable or contract.
+  private async assertOnCallersCompany(dto: UploadDocumentDto, userId: string) {
+    const companyId = dto.contractId
       ? (
           await this.database.contract.findUnique({
             where: { id: dto.contractId },
-            select: { project: { select: { siteId: true } } },
+            select: { project: { select: { companyId: true } } },
           })
-        )?.project?.siteId
+        )?.project?.companyId
       : dto.dossierId
-        ? await this.rbac.resolveSiteId('dossier', dto.dossierId)
+        ? await this.access.resolveCompanyId('dossier', dto.dossierId)
         : dto.courrierId
-          ? await this.rbac.resolveSiteId('courrier', dto.courrierId)
-          : await this.rbac.resolveSiteId('livrable', dto.livrableId!);
-    if (
-      siteId &&
-      !(await this.rbac.worksAtSite(
-        userId,
-        PermissionCode.CourrierRead,
-        siteId,
-      ))
-    ) {
-      throw new ForbiddenException('Ce document relève d’un autre site');
+          ? await this.access.resolveCompanyId('courrier', dto.courrierId)
+          : await this.access.resolveCompanyId('livrable', dto.livrableId!);
+    if (companyId && !(await this.access.worksAtCompany(userId, companyId))) {
+      throw new ForbiddenException('Ce document relève d’un autre société');
     }
   }
 
   // RG-DOC-003: Document read access is independent from the dossier.
   // Access is granted to the uploader, the person in charge, explicitly
-  // listed users in DocumentAccess, the responsible of the site, or a
-  // platform administrator.
+  // listed users in DocumentAccess, the responsible of the company, or a
+  // company administrator (role.assign, the document being of their company).
   private async assertCanAccessDocument(
     document: {
+      id: string;
       uploadedById: string | null;
       ownerId: string | null;
-      dossier: { site: { responsibleId: string | null } | null } | null;
+      dossier: { company: { responsibleId: string | null } | null } | null;
       courrier: {
-        dossier: { site: { responsibleId: string | null } | null } | null;
+        dossier: { company: { responsibleId: string | null } | null } | null;
       } | null;
       contract: { responsibleId: string | null } | null;
       accesses: { userId: string }[];
@@ -223,19 +218,26 @@ export class DocumentsService {
     if (document.ownerId === actingUserId) return;
     if (document.accesses.length > 0) return;
 
-    const site = document.dossier?.site ?? document.courrier?.dossier?.site;
-    if (site?.responsibleId === actingUserId) return;
+    const company =
+      document.dossier?.company ?? document.courrier?.dossier?.company;
+    if (company?.responsibleId === actingUserId) return;
     if (document.contract?.responsibleId === actingUserId) return;
 
-    const isAdmin = await this.rbac.hasGlobalPermission(
-      actingUserId,
-      PermissionCode.AdminManageUsers,
-    );
-    if (isAdmin) return;
+    if (await this.isAdminOfDocument(actingUserId, document.id)) return;
 
     throw new ForbiddenException(
       'You do not have permission to access this document',
     );
+  }
+
+  // An administrator (role.assign) of the company the document belongs to.
+  private async isAdminOfDocument(userId: string, documentId: string) {
+    const [companyId] = await this.access.scope(userId, Permission.ROLE_ASSIGN);
+    if (!companyId) return false;
+    const found = await this.database.document.count({
+      where: { id: documentId, ...documentOfCompany(companyId) },
+    });
+    return found > 0;
   }
 
   private async assertContractOpen(contractId: string) {
@@ -283,29 +285,27 @@ export class DocumentsService {
 
   // Person in charge — same semantics/authorization as
   // MailService.setOwner: the uploader, the responsible of the owning
-  // site (resolved through the document's dossier, or failing that its
-  // courrier's dossier), or a platform admin.
+  // company (resolved through the document's dossier, or failing that its
+  // courrier's dossier), or an administrator (role.assign) of its company.
   async setOwner(id: string, dto: SetOwnerDto, actingUserId: string) {
     const document = await this.database.document.findUnique({
       where: { id },
       include: {
-        dossier: { select: { site: true } },
-        courrier: { select: { dossier: { select: { site: true } } } },
+        dossier: { select: { company: true } },
+        courrier: { select: { dossier: { select: { company: true } } } },
       },
     });
     if (!document) {
       throw new NotFoundException(`Document ${id} not found`);
     }
-    const site = document.dossier?.site ?? document.courrier?.dossier?.site;
+    const company =
+      document.dossier?.company ?? document.courrier?.dossier?.company;
     const isUploader = document.uploadedById === actingUserId;
-    const isSiteAdmin = site?.responsibleId === actingUserId;
-    const isPlatformAdmin = await this.rbac.hasGlobalPermission(
-      actingUserId,
-      PermissionCode.AdminManageUsers,
-    );
-    if (!isUploader && !isSiteAdmin && !isPlatformAdmin) {
+    const isCompanyAdmin = company?.responsibleId === actingUserId;
+    const isPlatformAdmin = await this.isAdminOfDocument(actingUserId, id);
+    if (!isUploader && !isCompanyAdmin && !isPlatformAdmin) {
       throw new ForbiddenException(
-        'Only the uploader, the site responsible, or a platform admin can assign who is in charge of this document',
+        'Only the uploader, the company responsible, or an administrator of its company can assign who is in charge of this document',
       );
     }
     return this.database.document.update({
@@ -355,4 +355,32 @@ export class DocumentsService {
 
     return this.getAccess(id, actingUserId);
   }
+}
+
+// The documents of a company: through their dossier, effet (its dossier's company,
+// else its registrant's), livrable (its task's dossier), contract (its project), or —
+// attached to none of them — their uploader's company.
+function documentOfCompany(companyId: string): Prisma.DocumentWhereInput {
+  return {
+    OR: [
+      { dossier: { companyId } },
+      {
+        courrier: {
+          OR: [
+            { dossier: { companyId } },
+            { dossierId: null, createdBy: { companyId } },
+          ],
+        },
+      },
+      { livrable: { instruction: { dossier: { companyId } } } },
+      { contract: { project: { companyId } } },
+      {
+        dossierId: null,
+        courrierId: null,
+        livrableId: null,
+        contractId: null,
+        uploadedBy: { companyId },
+      },
+    ],
+  };
 }

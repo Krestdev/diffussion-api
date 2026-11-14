@@ -72,8 +72,8 @@ export class FindContractTypesQueryDto {
 }
 
 /**
- * The kinds of contract (PA·7): one list common to every site, managed by a
- * platform administrator. Deactivated rather than deleted once used.
+ * The kinds of contract (PA·7): one list common to every company, managed by a
+ * Diffusion super-administrator. Deactivated rather than deleted once used.
  */
 @Injectable()
 export class ContractTypeService {

@@ -1,18 +1,18 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
-import { SiteStatus } from 'generated/prisma/enums';
+import { CompanyStatus } from 'generated/prisma/enums';
 import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 
 /**
- * Filters for GET /sites (the "Sites" admin table and the site pickers).
- * `search` (inherited) matches the site's name, code or city, or its
+ * Filters for GET /companies (the "Companies" admin table and the company pickers).
+ * `search` (inherited) matches the company's name, code or city, or its
  * responsible's name.
  */
-export class FindSitesQueryDto extends PaginationQueryDto {
-  @ApiPropertyOptional({ enum: SiteStatus })
+export class FindCompaniesQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({ enum: CompanyStatus })
   @IsOptional()
-  @IsEnum(SiteStatus)
-  status?: SiteStatus;
+  @IsEnum(CompanyStatus)
+  status?: CompanyStatus;
 
   @ApiPropertyOptional({ description: 'City, partial match' })
   @IsOptional()

@@ -5,7 +5,7 @@ export interface BordereauPdfContent {
   bordereauNumber: string;
   transmittedAt: Date;
   transmissionMode: string | null;
-  issuer: { name: string | null; site: string | null };
+  issuer: { name: string | null; company: string | null };
   recipient: { correspondent: string | null; person: string | null };
   rows: { reference: string; subject: string; pieces: number }[];
   issuedBy: string | null;
@@ -72,7 +72,7 @@ export function renderBordereauPdf(content: BordereauPdfContent) {
       return pdf.y;
     };
     const issuerBottom = party(left, 'ÉMETTEUR', [
-      content.issuer.site,
+      content.issuer.company,
       content.issuer.name,
     ]);
     const recipientBottom = party(left + half + 16, 'DESTINATAIRE', [

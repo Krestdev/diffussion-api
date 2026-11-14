@@ -56,11 +56,11 @@ const GROUPS = Object.keys(OUTGOING_STATUS_GROUPS) as OutgoingStatusGroup[];
 export class FindOutgoingMailsQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     description:
-      "Only this site's effets — within those the caller may already see",
+      "Only this company's effets — within those the caller may already see",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({
     enum: GROUPS,

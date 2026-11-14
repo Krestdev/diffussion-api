@@ -1,10 +1,13 @@
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ActivityService } from '../activity/activity.service';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
-import { AnalysisSheetService, sheetsAtSites } from './analysis-sheet.service';
+import {
+  AnalysisSheetService,
+  sheetsAtCompanies,
+} from './analysis-sheet.service';
 import { CriterionTemplateService } from './criterion-template.service';
 import { DocumentIdentityService } from '../administration/settings/document-identity.service';
 
@@ -14,9 +17,9 @@ describe('AnalysisSheetService', () => {
     analysisSheet: Record<string, jest.Mock>;
     courrier: Record<string, jest.Mock>;
   };
-  let rbac: { siteFilter: jest.Mock };
+  let rbac: { companyFilter: jest.Mock };
 
-  const siteOnly = sheetsAtSites({ in: ['s-1'] });
+  const companyOnly = sheetsAtCompanies({ in: ['s-1'] });
 
   beforeEach(async () => {
     database = {
@@ -27,14 +30,14 @@ describe('AnalysisSheetService', () => {
       },
       courrier: { findUnique: jest.fn() },
     };
-    // The caller reads analyses at site s-1 only.
-    rbac = { siteFilter: jest.fn().mockResolvedValue(siteOnly) };
+    // The caller reads analyses at company s-1 only.
+    rbac = { companyFilter: jest.fn().mockResolvedValue(companyOnly) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AnalysisSheetService,
         { provide: DatabaseService, useValue: database },
-        { provide: RbacService, useValue: rbac },
+        { provide: AccessService, useValue: rbac },
         { provide: ActivityService, useValue: {} },
         { provide: StorageService, useValue: {} },
         { provide: CriterionTemplateService, useValue: {} },
@@ -49,18 +52,18 @@ describe('AnalysisSheetService', () => {
     (database.analysisSheet.findMany.mock.calls[0][0] as { where: object })
       .where;
 
-  describe('list: only the sheets of the sites the caller reads', () => {
-    it('keeps the site filter without a search', async () => {
+  describe('list: only the sheets of the companies the caller reads', () => {
+    it('keeps the company filter without a search', async () => {
       await service.findAll({}, 'u-1');
 
-      expect(where()).toMatchObject({ AND: [siteOnly] });
+      expect(where()).toMatchObject({ AND: [companyOnly] });
     });
 
     it('keeps it alongside a search', async () => {
       await service.findAll({ search: 'plan' }, 'u-1');
 
       expect(where()).toMatchObject({
-        AND: [siteOnly],
+        AND: [companyOnly],
         OR: expect.arrayContaining([
           { reference: { contains: 'plan', mode: 'insensitive' } },
         ]),
@@ -73,7 +76,7 @@ describe('AnalysisSheetService', () => {
       const grouped = database.analysisSheet.groupBy.mock.calls[0][0] as {
         where: object;
       };
-      expect(grouped.where).toMatchObject({ AND: [siteOnly] });
+      expect(grouped.where).toMatchObject({ AND: [companyOnly] });
     });
   });
 

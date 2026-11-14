@@ -18,11 +18,11 @@ const sortantSelect = {
   direction: true,
   reference: true,
   type: { select: { id: true, referenceModel: true } },
-  createdBy: { select: { name: true, siteId: true } },
+  createdBy: { select: { name: true, companyId: true } },
   project,
   contract,
   dossier: {
-    select: { siteId: true, number: true, project, contract },
+    select: { companyId: true, number: true, project, contract },
   },
 } satisfies Prisma.CourrierSelect;
 
@@ -95,7 +95,7 @@ async function legacyReference(tx: Prisma.TransactionClient, now: Date) {
   return `SOR-${year}-${String(last).padStart(6, '0')}`;
 }
 
-// One atomic increment, per type, site and period, in the caller's
+// One atomic increment, per type, company and period, in the caller's
 // transaction. A changed model can bring an earlier reference back: those
 // numbers are skipped.
 async function modelReference(
@@ -105,16 +105,17 @@ async function modelReference(
   sortant: Sortant,
   now: Date,
 ) {
-  const siteId = sortant.dossier?.siteId ?? sortant.createdBy?.siteId ?? null;
+  const companyId =
+    sortant.dossier?.companyId ?? sortant.createdBy?.companyId ?? null;
   const codes = model.codes.map((code) => codeOf(code, sortant));
   const period = referencePeriod(model, now);
-  const siteKey = siteId ?? 'NONE';
+  const companyKey = companyId ?? 'NONE';
   for (;;) {
     const [{ last }] = await tx.$queryRaw<{ last: number }[]>`
       INSERT INTO "effet_reference_sequence"
-        ("effetTypeId", "siteKey", "period", "last")
-      VALUES (${typeId}, ${siteKey}, ${period}, 1)
-      ON CONFLICT ("effetTypeId", "siteKey", "period")
+        ("effetTypeId", "companyKey", "period", "last")
+      VALUES (${typeId}, ${companyKey}, ${period}, 1)
+      ON CONFLICT ("effetTypeId", "companyKey", "period")
       DO UPDATE SET "last" = "effet_reference_sequence"."last" + 1
       RETURNING "last"`;
     const reference = formatReference(model, codes, now, last);
@@ -123,8 +124,8 @@ async function modelReference(
         reference,
         direction: CourrierDirection.SORTANT,
         OR: [
-          ...(siteId ? [{ dossier: { siteId } }] : []),
-          { dossierId: null, createdBy: { siteId } },
+          ...(companyId ? [{ dossier: { companyId } }] : []),
+          { dossierId: null, createdBy: { companyId } },
         ],
       },
       select: { id: true },

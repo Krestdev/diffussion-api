@@ -5,11 +5,11 @@ import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
 export class FindCanalsQueryDto {
   @ApiPropertyOptional({
     description:
-      "Only the canaux of this site (a platform administrator; anyone else only ever sees their own site's)",
+      "Only the canaux of this company (one only ever sees their own company's: another gives nothing)",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({ description: 'true: the active ones only' })
   @IsOptional()

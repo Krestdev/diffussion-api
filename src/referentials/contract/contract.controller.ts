@@ -17,9 +17,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { RestoreNoteDto } from '../../common/dto/restore-note.dto';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
+import { RequirePermissions } from '../../auth/access/decorators';
 import { AuthUser } from '../../auth/types/auth-user.type';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { SetReferentialAccessDto } from '../project/dto/set-access.dto';
@@ -34,21 +34,21 @@ import { UpdateContractDto } from './dto/update-contract.dto';
 // administrators.
 @ApiTags('contracts')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionsGuard)
 @Controller('contracts')
 export class ContractController {
   constructor(private readonly contractService: ContractService) {}
 
-  // The responsible of its project's site, or a platform administrator —
+  // The permission in its project's company —
   // checked in the service (also for the routes below).
   @Post()
-  @RequirePermission(PermissionCode.ContractCreate)
+  @RequirePermissions(Permission.CONTRACT_CREATE)
   create(@Body() dto: CreateContractDto, @CurrentUser() user: AuthUser) {
     return this.contractService.create(dto, user.sub);
   }
 
   @Get()
-  @RequirePermission(PermissionCode.ContractRead)
+  @RequirePermissions(Permission.CONTRACT_READ)
   findAll(
     @Query() query: FindContractsQueryDto,
     @CurrentUser() user: AuthUser,
@@ -58,14 +58,14 @@ export class ContractController {
 
   // Declared before ':id' so "types" isn't parsed as an id.
   @Get('types')
-  @RequirePermission(PermissionCode.ContractRead)
+  @RequirePermissions(Permission.CONTRACT_READ)
   types() {
     return this.contractService.types();
   }
 
   // A contract restricted to others answers 404.
   @Get(':id')
-  @RequirePermission(PermissionCode.ContractRead)
+  @RequirePermissions(Permission.CONTRACT_READ)
   findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -74,7 +74,7 @@ export class ContractController {
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.ContractUpdate)
+  @RequirePermissions(Permission.CONTRACT_UPDATE)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateContractDto,
@@ -84,7 +84,7 @@ export class ContractController {
   }
 
   @Post(':id/archive')
-  @RequirePermission(PermissionCode.ContractArchive)
+  @RequirePermissions(Permission.CONTRACT_ARCHIVE)
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
@@ -94,7 +94,7 @@ export class ContractController {
   }
 
   @Post(':id/unarchive')
-  @RequirePermission(PermissionCode.ContractArchive)
+  @RequirePermissions(Permission.CONTRACT_ARCHIVE)
   unarchive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RestoreNoteDto,
@@ -104,7 +104,7 @@ export class ContractController {
   }
 
   @Delete(':id')
-  @RequirePermission(PermissionCode.ContractArchive)
+  @RequirePermissions(Permission.CONTRACT_ARCHIVE)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('id', ParseUUIDPipe) id: string,
@@ -114,7 +114,7 @@ export class ContractController {
   }
 
   @Get(':id/access')
-  @RequirePermission(PermissionCode.ContractRead)
+  @RequirePermissions(Permission.CONTRACT_READ)
   getAccess(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -122,7 +122,7 @@ export class ContractController {
     return this.contractService.getAccess(id, user.sub);
   }
 
-  // The contract's responsible or a platform administrator — checked in
+  // The contract's responsible or an administrator of its company — checked in
   // the service.
   @Put(':id/access')
   setAccess(
@@ -134,7 +134,7 @@ export class ContractController {
   }
 
   @Get(':id/historique')
-  @RequirePermission(PermissionCode.ContractRead)
+  @RequirePermissions(Permission.CONTRACT_READ)
   history(
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: PaginationQueryDto,

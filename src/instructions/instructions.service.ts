@@ -47,11 +47,11 @@ import { DeclineSubscriptionDto } from './dto/decline-subscription.dto';
 import { overdueWhere, withOverdue } from './instruction-overdue';
 import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 import { UpdateInstructionDto } from './dto/update-instruction.dto';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { Permission } from '../auth/permissions';
+import { AccessService } from '../auth/access/access.service';
 import { visibleContractWhere } from '../common/utils/referential-access';
-import { ownSiteFilter } from '../common/utils/site-referentials';
-import { taskOfSite } from '../common/utils/site-where';
+import { ownCompanyFilter } from '../common/utils/company-referentials';
+import { taskOfCompany } from '../common/utils/company-where';
 import { StorageService } from '../storage/storage.service';
 import { DeposerLivrablesDto } from './dto/deposer-livrables.dto';
 
@@ -234,7 +234,7 @@ export class InstructionsService {
     private readonly notifications: NotificationsService,
     private readonly activity: ActivityService,
     private readonly storage: StorageService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     private readonly settings: SettingsService,
   ) {}
 
@@ -250,13 +250,15 @@ export class InstructionsService {
     const allowed =
       superviseurs.includes(userId) ||
       instruction.createdById === userId ||
-      (await this.rbac.hasGlobalPermission(
-        userId,
-        PermissionCode.AdminManageUsers,
-      ));
+      // An administrator of the task's company (role.assign), never another company's.
+      ((await this.access.has(userId, Permission.ROLE_ASSIGN)) &&
+        (await this.access.worksAtCompany(
+          userId,
+          (await this.access.resolveCompanyId('instruction', id)) ?? '',
+        )));
     if (!allowed) {
       throw new ForbiddenException(
-        "Only this task's superviseur, its creator or a platform administrator can remind its executants",
+        "Only this task's superviseur, its creator or an administrator of its company can remind its executants",
       );
     }
     const executants = instruction.assignees
@@ -307,22 +309,25 @@ export class InstructionsService {
   }
 
   /**
-   * Instructions in progress per agent, on the sites where the caller may
+   * Instructions in progress per agent, on the companies where the caller may
    * assign tasks, with the capacity set in the settings.
    */
   async workload(query: FindWorkloadQueryDto, userId: string) {
-    const sites = await this.rbac.siteFilter(
+    const companies = await this.access.companyFilter(
       userId,
-      PermissionCode.InstructionAssign,
-      (siteId): Prisma.UserWhereInput => ({ siteId }),
+      Permission.INSTRUCTION_ASSIGN,
+      (companyId): Prisma.UserWhereInput => ({ companyId }),
     );
     const [agents, counts] = await Promise.all([
       this.database.user.findMany({
         where: {
-          AND: [sites, query.siteId ? { siteId: query.siteId } : {}],
+          AND: [
+            companies,
+            query.companyId ? { companyId: query.companyId } : {},
+          ],
           status: UserStatus.ACTIVE,
         },
-        select: { id: true, name: true, email: true, siteId: true },
+        select: { id: true, name: true, email: true, companyId: true },
         orderBy: { name: 'asc' },
       }),
       this.database.userInstructions.groupBy({
@@ -337,30 +342,32 @@ export class InstructionsService {
     const inProgress = new Map(
       counts.map((row) => [row.userId, row._count._all]),
     );
-    // Each agent's capacity is their site's setting.
-    const siteIds = [...new Set(agents.map((agent) => agent.siteId))];
+    // Each agent's capacity is their company's setting.
+    const companyIds = [...new Set(agents.map((agent) => agent.companyId))];
     const capacities = new Map(
       await Promise.all(
-        siteIds.map(
-          async (siteId) =>
+        companyIds.map(
+          async (companyId) =>
             [
-              siteId,
-              (await this.settings.get(siteId)).maxActiveInstructionsPerAgent,
+              companyId,
+              (await this.settings.get(companyId))
+                .maxActiveInstructionsPerAgent,
             ] as const,
         ),
       ),
     );
     const capacity =
-      query.siteId !== undefined
-        ? (capacities.get(query.siteId) ??
-          (await this.settings.get(query.siteId)).maxActiveInstructionsPerAgent)
-        : siteIds.length === 1
-          ? (capacities.get(siteIds[0]) ?? null)
+      query.companyId !== undefined
+        ? (capacities.get(query.companyId) ??
+          (await this.settings.get(query.companyId))
+            .maxActiveInstructionsPerAgent)
+        : companyIds.length === 1
+          ? (capacities.get(companyIds[0]) ?? null)
           : null;
     const data = agents
       .map((agent) => {
         const active = inProgress.get(agent.id) ?? 0;
-        const capacity = capacities.get(agent.siteId) ?? null;
+        const capacity = capacities.get(agent.companyId) ?? null;
         return {
           user: agent,
           inProgress: active,
@@ -376,17 +383,17 @@ export class InstructionsService {
    * Who may prepare, edit or remove a task's livrables: the executant who
    * subscribed to it — that engagement is their right to work on it,
    * whatever their role — or anyone holding every one of `permissions` at
-   * the task's site. Depositing and submitting are the subscriber's alone
+   * the task's company. Depositing and submitting are the subscriber's alone
    * (assertSubscriber).
    */
   async assertMayWorkOn(
     instructionId: string,
     userId: string,
-    permissions: PermissionCode[],
+    permissions: Permission[],
   ) {
     const instruction = await this.database.instruction.findUnique({
       where: { id: instructionId },
-      select: { dossier: { select: { siteId: true } } },
+      select: { dossier: { select: { companyId: true } } },
     });
     if (!instruction) {
       throw new NotFoundException(`Instruction ${instructionId} not found`);
@@ -394,14 +401,14 @@ export class InstructionsService {
     if (await this.isSubscriber(instructionId, userId)) {
       return;
     }
-    const siteId = instruction.dossier?.siteId;
+    const companyId = instruction.dossier?.companyId;
     for (const permission of permissions) {
-      const granted = siteId
-        ? await this.rbac.hasPermissionAtSite(userId, permission, siteId)
-        : await this.rbac.hasPermission(userId, permission);
+      const granted = companyId
+        ? await this.access.hasAtCompany(userId, permission, companyId)
+        : await this.access.has(userId, permission);
       if (!granted) {
         throw new ForbiddenException(
-          `Missing permission${siteId ? ' at this site' : ''}: ${permission} — or be an executant of this task once subscribed to`,
+          `Missing permission${companyId ? ' at this company' : ''}: ${permission} — or be an executant of this task once subscribed to`,
         );
       }
     }
@@ -436,8 +443,8 @@ export class InstructionsService {
   }
 
   // A task under a contract (no dossier): the contract must exist, be
-  // active, and be one its creator may open — contracts have no site, so
-  // this stands in for the dossier's site check.
+  // active, and be one its creator may open — contracts have no company, so
+  // this stands in for the dossier's company check.
   private async assertContractOpenTo(contractId: string, userId: string) {
     const contract = await this.database.contract.findUnique({
       where: { id: contractId },
@@ -451,10 +458,15 @@ export class InstructionsService {
         `Contract ${contract.number} is archived — no task can be added to it`,
       );
     }
-    const isAdmin = await this.rbac.hasGlobalPermission(
-      userId,
-      PermissionCode.AdminManageReferentials,
-    );
+    // An administrator of the referentials sees every contract of their company.
+    const isAdmin =
+      (await this.access.has(userId, Permission.SETTINGS_UPDATE)) &&
+      (await this.database.contract.count({
+        where: {
+          id: contractId,
+          project: { companyId: (await this.access.companyOf(userId)) ?? '' },
+        },
+      })) > 0;
     const visible =
       isAdmin ||
       (await this.database.contract.count({
@@ -542,26 +554,26 @@ export class InstructionsService {
 
   /**
    * The supervisor of an effet works on it without a role: they create its
-   * tasks and assign them. Anyone else needs `permission` at the site of
+   * tasks and assign them. Anyone else needs `permission` at the company of
    * the dossier (or task) concerned, as the permission guard required.
    */
   private async assertMayManageTasks(
     userId: string,
-    permission: PermissionCode,
+    permission: Permission,
     supervisedBy: () => Promise<boolean>,
-    site?: { entity: 'dossier' | 'instruction'; id: string },
+    company?: { entity: 'dossier' | 'instruction'; id: string },
   ) {
     if (await supervisedBy()) return;
-    const siteId = site
-      ? await this.rbac.resolveSiteId(site.entity, site.id)
+    const companyId = company
+      ? await this.access.resolveCompanyId(company.entity, company.id)
       : null;
-    const granted = siteId
-      ? await this.rbac.hasPermissionAtSite(userId, permission, siteId)
-      : await this.rbac.hasPermission(userId, permission);
+    const granted = companyId
+      ? await this.access.hasAtCompany(userId, permission, companyId)
+      : await this.access.has(userId, permission);
     if (!granted) {
       throw new ForbiddenException(
-        siteId
-          ? `Missing permission at this site: ${permission}`
+        companyId
+          ? `Missing permission at this company: ${permission}`
           : `Missing permission: ${permission}`,
       );
     }
@@ -570,7 +582,7 @@ export class InstructionsService {
   async create(dto: CreateInstructionsDto, createdById: string) {
     await this.assertMayManageTasks(
       createdById,
-      PermissionCode.InstructionCreate,
+      Permission.INSTRUCTION_CREATE,
       async () => {
         if (!dto.courrierId) return false;
         const effet = await this.database.courrier.findUnique({
@@ -701,11 +713,15 @@ export class InstructionsService {
   }
 
   async findAll(query: FindInstructionsQueryDto, userId: string) {
-    const ownSite = await ownSiteFilter(this.rbac, this.database, userId);
+    const ownCompany = await ownCompanyFilter(
+      this.access,
+      this.database,
+      userId,
+    );
     const where: Prisma.InstructionWhereInput = {
       AND: [
-        ownSite ? taskOfSite(ownSite.siteId) : {},
-        query.siteId ? taskOfSite(query.siteId) : {},
+        ownCompany ? taskOfCompany(ownCompany.companyId) : {},
+        query.companyId ? taskOfCompany(query.companyId) : {},
       ],
       dossierId: query.dossierId,
       courrierId: query.courrierId,
@@ -926,16 +942,20 @@ export class InstructionsService {
     return withOverdue(instruction);
   }
 
-  // Its site's users, whoever it is assigned to or was created by, and the
+  // Its company's users, whoever it is assigned to or was created by, and the
   // platform's administrators. Anyone else: as if it didn't exist.
   async assertVisible(id: string, userId: string) {
-    const ownSite = await ownSiteFilter(this.rbac, this.database, userId);
-    if (!ownSite) return;
+    const ownCompany = await ownCompanyFilter(
+      this.access,
+      this.database,
+      userId,
+    );
+    if (!ownCompany) return;
     const visible = await this.database.instruction.count({
       where: {
         id,
         OR: [
-          taskOfSite(ownSite.siteId),
+          taskOfCompany(ownCompany.companyId),
           { createdById: userId },
           { assignees: { some: { userId } } },
         ],
@@ -1063,7 +1083,7 @@ export class InstructionsService {
   async assign(id: string, dto: AssignInstructionDto, userId: string) {
     await this.assertMayManageTasks(
       userId,
-      PermissionCode.InstructionAssign,
+      Permission.INSTRUCTION_ASSIGN,
       async () => {
         const task = await this.database.instruction.findUnique({
           where: { id },
@@ -1903,7 +1923,7 @@ export class InstructionsService {
       where: { id: instructionId },
       include: {
         assignees: { include: { user: { select: { id: true, name: true } } } },
-        dossier: { select: { id: true, siteId: true } },
+        dossier: { select: { id: true, companyId: true } },
       },
     });
     if (!instruction) {

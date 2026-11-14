@@ -6,8 +6,7 @@ type Db = Prisma.TransactionClient;
 /**
  * Projects and contracts carry a list of users allowed to open them. A
  * project nobody is listed on is open to everyone; its responsible always
- * may. Platform administrators (global ADMIN_MANAGE_REFERENTIALS) skip the
- * filter altogether — callers leave it out for them.
+ * may.
  */
 export function visibleProjectWhere(userId: string): Prisma.ProjectWhereInput {
   return {

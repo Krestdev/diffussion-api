@@ -1,9 +1,9 @@
 import { CourrierStatus, Prisma } from '../../../generated/prisma/client';
 
 // Who validates a courrier submitted for validation: its dossier's
-// responsible; failing that, the responsible of the dossier's site; and for
+// responsible; failing that, the responsible of the dossier's company; and for
 // a courrier with no dossier yet (a sortant draft), the responsible of its
-// creator's site. MailService.validatorOf resolves the same rule for one
+// creator's company. MailService.validatorOf resolves the same rule for one
 // courrier — keep both in step.
 
 /** Courriers waiting on `userId`'s decision. */
@@ -12,9 +12,9 @@ export function awaitingValidationBy(
 ): Prisma.CourrierWhereInput {
   return {
     status: CourrierStatus.EN_ATTENTE_VALIDATION,
-    // Its dossier's responsible, else its contract's, else its site's;
+    // Its dossier's responsible, else its contract's, else its company's;
     // without a dossier: its contract's (else that contract's project's),
-    // its project's, else its registrant's site's.
+    // its project's, else its registrant's company's.
     OR: [
       { dossier: { responsibleId: userId } },
       {
@@ -27,7 +27,7 @@ export function awaitingValidationBy(
         dossier: {
           responsibleId: null,
           OR: [{ contractId: null }, { contract: { responsibleId: null } }],
-          site: { responsibleId: userId },
+          company: { responsibleId: userId },
         },
       },
       { dossierId: null, contract: { responsibleId: userId } },
@@ -44,7 +44,7 @@ export function awaitingValidationBy(
         dossierId: null,
         contractId: null,
         OR: [{ projectId: null }, { project: { responsibleId: null } }],
-        createdBy: { site: { responsibleId: userId } },
+        createdBy: { company: { responsibleId: userId } },
       },
     ],
   };

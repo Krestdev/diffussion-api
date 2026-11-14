@@ -7,7 +7,7 @@ import {
 import { DossierService } from './dossier.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { AccessService } from '../../auth/access/access.service';
 import { ActivityService } from '../../activity/activity.service';
 import { DossierStatus } from '../../../generated/prisma/client';
 
@@ -23,10 +23,10 @@ describe('DossierService', () => {
     activityLog: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
-  let rbac: { hasPermission: jest.Mock };
+  let access: { has: jest.Mock };
 
   beforeEach(async () => {
-    rbac = { hasPermission: jest.fn().mockResolvedValue(false) };
+    access = { has: jest.fn().mockResolvedValue(false) };
     database = {
       dossier: {
         create: jest.fn(),
@@ -40,7 +40,9 @@ describe('DossierService', () => {
       livrable: { findMany: jest.fn() },
       contract: { findUnique: jest.fn() },
       project: {
-        findUnique: jest.fn().mockResolvedValue({ name: 'P', siteId: 's-1' }),
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ name: 'P', companyId: 's-1' }),
       },
       activityLog: { findMany: jest.fn() },
       $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
@@ -50,7 +52,7 @@ describe('DossierService', () => {
       providers: [
         DossierService,
         { provide: DatabaseService, useValue: database },
-        { provide: RbacService, useValue: rbac },
+        { provide: AccessService, useValue: access },
         {
           provide: NotificationsService,
           useValue: { notifyAccessChanged: jest.fn() },
@@ -148,7 +150,7 @@ describe('DossierService', () => {
       database.dossier.findUnique.mockResolvedValue({
         id: 'd-1',
         status: DossierStatus.IN_PROGRESS,
-        siteId: 's-1',
+        companyId: 's-1',
         responsibleId: 'u-1',
       });
 
@@ -161,16 +163,16 @@ describe('DossierService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('refuses to move a dossier to another site without ADMIN_MANAGE_SITES', async () => {
+    it('refuses to move a dossier to another company without company.update', async () => {
       database.dossier.findUnique.mockResolvedValue({
         id: 'd-1',
         status: DossierStatus.IN_PROGRESS,
-        siteId: 's-1',
+        companyId: 's-1',
         responsibleId: 'u-1',
       });
 
       await expect(
-        service.update('d-1', { siteId: 's-2' }, 'u-1'),
+        service.update('d-1', { companyId: 's-2' }, 'u-1'),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(database.dossier.update).not.toHaveBeenCalled();
     });
@@ -180,7 +182,7 @@ describe('DossierService', () => {
     const openDossier = {
       id: 'd-1',
       status: DossierStatus.IN_PROGRESS,
-      siteId: 's-1',
+      companyId: 's-1',
       responsibleId: 'u-1',
       projectId: null,
       contractId: null,
@@ -241,7 +243,7 @@ describe('DossierService', () => {
       beforeEach(() => {
         database.project.findUnique.mockResolvedValue({
           name: 'P',
-          siteId: 's-1',
+          companyId: 's-1',
           contentType: 'CONTRATS',
         });
       });

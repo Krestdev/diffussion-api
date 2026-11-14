@@ -32,11 +32,11 @@ export class ModuleNotificationEventDto {
 export class UpdateModuleNotificationsDto {
   @ApiPropertyOptional({
     description:
-      "This site's. Left out: the caller's site when they manage only one; the common ones for a platform administrator",
+      "This company's. Left out: the caller's company when they manage only one; the common ones for a platform administrator",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({ type: [ModuleNotificationEventDto] })
   @IsOptional()
@@ -47,7 +47,7 @@ export class UpdateModuleNotificationsDto {
   events?: ModuleNotificationEventDto[];
 
   @ApiPropertyOptional({
-    description: 'A site gives its own up, to inherit the common ones again',
+    description: 'A company gives its own up, to inherit the common ones again',
   })
   @IsOptional()
   @IsBoolean()

@@ -1,3 +1,3 @@
-import { UpdateSiteListItemDto } from '../../../common/dto/site-list-item.dto';
+import { UpdateCompanyListItemDto } from '../../../common/dto/company-list-item.dto';
 
-export class UpdateCorrespondentTypeDto extends UpdateSiteListItemDto {}
+export class UpdateCorrespondentTypeDto extends UpdateCompanyListItemDto {}

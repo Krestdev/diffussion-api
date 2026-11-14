@@ -1,18 +1,18 @@
 import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ActivityService } from '../../activity/activity.service';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { AccessService } from '../../auth/access/access.service';
 import { DatabaseService } from '../../database/database.service';
 import { CanalService } from './canal.service';
-import { withScopeChecks } from '../../auth/rbac/rbac.testing-spec';
+import { accessMock, AccessMock } from '../access-mock.testing-spec';
 
 describe('CanalService', () => {
   let service: CanalService;
   let database: {
     canal: Record<string, jest.Mock>;
-    site: Record<string, jest.Mock>;
+    company: Record<string, jest.Mock>;
   };
-  let rbac: { managedSites: jest.Mock };
+  let access: AccessMock;
 
   beforeEach(async () => {
     database = {
@@ -21,45 +21,47 @@ describe('CanalService', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         update: jest.fn(),
       },
-      site: { findUnique: jest.fn().mockResolvedValue({ id: 's-1' }) },
+      company: { findUnique: jest.fn().mockResolvedValue({ id: 's-1' }) },
     };
-    // ADMIN_MANAGE_REFERENTIALS held at site s-1 only.
-    rbac = { managedSites: jest.fn().mockResolvedValue(['s-1']) };
+    // settings.update held in company s-1 (their own).
+    access = accessMock({ permissions: ['settings.update'] });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CanalService,
         { provide: DatabaseService, useValue: database },
         { provide: ActivityService, useValue: { tryRecord: jest.fn() } },
-        { provide: RbacService, useValue: withScopeChecks(rbac) },
+        { provide: AccessService, useValue: access },
       ],
     }).compile();
 
     service = module.get<CanalService>(CanalService);
   });
 
-  it('lets whoever manages a site create its canaux', async () => {
-    await service.create({ name: 'Coursier', siteId: 's-1' }, 'u-admin-s1');
+  it('lets whoever manages a company create its canaux', async () => {
+    await service.create({ name: 'Coursier', companyId: 's-1' }, 'u-admin-s1');
 
-    expect(rbac.managedSites).toHaveBeenCalledWith(
+    expect(access.assertManages).toHaveBeenCalledWith(
       'u-admin-s1',
-      'ADMIN_MANAGE_REFERENTIALS',
+      'settings.update',
+      's-1',
+      'Ce canal',
     );
     expect(database.canal.create).toHaveBeenCalled();
   });
 
-  it("refuses another site's", async () => {
+  it("refuses another company's", async () => {
     await expect(
-      service.create({ name: 'Coursier', siteId: 's-2' }, 'u-admin-s1'),
+      service.create({ name: 'Coursier', companyId: 's-2' }, 'u-admin-s1'),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(database.canal.create).not.toHaveBeenCalled();
   });
 
-  it('refuses someone who manages no site', async () => {
-    rbac.managedSites.mockResolvedValue([]);
+  it('refuses someone who manages no company', async () => {
+    access.state.permissions = [];
 
     await expect(
-      service.create({ name: 'Coursier', siteId: 's-1' }, 'u-agent'),
+      service.create({ name: 'Coursier', companyId: 's-1' }, 'u-agent'),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

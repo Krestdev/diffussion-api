@@ -15,23 +15,24 @@ import { FindActivityLogsQueryDto } from './dto/find-activity-logs.query.dto';
 import { FindMyActivityQueryDto } from './dto/find-my-activity.query.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { assertAdministers, RbacService } from '../auth/rbac/rbac.service';
+import { Permission } from '../auth/permissions';
+import { AccessService } from '../auth/access/access.service';
+import { forbidden } from '../auth/access/permissions.guard';
 import { AuthUser } from '../auth/types/auth-user.type';
 
 // The Journal d'audit (AU·1, RG-AUD-*): each entry belongs to its object's
-// site (else its author's) and carries its author's IP.
+// company (else its author's) and carries its author's IP.
 @ApiTags('activity-logs')
 @ApiBearerAuth()
-// Platform administrators (global AUDIT_READ) read everything; a site's
-// responsible, or whoever holds AUDIT_READ at a site, reads that site's
+// Platform administrators (global AUDIT_READ) read everything; a company's
+// responsible, or whoever holds AUDIT_READ at a company, reads that company's
 // journal — checked in auditScope.
 @UseGuards(CoreAuthGuard)
 @Controller('activity-logs')
 export class ActivityController {
   constructor(
     private readonly activityService: ActivityService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
   ) {}
 
   @Get()
@@ -63,13 +64,16 @@ export class ActivityController {
   }
 
   // PA·8 — the batches past retention, exported as CSV before being
-  // deleted: the caller's sites' (every one for a platform administrator).
+  // deleted: the caller's companies' (every one for a platform administrator).
   @Get('archives')
   async archives(
-    @Query('siteId') siteId: string | undefined,
+    @Query('companyId') companyId: string | undefined,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.activityService.archives(await this.auditScope(user), siteId);
+    return this.activityService.archives(
+      await this.auditScope(user),
+      companyId,
+    );
   }
 
   @Get('archives/:archiveId/download')
@@ -110,11 +114,9 @@ export class ActivityController {
   }
 
   private async auditScope(user: AuthUser) {
-    const scope = await this.rbac.managedSites(
-      user.sub,
-      PermissionCode.AuditRead,
-    );
-    assertAdministers(scope);
+    // The person's own company's journal, with audit.read.
+    const scope = await this.access.scope(user.sub, Permission.AUDIT_READ);
+    if (scope.length === 0) throw forbidden(Permission.AUDIT_READ);
     return scope;
   }
 }

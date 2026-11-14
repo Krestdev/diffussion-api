@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { UserStatus } from '../../generated/prisma/client';
+import { AccessProfile, UserStatus } from '../../generated/prisma/client';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../database/database.service';
 import {
@@ -18,12 +18,16 @@ import {
   type SessionStore,
 } from '../session-store/session-store';
 import { AppAccessService } from './app-access.service';
-import { CoreClaims, CoreTokensService } from './core-tokens.service';
+import {
+  AppAdminClaims,
+  CoreClaims,
+  CoreTokensService,
+} from './core-tokens.service';
 import {
   DirectorySyncService,
   setUpAdmins,
   upsertPerson,
-  upsertSite,
+  upsertCompany,
 } from './directory-sync.service';
 
 export type AccessResult =
@@ -31,6 +35,10 @@ export type AccessResult =
       account: StoredUser;
       session: StoredSession;
       claims: CoreClaims;
+      /** Their codes in their company (roles and delegations, normalised). */
+      permissions: string[];
+      /** A Diffusion super-administrator (profile SUPER_ADMIN). */
+      platformAdmin: boolean;
     }
   /** No valid token, or a session the store doesn't hold (ended, or to refresh at the core). */
   | 'unauthenticated'
@@ -104,12 +112,54 @@ export class CoreAccessService {
       account.id,
       parseStored<StoredAppAccess>(raw[2] ?? null),
     );
+    // No Diffusion role in their company: nothing to do here (company administrators hold the
+    // ADMIN role through the directory sync).
     if (!access || access.roles.length === 0) return 'no-access';
-    return { account, session, claims };
+    const profile = await this.database.user.findUnique({
+      where: { id: account.id },
+      select: { accessProfile: true },
+    });
+    return {
+      account,
+      session,
+      claims,
+      permissions: access.permissions,
+      platformAdmin: profile?.accessProfile === AccessProfile.SUPER_ADMIN,
+    };
   }
 
   /**
-   * The person's active copy at their company's site (Diffusion's records point at it). New to
+   * A call from the core's console to the app-admin API: a company or platform administrator the
+   * core authorised, managing a company's roles. They act with every permission within that
+   * company (the core checked their right); null when the token isn't one.
+   */
+  async resolveAppAdmin(
+    token: string,
+  ): Promise<{ claims: AppAdminClaims } | null> {
+    let claims: AppAdminClaims;
+    try {
+      claims = await this.tokens.verifyAppAdmin(
+        token,
+        this.config.get('CORE_APP_ID'),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `app-admin token refused: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+    // A company entitled a moment ago: the directory brings it (the catalogue needs none).
+    if (/^[0-9a-f-]{36}$/i.test(claims.tid)) {
+      const known = await this.database.company.count({
+        where: { id: claims.tid },
+      });
+      if (!known) await this.sync.syncSoon();
+    }
+    return { claims };
+  }
+
+  /**
+   * The person's active copy at their company's company (Diffusion's records point at it). New to
    * Diffusion: one directory sync first; when the sync can't provide it (no app key yet, core
    * unreachable), the copy is made from the session store's record, which the core wrote.
    */
@@ -119,7 +169,7 @@ export class CoreAccessService {
       this.database.user.count({
         where: {
           id: account.id,
-          siteId: account.tenant.id,
+          companyId: account.tenant.id,
           status: UserStatus.ACTIVE,
         },
       });
@@ -134,17 +184,17 @@ export class CoreAccessService {
     return true;
   }
 
-  /** The company's site and the person, from the stored record. */
+  /** The company's company and the person, from the stored record. */
   private async copyFromStore(account: StoredUser): Promise<void> {
     try {
       const now = new Date();
       await this.database.$transaction(
         async (tx) => {
-          await upsertSite(
+          await upsertCompany(
             tx,
             account.tenant,
             now,
-            this.config.get('CORE_SITE_LINKS'),
+            this.config.get('CORE_COMPANY_LINKS'),
             this.logger,
           );
           await upsertPerson(

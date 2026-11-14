@@ -3,11 +3,11 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { DocumentsService } from './documents.service';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
 
-// Dossier-state rules (RG-DOS-007, site activity, progress) are covered by
+// Dossier-state rules (RG-DOS-007, company activity, progress) are covered by
 // the DossierService spec; here they're stubbed so fixtures don't need a
-// full dossier/site graph.
+// full dossier/company graph.
 jest.mock('../common/utils/dossier-lifecycle', () => ({
   assertDossierOpenForActivity: jest.fn(),
   markDossierInProgress: jest.fn(),
@@ -20,7 +20,7 @@ describe('DocumentsService', () => {
     document: Record<string, jest.Mock>;
   };
   let storage: Record<string, jest.Mock>;
-  let rbac: Record<string, jest.Mock>;
+  let access: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     database = {
@@ -30,6 +30,7 @@ describe('DocumentsService', () => {
         findUnique: jest.fn(),
         update: jest.fn(),
         delete: jest.fn(),
+        count: jest.fn().mockResolvedValue(1),
       },
     };
     storage = {
@@ -37,10 +38,11 @@ describe('DocumentsService', () => {
       delete: jest.fn(),
       getSignedDownloadUrl: jest.fn(),
     };
-    rbac = {
-      hasGlobalPermission: jest.fn().mockResolvedValue(false),
-      resolveSiteId: jest.fn().mockResolvedValue('s-1'),
-      worksAtSite: jest.fn().mockResolvedValue(true),
+    access = {
+      // role.assign held nowhere by default.
+      scope: jest.fn().mockResolvedValue([]),
+      resolveCompanyId: jest.fn().mockResolvedValue('s-1'),
+      worksAtCompany: jest.fn().mockResolvedValue(true),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -48,7 +50,7 @@ describe('DocumentsService', () => {
         DocumentsService,
         { provide: DatabaseService, useValue: database },
         { provide: StorageService, useValue: storage },
-        { provide: RbacService, useValue: rbac },
+        { provide: AccessService, useValue: access },
       ],
     }).compile();
 
@@ -133,12 +135,12 @@ describe('DocumentsService', () => {
       ).resolves.toBeDefined();
     });
 
-    it("allows the owning site's responsible, resolved through the document's courrier", async () => {
+    it("allows the owning company's responsible, resolved through the document's courrier", async () => {
       database.document.findUnique.mockResolvedValue({
         id: 'doc-1',
         uploadedById: 'someone-else',
         dossier: null,
-        courrier: { dossier: { site: { responsibleId: 'u-1' } } },
+        courrier: { dossier: { company: { responsibleId: 'u-1' } } },
       });
       database.document.update.mockResolvedValue({ id: 'doc-1' });
 
@@ -147,14 +149,14 @@ describe('DocumentsService', () => {
       ).resolves.toBeDefined();
     });
 
-    it('allows a platform admin', async () => {
+    it('allows an administrator (role.assign) of its company', async () => {
       database.document.findUnique.mockResolvedValue({
         id: 'doc-1',
         uploadedById: 'someone-else',
-        dossier: { site: { responsibleId: 'someone-else-too' } },
+        dossier: { company: { responsibleId: 'someone-else-too' } },
         courrier: null,
       });
-      rbac.hasGlobalPermission.mockResolvedValue(true);
+      access.scope.mockResolvedValue(['s-1']);
       database.document.update.mockResolvedValue({ id: 'doc-1' });
 
       await expect(
@@ -166,7 +168,7 @@ describe('DocumentsService', () => {
       database.document.findUnique.mockResolvedValue({
         id: 'doc-1',
         uploadedById: 'someone-else',
-        dossier: { site: { responsibleId: 'someone-else-too' } },
+        dossier: { company: { responsibleId: 'someone-else-too' } },
         courrier: null,
       });
 

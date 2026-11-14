@@ -9,7 +9,7 @@
  *
  * People sign in at the CREAPP core: here LocalCoreSigner stands in for it
  * (its keys, its tokens, the session store in memory), and the core's
- * directory (companies = sites, people) is applied by DirectorySyncService.
+ * directory (companies, people) is applied by DirectorySyncService.
  *
  * Run: npm run test:e2e (needs the docker-compose Postgres).
  */
@@ -75,7 +75,7 @@ describe('Diffusion, end to end', () => {
   const token: Record<string, string> = {};
   const id: Record<string, string> = {};
 
-  // The core's directory: two companies (Diffusion sites) and their people.
+  // The core's directory: two companies and their people.
   const people = {
     super: person('super'),
     respA: person('respA', true),
@@ -117,29 +117,31 @@ describe('Diffusion, end to end', () => {
     ],
   });
 
+  // Every route is under /api/v1 (main.ts).
+  const API = '/api/v1';
   const as = (who: string) => ({
     get: (url: string) =>
       request(app.getHttpServer())
-        .get(url)
+        .get(API + url)
         .set('Cookie', `creapp_access=${token[who]}`),
     post: (url: string, body?: object) =>
       request(app.getHttpServer())
-        .post(url)
+        .post(API + url)
         .set('Cookie', `creapp_access=${token[who]}`)
         .send(body ?? {}),
     patch: (url: string, body?: object) =>
       request(app.getHttpServer())
-        .patch(url)
+        .patch(API + url)
         .set('Cookie', `creapp_access=${token[who]}`)
         .send(body ?? {}),
     put: (url: string, body?: object) =>
       request(app.getHttpServer())
-        .put(url)
+        .put(API + url)
         .set('Cookie', `creapp_access=${token[who]}`)
         .send(body ?? {}),
     delete: (url: string) =>
       request(app.getHttpServer())
-        .delete(url)
+        .delete(API + url)
         .set('Cookie', `creapp_access=${token[who]}`),
   });
 
@@ -162,8 +164,8 @@ describe('Diffusion, end to end', () => {
     const { DbLogger } = await import('../src/logging/db.logger');
     const { DatabaseService } =
       await import('../src/database/database.service');
-    const { PermissionCode, PERMISSION_LABELS } =
-      await import('../src/auth/rbac/rbac.constants');
+    const { ALL_PERMISSIONS, normalizePermissions } =
+      await import('../src/auth/permissions');
     const { MemorySessionStore, SESSION_STORE } =
       await import('../src/session-store/session-store');
     const { DirectorySyncService } =
@@ -177,6 +179,9 @@ describe('Diffusion, end to end', () => {
       .compile();
     app = moduleRef.createNestApplication();
     // Same pipeline as main.ts.
+    const { API_PREFIX, API_PREFIX_OPTIONS } =
+      await import('../src/common/api-prefix');
+    app.setGlobalPrefix(API_PREFIX, API_PREFIX_OPTIONS);
     app.useGlobalFilters(
       new AllExceptionsFilter(app.get(ClsService), app.get(DbLogger)),
     );
@@ -191,16 +196,14 @@ describe('Diffusion, end to end', () => {
     db = app.get(DatabaseService);
     signer = new LocalCoreSigner().install(app);
 
-    // Reference data a real installation gets from the seed.
-    const codes = Object.values(PermissionCode);
-    await db.permission.createMany({
-      data: codes.map((code) => ({
-        code,
-        description: PERMISSION_LABELS[code],
-      })),
-      // Some migrations already insert the permissions they introduce.
-      skipDuplicates: true,
-    });
+    // The core's directory: companies become companies (with their default
+    // roles: ADMIN for their administrators), people their users.
+    await app.get(DirectorySyncService).apply(directory());
+    id.companyA = companyA.id;
+    id.companyB = companyB.id;
+    for (const [who, p] of Object.entries(people)) id[who] = p.id;
+
+    // Roles of company A (permissions 2.0.0: a role belongs to one company).
     const perms = await db.permission.findMany();
     const permId = (code: string) => perms.find((p: any) => p.code === code).id;
     const role = async (name: string, permCodes: string[]) =>
@@ -209,55 +212,65 @@ describe('Diffusion, end to end', () => {
           data: {
             name,
             code: 'RO-' + name.slice(0, 6).toUpperCase(),
+            companyId: id.companyA,
             rolePermissions: {
-              create: permCodes.map((c) => ({ permissionId: permId(c) })),
+              create: normalizePermissions(permCodes).map((c) => ({
+                permissionId: permId(c),
+              })),
             },
           },
         })
       ).id;
-    id.roleAdmin = await role('Administrateur', codes);
+    id.roleAdmin = (
+      await db.role.findFirst({
+        where: { companyId: id.companyA, code: 'ADMIN' },
+      })
+    ).id;
+    expect(perms.length).toBe(ALL_PERMISSIONS.length);
     id.roleAgent = await role('Agent courrier', [
-      'COURRIER_REGISTER_ENTRANT',
-      'COURRIER_READ',
+      'incoming.create',
+      'incoming.read',
+      'outgoing.read',
     ]);
     id.roleChef = await role('Chef de service', [
-      'DOSSIER_CREATE',
-      'DOSSIER_READ',
-      'COURRIER_READ',
-      'COURRIER_WRITE_SORTANT',
-      'COURRIER_SEND',
-      'INSTRUCTION_CREATE',
-      'INSTRUCTION_ASSIGN',
-      'INSTRUCTION_UPDATE',
-      'VALIDATION_APPROVE',
-      'VALIDATION_REQUEST_CORRECTIONS',
-      'VALIDATION_REJECT',
-      'LIVRABLE_READ',
+      'dossier.create',
+      'dossier.read',
+      'incoming.read',
+      'outgoing.read',
+      'outgoing.create',
+      'outgoing.update',
+      'outgoing.send',
+      'instruction.create',
+      'instruction.assign',
+      'instruction.update',
+      'validation.approve',
+      'validation.return',
+      'validation.reject',
+      'deliverable.read',
     ]);
     id.roleExec = await role('Exécutant', [
-      'DOSSIER_READ',
-      'COURRIER_READ',
-      'LIVRABLE_DEPOSIT',
-      'LIVRABLE_READ',
-      'LIVRABLE_SUBMIT',
-      'LIVRABLE_NEW_VERSION',
+      'dossier.read',
+      'incoming.read',
+      'outgoing.read',
+      'deliverable.create',
+      'deliverable.read',
+      'deliverable.submit',
+      'deliverable.update',
     ]);
 
-    // The core's directory: companies become sites, people their users.
-    await app.get(DirectorySyncService).apply(directory());
-    id.siteA = companyA.id;
-    id.siteB = companyB.id;
-    for (const [who, p] of Object.entries(people)) id[who] = p.id;
-
-    // The platform administrator: the Administrateur role globally.
+    // The super-administrator: company A's ADMIN role and the SUPER_ADMIN
+    // profile (what every company shares).
     await db.userRole.create({
-      data: { userId: id.super, roleId: id.roleAdmin, siteId: null },
+      data: { userId: id.super, roleId: id.roleAdmin },
+    });
+    await db.user.update({
+      where: { id: id.super },
+      data: { accessProfile: 'SUPER_ADMIN' },
     });
     for (const [who, p] of Object.entries(people)) {
       token[who] = await signer.signIn(p.id, { tenantAdmin: p.tenantAdmin });
     }
   });
-
   // The throwaway database is left in place: dropping it here would cut
   // the application's still-pooled connections. The next run drops it
   // first.
@@ -270,39 +283,47 @@ describe('Diffusion, end to end', () => {
     it("answers who is signed in, with their company and the company's apps", async () => {
       const res = await as('super').get('/auth/me').expect(200);
       expect(res.body.email).toBe('super@e2e.test');
-      expect(res.body.company).toEqual({ id: id.siteA, name: 'Douala' });
+      expect(res.body.company).toMatchObject({
+        id: id.companyA,
+        name: 'Douala',
+      });
       expect(res.body.apps.map((a: any) => a.id)).toEqual(['diffusion']);
       expect(res.body.impersonatedBy).toBeNull();
       expect(res.body).not.toHaveProperty('password');
     });
 
+    it('serves every route under /api/v1, the health check at the root', async () => {
+      await request(app.getHttpServer()).get('/').expect(200);
+      await request(app.getHttpServer()).get('/auth/me').expect(404);
+    });
+
     it('refuses a call without the core cookie', async () => {
       const res = await request(app.getHttpServer())
-        .get('/auth/me')
+        .get('/api/v1/auth/me')
         .expect(401);
       expect(res.body.code).toBe('UNAUTHENTICATED');
     });
 
     it('accepts the token as a Bearer header too (server-side callers)', async () => {
       await request(app.getHttpServer())
-        .get('/auth/me')
+        .get('/api/v1/auth/me')
         .set('Authorization', `Bearer ${token.super}`)
         .expect(200);
     });
 
     it('refuses a token whose session the store does not hold', async () => {
-      const ended = signer.token(id.super, id.siteA);
+      const ended = signer.token(id.super, id.companyA);
       await request(app.getHttpServer())
-        .get('/auth/me')
+        .get('/api/v1/auth/me')
         .set('Cookie', `creapp_access=${ended}`)
         .expect(401);
     });
 
     it('refuses a token signed by anyone else than the core', async () => {
       const forged = new LocalCoreSigner();
-      const other = forged.token(id.super, id.siteA);
+      const other = forged.token(id.super, id.companyA);
       await request(app.getHttpServer())
-        .get('/auth/me')
+        .get('/api/v1/auth/me')
         .set('Cookie', `creapp_access=${other}`)
         .expect(401);
     });
@@ -315,7 +336,7 @@ describe('Diffusion, end to end', () => {
     it('answers NO_APP_ACCESS when the company may not use Diffusion', async () => {
       const off = await signer.signIn(id.super, { access: 'DISABLED' });
       const res = await request(app.getHttpServer())
-        .get('/auth/me')
+        .get('/api/v1/auth/me')
         .set('Cookie', `creapp_access=${off}`)
         .expect(403);
       expect(res.body.code).toBe('NO_APP_ACCESS');
@@ -330,7 +351,7 @@ describe('Diffusion, end to end', () => {
         },
       });
       const res = await request(app.getHttpServer())
-        .get('/auth/me')
+        .get('/api/v1/auth/me')
         .set('Cookie', `creapp_access=${as2}`)
         .expect(200);
       expect(res.body.impersonatedBy).toEqual({
@@ -341,26 +362,33 @@ describe('Diffusion, end to end', () => {
   });
 
   // ---------------------------------------------------------------------------
-  describe('2. Sociétés (sites) et leurs administrateurs', () => {
-    it('each company of the core is a site, with its default roles and its administrator as responsible', async () => {
-      const sites = await db.site.findMany({
-        where: { id: { in: [id.siteA, id.siteB] } },
+  describe('2. Sociétés et leurs administrateurs', () => {
+    it('each company of the core is copied, with its default roles and its administrator as responsible', async () => {
+      const companies = await db.company.findMany({
+        where: { id: { in: [id.companyA, id.companyB] } },
         include: { roles: true },
         orderBy: { name: 'asc' },
       });
-      expect(sites.map((s: any) => s.name)).toEqual(['Douala', 'Yaoundé']);
-      expect(sites.map((s: any) => s.responsibleId)).toEqual([
+      expect(companies.map((s: any) => s.name)).toEqual(['Douala', 'Yaoundé']);
+      expect(companies.map((s: any) => s.responsibleId)).toEqual([
         id.respA,
         id.respB,
       ]);
-      expect(sites[0].roles.map((r: any) => r.name)).toContain('Admin');
-      // The company administrator holds the site's Admin role.
+      expect(companies[0].roles.map((r: any) => r.code)).toEqual(
+        expect.arrayContaining([
+          'ADMIN',
+          'RECEPTIONIST',
+          'DISPATCHER',
+          'ADMIN_DISPATCHER',
+        ]),
+      );
+      // The company administrator holds the company's Admin role.
       const me = await as('respA').get('/auth/me').expect(200);
       expect(me.body.roles).toEqual(['Admin']);
-      expect(me.body.site.id).toBe(id.siteA);
+      expect(me.body.company.id).toBe(id.companyA);
     });
 
-    it("the site admin gives their company's people their roles", async () => {
+    it("the company admin gives their company's people their roles", async () => {
       const users: [string, string][] = [
         ['agentA', id.roleAgent],
         ['chefA', id.roleChef],
@@ -371,7 +399,7 @@ describe('Diffusion, end to end', () => {
         const res = await as('respA')
           .patch(`/users/${id[who]}`, { roleIds: [roleId] })
           .expect(200);
-        expect(res.body.site.id).toBe(id.siteA);
+        expect(res.body.company.id).toBe(id.companyA);
         await as(who).get('/auth/me').expect(200);
       }
     });
@@ -384,21 +412,21 @@ describe('Diffusion, end to end', () => {
         .patch(`/users/${id.agentA}`, { name: 'Renamed' })
         .expect(400);
       await as('respA')
-        .patch(`/users/${id.agentA}`, { siteId: id.siteB })
+        .patch(`/users/${id.agentA}`, { companyId: id.companyB })
         .expect(400);
       await as('super').post(`/users/${id.agentA}/toggle-status`).expect(404);
-      await as('super').post('/sites', { name: 'Garoua' }).expect(404);
+      await as('super').post('/companies', { name: 'Garoua' }).expect(404);
     });
 
-    it('a site admin only sees their own site', async () => {
+    it('a company admin only sees their own company', async () => {
       const res = await as('respA').get('/users').expect(200);
-      const sites = new Set(res.body.data.map((u: any) => u.site?.id));
-      expect([...sites]).toEqual([id.siteA]);
+      const companies = new Set(res.body.data.map((u: any) => u.company?.id));
+      expect([...companies]).toEqual([id.companyA]);
       await as('respA').get(`/users/${id.respB}`).expect(403);
       await as('respB').get(`/users/${id.agentA}`).expect(403);
     });
 
-    it("a site admin cannot give roles to another company's people", async () => {
+    it("a company admin cannot give roles to another company's people", async () => {
       await as('respA')
         .patch(`/users/${id.respB}`, { roleIds: [id.roleAgent] })
         .expect(403);
@@ -428,23 +456,29 @@ describe('Diffusion, end to end', () => {
       await as('agentA').get('/users').expect(403);
     });
   });
-  describe('3. Rôles et permissions du site', () => {
-    it('the site admin creates a role for their site', async () => {
-      const perms = await as('respA').get('/permissions').expect(200);
-      const codes = perms.body.map((p: any) => p.code);
-      expect(codes).toContain('COURRIER_READ');
-      // Platform permissions are not offered to a site admin.
-      expect(codes).not.toContain('ADMIN_MANAGE_ROLES');
+  describe('3. Rôles et permissions de la société', () => {
+    it('the company admin creates a role for their company', async () => {
+      const catalog = await as('respA').get('/permissions').expect(200);
+      expect(catalog.body.version).toBe('2.0.0');
+      const codes = catalog.body.groups.flatMap((g: any) =>
+        g.permissions.map((p: any) => p.code),
+      );
+      expect(codes).toContain('incoming.read');
+      expect(codes).not.toContain('COURRIER_READ');
 
-      const read = perms.body.find((p: any) => p.code === 'COURRIER_READ');
       const res = await as('respA')
-        .post('/roles', { name: 'Lecteur', permissionIds: [read.id] })
+        .post('/roles', { name: 'Lecteur', permissions: ['incoming.close'] })
         .expect(201);
-      expect(res.body.siteId).toBe(id.siteA);
+      expect(res.body.companyId).toBe(id.companyA);
+      // The read the action needs comes with it.
+      expect(res.body.permissionCodes).toEqual([
+        'incoming.close',
+        'incoming.read',
+      ]);
       id.roleLecteurA = res.body.id;
     });
 
-    it("another site's admin doesn't see that role", async () => {
+    it("another company's admin doesn't see that role", async () => {
       await as('respB').get(`/roles/${id.roleLecteurA}`).expect(404);
     });
 
@@ -461,12 +495,128 @@ describe('Diffusion, end to end', () => {
   });
 
   // ---------------------------------------------------------------------------
+  describe('3b. Rôles depuis la console du core (API app-admin)', () => {
+    const viaConsole = (
+      method: 'get' | 'post' | 'patch' | 'put' | 'delete',
+      url: string,
+      company = id.companyA,
+    ) =>
+      request(app.getHttpServer())
+        [method](`/api/v1/app-admin${url}`)
+        .set('Authorization', `Bearer ${signer.appAdmin(company)}`);
+
+    it("refuses a person's access token and an unsigned call", async () => {
+      await request(app.getHttpServer())
+        .get('/api/v1/app-admin/roles')
+        .expect(401);
+      await request(app.getHttpServer())
+        .get('/api/v1/app-admin/roles')
+        .set('Authorization', `Bearer ${token.respA}`)
+        .expect(401);
+    });
+
+    it('serves the catalogue with labels and implied reads', async () => {
+      const res = await viaConsole('get', '/permissions').expect(200);
+      expect(res.body.version).toBe('2.0.0');
+      const incoming = res.body.groups.find((g: any) => g.key === 'incoming');
+      expect(incoming.labels).toEqual(
+        expect.objectContaining({ fr: expect.any(String) }),
+      );
+      expect(
+        incoming.permissions.find((p: any) => p.code === 'incoming.dispatch'),
+      ).toMatchObject({ action: 'dispatch' });
+      expect(res.body.implies['incoming.dispatch']).toContain('incoming.read');
+    });
+
+    it("lists the company's roles, ADMIN protected", async () => {
+      const res = await viaConsole('get', '/roles').expect(200);
+      const admin = res.body.find((r: any) => r.code === 'ADMIN');
+      expect(admin).toMatchObject({ isSystem: true, modified: false });
+      expect(res.body.map((r: any) => r.id)).not.toContain(
+        id.roleLecteurA + 'x',
+      );
+      const put = await viaConsole('put', `/roles/${admin.id}/permissions`)
+        .send({ permissions: [] })
+        .expect(409);
+      expect(put.body.code).toBe('SYSTEM_ROLE_PROTECTED');
+      const del = await viaConsole('delete', `/roles/${admin.id}`).expect(409);
+      expect(del.body.code).toBe('SYSTEM_ROLE_PROTECTED');
+      // Another company's console doesn't see it.
+      await viaConsole('get', `/roles/${admin.id}`, id.companyB).expect(404);
+    });
+
+    it('creates, renames, sets permissions, restores defaults and archives', async () => {
+      const created = await viaConsole('post', '/roles')
+        .send({ name: 'Console', permissions: ['dossier.close'] })
+        .expect(201);
+      expect(created.body.permissionCodes).toEqual([
+        'dossier.close',
+        'dossier.read',
+      ]);
+      const taken = await viaConsole('post', '/roles')
+        .send({ name: 'Console' })
+        .expect(409);
+      expect(taken.body.code).toBe('UNIQUE_CONSTRAINT');
+      const unknown = await viaConsole(
+        'put',
+        `/roles/${created.body.id}/permissions`,
+      )
+        .send({ permissions: ['COURRIER_READ'] })
+        .expect(400);
+      expect(unknown.body.code).toBe('UNKNOWN_PERMISSION');
+      await viaConsole('patch', `/roles/${created.body.id}`)
+        .send({ name: 'Console 2', description: null })
+        .expect(200);
+      const noDefaults = await viaConsole(
+        'post',
+        `/roles/${created.body.id}/restore`,
+      ).expect(409);
+      expect(noDefaults.body.code).toBe('ROLE_HAS_NO_DEFAULTS');
+
+      // A person holding it: deleting is refused; without holders it is archived.
+      await viaConsole('put', `/users/${id.norole}/roles`)
+        .send({ roleIds: [created.body.id] })
+        .expect(200);
+      const inUse = await viaConsole(
+        'delete',
+        `/roles/${created.body.id}`,
+      ).expect(409);
+      expect(inUse.body.code).toBe('ROLE_IN_USE');
+      const people = await viaConsole('post', '/users/roles')
+        .send({ userIds: [id.norole] })
+        .expect(200);
+      expect(people.body[0].permissions).toContain('dossier.close');
+      await viaConsole('put', `/users/${id.norole}/roles`)
+        .send({ roleIds: [] })
+        .expect(200);
+      await viaConsole('delete', `/roles/${created.body.id}`).expect(204);
+      const archived = await db.role.findUnique({
+        where: { id: created.body.id },
+      });
+      expect(archived.archivedAt).not.toBeNull();
+    });
+
+    it('restores a modified default role', async () => {
+      const roles = await viaConsole('get', '/roles').expect(200);
+      const desk = roles.body.find((r: any) => r.code === 'RECEPTIONIST');
+      const changed = await viaConsole('put', `/roles/${desk.id}/permissions`)
+        .send({ permissions: ['incoming.read'] })
+        .expect(200);
+      expect(changed.body.modified).toBe(true);
+      const back = await viaConsole('post', `/roles/${desk.id}/restore`).expect(
+        200,
+      );
+      expect(back.body.modified).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   describe("4. Parcours d'un effet entrant", () => {
     it('the dossier exists, with chefA as responsible', async () => {
       const res = await as('chefA')
         .post('/dossiers', {
           title: 'Construction du pont',
-          siteId: id.siteA,
+          companyId: id.companyA,
           responsibleId: id.chefA,
         })
         .expect(201);
@@ -678,7 +828,7 @@ describe('Diffusion, end to end', () => {
 
     const multipart = (url: string) =>
       request(app.getHttpServer())
-        .post(url)
+        .post(API + url)
         .set('Authorization', `Bearer ${token.chefA}`);
     const year = new Date().getFullYear();
 
@@ -691,7 +841,7 @@ describe('Diffusion, end to end', () => {
     it('is signed with its signed scan, its signatory and its date', async () => {
       // Not sent before its signature.
       const canal = await as('super')
-        .post('/canaux', { name: 'Porteur', siteId: id.siteA })
+        .post('/canaux', { name: 'Porteur', companyId: id.companyA })
         .expect(201);
       id.canalPorteur = canal.body.id;
       await as('chefA')
@@ -719,9 +869,9 @@ describe('Diffusion, end to end', () => {
       expect(res.body.signedDocument.originalName).toBe('signe.pdf');
     });
 
-    it("is only sent through its own site's canal", async () => {
+    it("is only sent through its own company's canal", async () => {
       const other = await as('super')
-        .post('/canaux', { name: 'Porteur', siteId: id.siteB })
+        .post('/canaux', { name: 'Porteur', companyId: id.companyB })
         .expect(201);
       await as('chefA')
         .post(`/courriers/${id.sortant}/send`, {
@@ -731,31 +881,31 @@ describe('Diffusion, end to end', () => {
         })
         .expect(400);
 
-      // Each site sees its own canaux and correspondents only.
+      // Each company sees its own canaux and correspondents only.
       const mine = await as('chefA').get('/canaux').expect(200);
       expect(mine.body.map((c: any) => c.id)).toContain(id.canalPorteur);
       expect(mine.body.map((c: any) => c.id)).not.toContain(other.body.id);
       await as('chefA').get(`/canaux/${other.body.id}`).expect(404);
       const all = await as('super')
-        .get(`/canaux?siteId=${id.siteB}`)
+        .get(`/canaux?companyId=${id.companyB}`)
         .expect(200);
       expect(all.body.map((c: any) => c.id)).toEqual([other.body.id]);
-      // A name is unique within a site only.
+      // A name is unique within a company only.
       await as('super')
-        .post('/canaux', { name: 'Porteur', siteId: id.siteB })
+        .post('/canaux', { name: 'Porteur', companyId: id.companyB })
         .expect(409);
       // Only a platform administrator makes them.
       await as('respA')
-        .post('/canaux', { name: 'Coursier', siteId: id.siteA })
+        .post('/canaux', { name: 'Coursier', companyId: id.companyA })
         .expect(403);
 
       const sender = await as('super')
         .post('/correspondents', {
           name: 'Mairie de Yaoundé',
-          siteId: id.siteB,
+          companyId: id.companyB,
         })
         .expect(201);
-      expect(sender.body.site).toMatchObject({ id: id.siteB });
+      expect(sender.body.company).toMatchObject({ id: id.companyB });
       const seen = await as('chefA').get('/correspondents').expect(200);
       expect(seen.body.data.map((c: any) => c.id)).not.toContain(
         sender.body.id,
@@ -1006,26 +1156,26 @@ describe('Diffusion, end to end', () => {
 
   // ---------------------------------------------------------------------------
   describe("6. Journal d'audit", () => {
-    it('only lists what users did, and a site admin only their site', async () => {
+    it('only lists what users did, and a company admin only their company', async () => {
       const all = await as('super').get('/activity-logs').expect(200);
       expect(all.body.data.length).toBeGreaterThan(0);
       expect(all.body.data.every((log: any) => log.userId)).toBe(true);
 
-      const siteB = await as('respB').get('/activity-logs').expect(200);
-      const siteBUsers = new Set([id.respB]);
+      const companyB = await as('respB').get('/activity-logs').expect(200);
+      const companyBUsers = new Set([id.respB]);
       expect(
-        siteB.body.data.every((log: any) => siteBUsers.has(log.userId)),
+        companyB.body.data.every((log: any) => companyBUsers.has(log.userId)),
       ).toBe(true);
     });
   });
 
   // ---------------------------------------------------------------------------
   describe('7. Contrats', () => {
-    it("only its site's responsible or a platform administrator creates a contract", async () => {
+    it("only its company's responsible or a platform administrator creates a contract", async () => {
       const project = await db.project.create({
         data: {
           name: 'Port de Kribi',
-          siteId: id.siteA,
+          companyId: id.companyA,
           contentType: 'CONTRATS',
         },
       });
@@ -1034,14 +1184,14 @@ describe('Diffusion, end to end', () => {
         await db.project.create({
           data: {
             name: 'Route Douala',
-            siteId: id.siteA,
+            companyId: id.companyA,
             contentType: 'CONTRATS',
           },
         })
       ).id;
       const body = { title: 'Marché des quais', projectId: id.project };
       await as('chefA').post('/contracts', body).expect(403);
-      // The responsible of another site neither.
+      // The responsible of another company neither.
       await as('respB').post('/contracts', body).expect(403);
       const res = await as('super').post('/contracts', body).expect(201);
       expect(res.body.number).toMatch(/^CT-/);
@@ -1052,7 +1202,7 @@ describe('Diffusion, end to end', () => {
       const res = await as('chefA')
         .post('/dossiers', {
           title: 'Quai nord',
-          siteId: id.siteA,
+          companyId: id.companyA,
           responsibleId: id.chefA,
           contractId: id.contract,
         })
@@ -1066,7 +1216,7 @@ describe('Diffusion, end to end', () => {
       await as('chefA')
         .post('/dossiers', {
           title: 'Quai sud',
-          siteId: id.siteA,
+          companyId: id.companyA,
           responsibleId: id.chefA,
           contractId: id.contract,
           projectId: id.otherProject,
@@ -1126,19 +1276,19 @@ describe('Diffusion, end to end', () => {
 
   // ---------------------------------------------------------------------------
   describe('7b. Projets', () => {
-    it('belong to a site: managed by its responsible, seen by its users only', async () => {
+    it('belong to a company: managed by its responsible, seen by its users only', async () => {
       const own = await as('respA')
         .post('/projects', {
           name: 'Digue de Bonabéri',
           contentType: 'DOSSIERS',
         })
         .expect(201);
-      expect(own.body.site).toMatchObject({ id: id.siteA });
-      // Not on another site.
+      expect(own.body.company).toMatchObject({ id: id.companyA });
+      // Not on another company.
       await as('respA')
         .post('/projects', {
           name: 'Pont de Mbalmayo',
-          siteId: id.siteB,
+          companyId: id.companyB,
           contentType: 'DOSSIERS',
         })
         .expect(403);
@@ -1152,11 +1302,11 @@ describe('Diffusion, end to end', () => {
       expect(seenB.body.data.map((p: any) => p.id)).not.toContain(own.body.id);
       await as('respB').get(`/projects/${own.body.id}`).expect(404);
 
-      // A dossier of another site cannot belong to it.
+      // A dossier of another company cannot belong to it.
       await as('respB')
         .post('/dossiers', {
-          title: 'Hors site',
-          siteId: id.siteB,
+          title: 'Hors company',
+          companyId: id.companyB,
           responsibleId: id.respB,
           projectId: own.body.id,
         })
@@ -1313,13 +1463,13 @@ describe('Diffusion, end to end', () => {
       await as('chefA')
         .post('/dossiers', {
           title: 'Digue est',
-          siteId: id.siteA,
+          companyId: id.companyA,
           responsibleId: id.chefA,
           contractId: id.restrictedContract,
         })
         .expect(400);
       await request(app.getHttpServer())
-        .post('/documents')
+        .post('/api/v1/documents')
         .set('Authorization', `Bearer ${token.chefA}`)
         .field('contractId', id.restrictedContract)
         .attach('file', Buffer.from('%PDF-1.4'), 'pv.pdf')
@@ -1343,7 +1493,7 @@ describe('Diffusion, end to end', () => {
     it('takes the number typed for a dossier, once', async () => {
       const body = {
         title: 'Dossier saisi',
-        siteId: id.siteA,
+        companyId: id.companyA,
         responsibleId: id.chefA,
         number: 'DOS-E2E-001',
       };
@@ -1449,7 +1599,7 @@ describe('Diffusion, end to end', () => {
     it('is signed with a PDF, then locked', async () => {
       const sign = () =>
         request(app.getHttpServer())
-          .post(`/analysis-sheets/${id.sheet}/sign`)
+          .post(`/api/v1/analysis-sheets/${id.sheet}/sign`)
           .set('Authorization', `Bearer ${token.super}`)
           .field('signatoryName', 'M. Sow')
           .field('signedAt', '2026-11-02');

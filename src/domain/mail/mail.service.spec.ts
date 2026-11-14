@@ -8,7 +8,7 @@ import {
 import { MailService, formatCourrier } from './mail.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { AccessService } from '../../auth/access/access.service';
 import {
   CourrierDirection,
   CourrierStatus,
@@ -18,7 +18,7 @@ import { StorageService } from '../../storage/storage.service';
 import { ActivityService } from '../../activity/activity.service';
 import { SettingsService } from '../../administration/settings/settings.service';
 
-// Global types, plus a type of site s-2.
+// Global types, plus a type of company s-2.
 const EFFET_TYPES: Record<string, Record<string, unknown>> = {
   't-courrier': {
     id: 't-courrier',
@@ -26,7 +26,7 @@ const EFFET_TYPES: Record<string, Record<string, unknown>> = {
     isPhysical: false,
     canListEffets: false,
     active: true,
-    siteId: null,
+    companyId: null,
   },
   't-bordereau': {
     id: 't-bordereau',
@@ -34,7 +34,7 @@ const EFFET_TYPES: Record<string, Record<string, unknown>> = {
     isPhysical: false,
     canListEffets: true,
     active: true,
-    siteId: null,
+    companyId: null,
   },
   't-specimen': {
     id: 't-specimen',
@@ -42,7 +42,7 @@ const EFFET_TYPES: Record<string, Record<string, unknown>> = {
     isPhysical: true,
     canListEffets: false,
     active: true,
-    siteId: null,
+    companyId: null,
   },
   't-old': {
     id: 't-old',
@@ -50,15 +50,15 @@ const EFFET_TYPES: Record<string, Record<string, unknown>> = {
     isPhysical: false,
     canListEffets: false,
     active: false,
-    siteId: null,
+    companyId: null,
   },
-  't-site2': {
-    id: 't-site2',
+  't-company2': {
+    id: 't-company2',
     name: 'Échantillon Akwa',
     isPhysical: true,
     canListEffets: false,
     active: true,
-    siteId: 's-2',
+    companyId: 's-2',
   },
 };
 
@@ -71,7 +71,7 @@ describe('MailService', () => {
     contract: Record<string, jest.Mock>;
     instruction: Record<string, jest.Mock>;
     document: Record<string, jest.Mock>;
-    site: Record<string, jest.Mock>;
+    company: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
     validation: Record<string, jest.Mock>;
     effetType: Record<string, jest.Mock>;
@@ -80,10 +80,10 @@ describe('MailService', () => {
     $queryRaw: jest.Mock;
   };
   let notifications: { create: jest.Mock };
-  let rbac: Record<string, jest.Mock>;
+  let access: Record<string, jest.Mock>;
   let storage: { upload: jest.Mock; delete: jest.Mock };
 
-  // The site's settings (PA·8), as SettingsService.get gives them.
+  // The company's settings (PA·8), as SettingsService.get gives them.
   let settings: Record<string, unknown> & {
     defaultTreatmentDays: number;
     outgoingReplyDays: number;
@@ -119,7 +119,7 @@ describe('MailService', () => {
       },
       canal: { findUnique: jest.fn() },
       document: { create: jest.fn() },
-      site: { findUnique: jest.fn() },
+      company: { findUnique: jest.fn() },
       user: {
         findUnique: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
@@ -143,13 +143,12 @@ describe('MailService', () => {
       ),
     };
     notifications = { create: jest.fn().mockResolvedValue({}) };
-    rbac = {
-      hasPermission: jest.fn().mockResolvedValue(false),
-      hasGlobalPermission: jest.fn().mockResolvedValue(false),
-      hasPermissionAtSite: jest.fn().mockResolvedValue(false),
-      sitesWithPermission: jest.fn().mockResolvedValue([]),
-      // Global grant by default: no site restriction.
-      siteFilter: jest.fn().mockResolvedValue({}),
+    access = {
+      has: jest.fn().mockResolvedValue(false),
+      hasAtCompany: jest.fn().mockResolvedValue(false),
+      worksAtCompany: jest.fn().mockResolvedValue(true),
+      // No company restriction by default (the filter is tested on its own).
+      companyFilter: jest.fn().mockResolvedValue({}),
     };
     storage = {
       upload: jest.fn().mockResolvedValue({ key: 'test-key' }),
@@ -161,7 +160,7 @@ describe('MailService', () => {
         MailService,
         { provide: DatabaseService, useValue: database },
         { provide: NotificationsService, useValue: notifications },
-        { provide: RbacService, useValue: rbac },
+        { provide: AccessService, useValue: access },
         { provide: StorageService, useValue: storage },
         {
           provide: ActivityService,
@@ -275,24 +274,26 @@ describe('MailService', () => {
       });
     });
 
-    it('only lists courriers on the sites where the user may read them', async () => {
-      rbac.siteFilter.mockImplementation((_u, _code, toWhere) =>
+    it('only lists courriers on the companies where the user may read them', async () => {
+      access.companyFilter.mockImplementation((_u, _code, toWhere) =>
         Promise.resolve(toWhere({ in: ['s-A'] })),
       );
 
       await service.findIncoming({}, 'u-1');
 
       const { where } = database.courrier.findMany.mock.calls[0][0];
-      expect(where.OR[0].dossier.AND[1]).toEqual({ siteId: { in: ['s-A'] } });
-      // Own drafts without a dossier are not tied to a site.
+      expect(where.OR[0].dossier.AND[1]).toEqual({
+        companyId: { in: ['s-A'] },
+      });
+      // Own drafts without a dossier are not tied to a company.
       expect(where.OR[1]).toEqual({ dossierId: null, createdById: 'u-1' });
       // Whoever it is entrusted to sees it, wherever it sits.
       expect(where.OR).toContainEqual({ ownerId: 'u-1' });
       expect(where.OR).toContainEqual({ supervisorId: 'u-1' });
-      // Entrants still waiting for their dossier: on the registrant's site.
+      // Entrants still waiting for their dossier: on the registrant's company.
       expect(where.OR).toContainEqual({
         dossierId: null,
-        createdBy: { siteId: { in: ['s-A'] } },
+        createdBy: { companyId: { in: ['s-A'] } },
       });
     });
 
@@ -307,27 +308,27 @@ describe('MailService', () => {
 
       beforeEach(() => {
         database.courrier.findUnique.mockResolvedValue(entrant);
-        database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+        database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
       });
 
       it('is refused to someone who only sees it', async () => {
-        rbac.hasPermissionAtSite = jest.fn().mockResolvedValue(false);
+        access.hasAtCompany = jest.fn().mockResolvedValue(false);
 
         await expect(service.assertMayEdit('c-1', 'u-1')).rejects.toThrow(
-          /COURRIER_UPDATE/,
+          /incoming\.update/,
         );
       });
 
       it('is open to whoever has it in charge', async () => {
-        rbac.hasPermissionAtSite = jest.fn().mockResolvedValue(false);
+        access.hasAtCompany = jest.fn().mockResolvedValue(false);
 
         await expect(
           service.assertMayEdit('c-1', 'owner'),
         ).resolves.toBeUndefined();
       });
 
-      it('is open to the holder of the permission at its site', async () => {
-        rbac.hasPermissionAtSite = jest.fn().mockResolvedValue(true);
+      it('is open to the holder of the permission at its company', async () => {
+        access.hasAtCompany = jest.fn().mockResolvedValue(true);
 
         await expect(
           service.assertMayEdit('c-1', 'u-1'),
@@ -335,28 +336,28 @@ describe('MailService', () => {
       });
     });
 
-    it("gives nothing for a site the user doesn't work on, even an effet entrusted to them", async () => {
-      rbac.worksAtSite = jest.fn().mockResolvedValue(false);
+    it("gives nothing for a company the user doesn't work on, even an effet entrusted to them", async () => {
+      access.worksAtCompany = jest.fn().mockResolvedValue(false);
 
-      await service.findIncoming({ siteId: 's-B' }, 'u-1');
+      await service.findIncoming({ companyId: 's-B' }, 'u-1');
 
       const { where } = database.courrier.findMany.mock.calls[0][0];
       expect(where.OR[0].AND[1]).toEqual({
         OR: [
-          { dossier: { siteId: { in: [] } } },
-          { dossierId: null, createdBy: { siteId: { in: [] } } },
+          { dossier: { companyId: { in: [] } } },
+          { dossierId: null, createdBy: { companyId: { in: [] } } },
         ],
       });
     });
 
-    it('keeps the requested site when the user may read effets there', async () => {
-      rbac.worksAtSite = jest.fn().mockResolvedValue(true);
+    it('keeps the requested company when the user may read effets there', async () => {
+      access.worksAtCompany = jest.fn().mockResolvedValue(true);
 
-      await service.findIncoming({ siteId: 's-A' }, 'u-1');
+      await service.findIncoming({ companyId: 's-A' }, 'u-1');
 
       const { where } = database.courrier.findMany.mock.calls[0][0];
       expect(where.OR[0].AND[1].OR[0]).toEqual({
-        dossier: { siteId: 's-A' },
+        dossier: { companyId: 's-A' },
       });
     });
 
@@ -405,9 +406,9 @@ describe('MailService', () => {
           _count: { _all: n },
         })),
       );
-      // Its approver: its registrant's site's responsible.
+      // Its approver: its registrant's company's responsible.
       database.user.findUnique.mockResolvedValue({
-        site: { responsibleId: 'u-chef' },
+        company: { responsibleId: 'u-chef' },
       });
       database.user.findMany.mockResolvedValue([
         { id: 'u-chef', name: 'Chef' },
@@ -506,10 +507,10 @@ describe('MailService', () => {
       database.courrier.create.mockImplementation(({ data }) =>
         Promise.resolve({ id: 'c-1', ...data }),
       );
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
     });
 
-    it("gives an entrant its site's treatment delay from its reception", async () => {
+    it("gives an entrant its company's treatment delay from its reception", async () => {
       settings.defaultTreatmentDays = 10;
       settings.businessDaysOnly = true;
 
@@ -558,7 +559,7 @@ describe('MailService', () => {
       );
     });
 
-    it("gives a sortant draft its site's reply delay", async () => {
+    it("gives a sortant draft its company's reply delay", async () => {
       settings.outgoingReplyDays = 15;
       settings.businessDaysOnly = false;
       database.courrier.create.mockResolvedValue({ id: 'c-1' });
@@ -588,8 +589,8 @@ describe('MailService', () => {
       );
     });
 
-    it('registers an entrant without its dossier, on the registrant’s site', async () => {
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+    it('registers an entrant without its dossier, on the registrant’s company', async () => {
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
 
       const result = await service.create(ENTRANT, 'u-agent');
 
@@ -604,7 +605,7 @@ describe('MailService', () => {
     });
 
     it('is received the day it is registered when no date is given', async () => {
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
 
       await service.create(ENTRANT, 'u-agent');
 
@@ -614,16 +615,16 @@ describe('MailService', () => {
     });
 
     it("takes its dossier's project and contract", async () => {
-      // Open, on an active site, in project p-1 under contract ct-1.
+      // Open, on an active company, in project p-1 under contract ct-1.
       database.dossier.findUnique.mockResolvedValue({
         number: 'D-1',
         status: 'IN_PROGRESS',
-        siteId: 's-1',
+        companyId: 's-1',
         projectId: 'p-1',
         contractId: 'ct-1',
       });
-      database.site.findUnique.mockResolvedValue({
-        name: 'Site',
+      database.company.findUnique.mockResolvedValue({
+        name: 'Company',
         status: 'ACTIVE',
       });
 
@@ -636,8 +637,8 @@ describe('MailService', () => {
       });
     });
 
-    it('needs a dossier when the registrant belongs to no site', async () => {
-      database.user.findUnique.mockResolvedValue({ siteId: null });
+    it('needs a dossier when the registrant belongs to no company', async () => {
+      database.user.findUnique.mockResolvedValue({ companyId: null });
 
       await expect(
         service.create(ENTRANT, 'super-admin'),
@@ -665,11 +666,11 @@ describe('MailService', () => {
       database.dossier.findUnique.mockResolvedValue({
         number: 'D-1',
         status: 'OPEN',
-        siteId: 's-1',
+        companyId: 's-1',
         responsibleId: 'u-chef',
-        site: { responsibleId: 'u-site' },
+        company: { responsibleId: 'u-company' },
       });
-      database.site.findUnique.mockResolvedValue({
+      database.company.findUnique.mockResolvedValue({
         name: 'Cristal',
         status: 'ACTIVE',
       });
@@ -709,17 +710,17 @@ describe('MailService', () => {
       );
     });
 
-    it("tells the site's responsible when the dossier has none", async () => {
+    it("tells the company's responsible when the dossier has none", async () => {
       database.courrier.findUnique.mockResolvedValue(entrant());
       database.dossier.findUnique.mockResolvedValue({
         responsibleId: null,
-        site: { responsibleId: 'u-site' },
+        company: { responsibleId: 'u-company' },
       });
 
       await service.transmit('c-1', 'u-agent');
 
       expect(notifications.create).toHaveBeenCalledWith(
-        expect.objectContaining({ recipientIds: ['u-site'] }),
+        expect.objectContaining({ recipientIds: ['u-company'] }),
       );
     });
 
@@ -814,7 +815,7 @@ describe('MailService', () => {
       });
 
       it('just registers when transmit is false', async () => {
-        database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+        database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
 
         await service.create(
           {
@@ -868,7 +869,7 @@ describe('MailService', () => {
   });
 
   describe('effet types', () => {
-    // An entrant registered on site s-1, without its dossier.
+    // An entrant registered on company s-1, without its dossier.
     const ENTRANT = {
       direction: CourrierDirection.ENTRANT,
       subject: 'Échantillons du chantier',
@@ -877,7 +878,7 @@ describe('MailService', () => {
       database.courrier.create.mock.calls[0][0].data as Record<string, unknown>;
 
     beforeEach(() => {
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
       database.courrier.create.mockImplementation(({ data }) =>
         Promise.resolve({ id: 'c-new', ...data }),
       );
@@ -923,10 +924,10 @@ describe('MailService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it("refuses another site's type", async () => {
+    it("refuses another company's type", async () => {
       await expect(
-        service.create({ ...ENTRANT, typeId: 't-site2' }, 'u-agent'),
-      ).rejects.toThrow(/belongs to another site/);
+        service.create({ ...ENTRANT, typeId: 't-company2' }, 'u-agent'),
+      ).rejects.toThrow(/belongs to another company/);
     });
 
     describe('bordereau', () => {
@@ -1013,7 +1014,7 @@ describe('MailService', () => {
         direction: CourrierDirection.SORTANT,
         reference: null,
         type: null,
-        createdBy: { name: 'Awa', siteId: 's-1' },
+        createdBy: { name: 'Awa', companyId: 's-1' },
       });
       database.courrier.update.mockImplementation(({ data }) =>
         Promise.resolve({ id: 'c-1', ...data }),
@@ -1069,9 +1070,9 @@ describe('MailService', () => {
       database.dossier.findUnique.mockResolvedValue({
         number: 'D-1',
         status: 'OPEN',
-        siteId: 's-1',
+        companyId: 's-1',
       });
-      database.site.findUnique.mockResolvedValue({
+      database.company.findUnique.mockResolvedValue({
         name: 'Douala',
         status: 'ACTIVE',
       });
@@ -1096,7 +1097,7 @@ describe('MailService', () => {
       database.dossier.findUnique.mockResolvedValue({
         number: 'D-1',
         status: 'CLOSED',
-        siteId: 's-1',
+        companyId: 's-1',
       });
 
       await expect(
@@ -1159,11 +1160,11 @@ describe('MailService', () => {
     });
     const responsible = (
       responsibleId: string | null,
-      siteResponsibleId: string | null = null,
+      companyResponsibleId: string | null = null,
     ) =>
       database.dossier.findUnique.mockResolvedValue({
         responsibleId,
-        site: { responsibleId: siteResponsibleId },
+        company: { responsibleId: companyResponsibleId },
       });
 
     describe('cancel / archive / unarchive', () => {
@@ -1538,10 +1539,10 @@ describe('MailService', () => {
 
         beforeEach(() => {
           database.instruction.updateMany.mockResolvedValue({ count: 0 });
-          // The registrant's site, then its responsible.
-          database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
-          database.site.findUnique.mockResolvedValue({
-            responsibleId: 'u-site',
+          // The registrant's company, then its responsible.
+          database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
+          database.company.findUnique.mockResolvedValue({
+            responsibleId: 'u-company',
           });
         });
 
@@ -1557,7 +1558,7 @@ describe('MailService', () => {
         it.each([
           ['its designated responsible', 'u-owner'],
           ['its supervisor', 'u-sup'],
-          ["its site's responsible", 'u-site'],
+          ["its company's responsible", 'u-company'],
         ])('lets %s close it', async (_label, userId) => {
           database.courrier.findUnique.mockResolvedValue(open());
 
@@ -1566,25 +1567,36 @@ describe('MailService', () => {
           expect(database.courrier.update).toHaveBeenCalled();
         });
 
-        it('lets a holder of COURRIER_CLOSE at its site close it', async () => {
+        it('lets a holder of incoming.close in its company close it', async () => {
           database.courrier.findUnique.mockResolvedValue(open());
-          rbac.sitesWithPermission.mockResolvedValue(['s-1']);
+          access.hasAtCompany.mockImplementation(
+            (_u: string, permission: string, companyId: string) =>
+              Promise.resolve(
+                permission === 'incoming.close' && companyId === 's-1',
+              ),
+          );
 
           await service.close('c-1', {}, 'u-chef-courrier');
 
-          expect(rbac.sitesWithPermission).toHaveBeenCalledWith(
+          expect(access.hasAtCompany).toHaveBeenCalledWith(
             'u-chef-courrier',
-            'COURRIER_CLOSE',
+            'incoming.close',
+            's-1',
           );
           expect(database.courrier.update).toHaveBeenCalled();
         });
 
-        it('refuses COURRIER_CLOSE held at another site', async () => {
+        it('refuses incoming.close held at another company', async () => {
           database.courrier.findUnique.mockResolvedValue(open());
-          rbac.sitesWithPermission.mockResolvedValue(['s-2']);
+          access.hasAtCompany.mockImplementation(
+            (_u: string, permission: string, companyId: string) =>
+              Promise.resolve(
+                permission === 'incoming.close' && companyId === 's-2',
+              ),
+          );
 
           await expect(
-            service.close('c-1', {}, 'u-other-site'),
+            service.close('c-1', {}, 'u-other-company'),
           ).rejects.toBeInstanceOf(ForbiddenException);
         });
       });
@@ -1641,16 +1653,16 @@ describe('MailService', () => {
         );
       });
 
-      it("falls back to the site's responsible", async () => {
+      it("falls back to the company's responsible", async () => {
         database.courrier.findUnique.mockResolvedValue(
           courrier(CourrierStatus.TRANSMIS, CourrierDirection.ENTRANT),
         );
-        responsible(null, 'u-site');
+        responsible(null, 'u-company');
 
         await service.submitForValidation('c-1', 'u-author');
 
         expect(notifications.create).toHaveBeenCalledWith(
-          expect.objectContaining({ recipientIds: ['u-site'] }),
+          expect.objectContaining({ recipientIds: ['u-company'] }),
         );
       });
 
@@ -1777,7 +1789,7 @@ describe('MailService', () => {
       database.courrier.findUnique.mockResolvedValue({
         id: 'c-1',
         createdById: actingId,
-        dossier: { site: { responsibleId: null } },
+        dossier: { company: { responsibleId: null } },
       });
     }
 
@@ -1792,11 +1804,11 @@ describe('MailService', () => {
       );
     });
 
-    it("allows the owning site's responsible", async () => {
+    it("allows the owning company's responsible", async () => {
       database.courrier.findUnique.mockResolvedValue({
         id: 'c-1',
         createdById: 'someone-else',
-        dossier: { site: { responsibleId: 'u-1' } },
+        dossier: { company: { responsibleId: 'u-1' } },
       });
       database.courrier.update.mockResolvedValue({ id: 'c-1' });
 
@@ -1805,13 +1817,16 @@ describe('MailService', () => {
       ).resolves.toBeDefined();
     });
 
-    it('allows a platform admin', async () => {
+    it('allows an administrator (role.assign) of its company', async () => {
       database.courrier.findUnique.mockResolvedValue({
         id: 'c-1',
         createdById: 'someone-else',
-        dossier: { site: { responsibleId: 'someone-else-too' } },
+        dossier: { company: { responsibleId: 'someone-else-too' } },
       });
-      rbac.hasGlobalPermission.mockResolvedValue(true);
+      // An administrator (role.assign) of its company.
+      access.hasAtCompany.mockImplementation((_u: string, permission: string) =>
+        Promise.resolve(permission === 'role.assign'),
+      );
       database.courrier.update.mockResolvedValue({ id: 'c-1' });
 
       await expect(
@@ -1823,7 +1838,7 @@ describe('MailService', () => {
       database.courrier.findUnique.mockResolvedValue({
         id: 'c-1',
         createdById: 'someone-else',
-        dossier: { site: { responsibleId: 'someone-else-too' } },
+        dossier: { company: { responsibleId: 'someone-else-too' } },
       });
 
       await expect(
@@ -1890,7 +1905,7 @@ describe('MailService', () => {
 
     it('rejects if contract does not belong to project', async () => {
       database.project.findUnique.mockResolvedValue({
-        siteId: 's-1',
+        companyId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -1911,7 +1926,7 @@ describe('MailService', () => {
 
     it('dispatches with permission straight to TRANSMIS and tells the contract responsible', async () => {
       database.project.findUnique.mockResolvedValue({
-        siteId: 's-1',
+        companyId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -1932,9 +1947,9 @@ describe('MailService', () => {
         contractId: 'ct-1',
         createdById: 'u-creator',
       });
-      // Dispatcher at the effet's site (its registrant's, s-1).
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
-      rbac.hasPermissionAtSite.mockResolvedValue(true);
+      // Dispatcher at the effet's company (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
+      access.hasAtCompany.mockResolvedValue(true);
 
       const res = await service.dispatch(
         'c-1',
@@ -1965,7 +1980,7 @@ describe('MailService', () => {
 
     it('stores proposal in EN_ATTENTE_TRANSMISSION when user lacks dispatch permission', async () => {
       database.project.findUnique.mockResolvedValue({
-        siteId: 's-1',
+        companyId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -1973,7 +1988,7 @@ describe('MailService', () => {
         id: 'd-1',
         projectId: 'p-1',
         responsibleId: 'u-d-resp',
-        site: { responsibleId: 'u-s-resp' },
+        company: { responsibleId: 'u-s-resp' },
       });
       database.courrier.findUnique.mockResolvedValue(
         mockCourrier(CourrierStatus.ENREGISTRE),
@@ -1984,8 +1999,7 @@ describe('MailService', () => {
         proposedProjectId: 'p-1',
         proposedDossierId: 'd-1',
       });
-      rbac.hasPermission.mockResolvedValue(false);
-      rbac.hasGlobalPermission.mockResolvedValue(false);
+      access.has.mockResolvedValue(false);
 
       const res = await service.dispatch(
         'c-1',
@@ -2008,7 +2022,7 @@ describe('MailService', () => {
 
     it('allows changing assignment on TRANSMIS when caller has permission and no instructions exist', async () => {
       database.project.findUnique.mockResolvedValue({
-        siteId: 's-1',
+        companyId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -2025,9 +2039,9 @@ describe('MailService', () => {
         status: CourrierStatus.TRANSMIS,
         ownerId: 'u-new-owner',
       });
-      // Dispatcher at the effet's site (its registrant's, s-1).
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
-      rbac.hasPermissionAtSite.mockResolvedValue(true);
+      // Dispatcher at the effet's company (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
+      access.hasAtCompany.mockResolvedValue(true);
 
       const res = await service.dispatch(
         'c-1',
@@ -2040,7 +2054,7 @@ describe('MailService', () => {
 
     it('rejects changing assignment on TRANSMIS with 409 if instructions exist', async () => {
       database.project.findUnique.mockResolvedValue({
-        siteId: 's-1',
+        companyId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -2052,9 +2066,9 @@ describe('MailService', () => {
       database.courrier.findUnique.mockResolvedValue(
         mockCourrier(CourrierStatus.TRANSMIS, [{ id: 'ins-1' }]),
       );
-      // Dispatcher at the effet's site (its registrant's, s-1).
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
-      rbac.hasPermissionAtSite.mockResolvedValue(true);
+      // Dispatcher at the effet's company (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
+      access.hasAtCompany.mockResolvedValue(true);
 
       await expect(
         service.dispatch(
@@ -2067,7 +2081,7 @@ describe('MailService', () => {
 
     it('rejects changing assignment on TRANSMIS with 409 if caller lacks permission', async () => {
       database.project.findUnique.mockResolvedValue({
-        siteId: 's-1',
+        companyId: 's-1',
         id: 'p-1',
         responsibleId: 'u-p-resp',
       });
@@ -2079,8 +2093,7 @@ describe('MailService', () => {
       database.courrier.findUnique.mockResolvedValue(
         mockCourrier(CourrierStatus.TRANSMIS, []),
       );
-      rbac.hasPermission.mockResolvedValue(false);
-      rbac.hasGlobalPermission.mockResolvedValue(false);
+      access.has.mockResolvedValue(false);
 
       await expect(
         service.dispatch(
@@ -2196,7 +2209,7 @@ describe('MailService', () => {
     });
   });
 
-  describe('rights at the effet site', () => {
+  describe('rights at the effet company', () => {
     it('refuses an inactive supervisor', async () => {
       database.courrier.findUnique.mockResolvedValue({
         id: 'c-1',
@@ -2212,10 +2225,10 @@ describe('MailService', () => {
       expect(database.courrier.update).not.toHaveBeenCalled();
     });
 
-    it('a dispatcher of another site only proposes', async () => {
+    it('a dispatcher of another company only proposes', async () => {
       database.project.findUnique.mockResolvedValue({
         id: 'p-1',
-        siteId: 's-1',
+        companyId: 's-1',
       });
       database.contract.findUnique.mockResolvedValue({
         id: 'ct-1',
@@ -2229,9 +2242,9 @@ describe('MailService', () => {
         dossier: null,
         createdById: 'u-creator',
       });
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
-      // COURRIER_DISPATCH somewhere, but not at s-1.
-      rbac.hasPermission.mockResolvedValue(true);
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
+      // incoming.dispatch in their own company, which is not s-1.
+      access.has.mockResolvedValue(true);
       database.courrier.update.mockResolvedValue({ id: 'c-1' });
 
       await service.dispatch(
@@ -2240,9 +2253,9 @@ describe('MailService', () => {
         'u-elsewhere',
       );
 
-      expect(rbac.hasPermissionAtSite).toHaveBeenCalledWith(
+      expect(access.hasAtCompany).toHaveBeenCalledWith(
         'u-elsewhere',
-        'COURRIER_DISPATCH',
+        'incoming.dispatch',
         's-1',
       );
       expect(database.courrier.update).toHaveBeenCalledWith(
@@ -2299,8 +2312,7 @@ describe('MailService', () => {
         dossierId: null,
         createdById: 'u-creator',
       });
-      rbac.hasGlobalPermission.mockResolvedValue(false);
-      rbac.hasPermission.mockResolvedValue(false);
+      access.has.mockResolvedValue(false);
       database.contract.findUnique.mockResolvedValue({
         id: 'ct-1',
         responsibleId: 'u-other-resp',
@@ -2322,9 +2334,9 @@ describe('MailService', () => {
         dossierId: null,
         createdById: 'u-creator',
       });
-      // Dispatcher at the effet's site (its registrant's, s-1).
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
-      rbac.hasPermissionAtSite.mockResolvedValue(true);
+      // Dispatcher at the effet's company (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
+      access.hasAtCompany.mockResolvedValue(true);
       database.contract.findUnique.mockResolvedValue({
         id: 'ct-1',
         responsibleId: 'u-ct-resp',
@@ -2390,14 +2402,14 @@ describe('MailService', () => {
         dossierId: null,
         createdById: 'u-creator',
       });
-      // Dispatcher at the effet's site (its registrant's, s-1).
-      database.user.findUnique.mockResolvedValue({ siteId: 's-1' });
-      rbac.hasPermissionAtSite.mockResolvedValue(true);
+      // Dispatcher at the effet's company (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
+      access.hasAtCompany.mockResolvedValue(true);
       database.dossier.findUnique.mockResolvedValue({
         id: 'd-1',
         responsibleId: 'u-d-resp',
         contractId: 'ct-1',
-        site: { responsibleId: 'u-s-resp' },
+        company: { responsibleId: 'u-s-resp' },
       });
       database.courrier.findUniqueOrThrow.mockResolvedValue({
         id: 'c-1',

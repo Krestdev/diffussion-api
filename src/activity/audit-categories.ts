@@ -84,7 +84,7 @@ const CATEGORY_WHERE: Record<AuditCategory, Prisma.ActivityLogWhereInput> = {
       actions('settings.updated', 'analysis-settings.updated'),
       ...about(
         'settings',
-        'site',
+        'company',
         'category',
         'canal',
         'correspondent',
@@ -151,7 +151,7 @@ export function categoryOf(log: {
     a === 'settings.updated' ||
     [
       'settings',
-      'site',
+      'company',
       'category',
       'canal',
       'correspondent',

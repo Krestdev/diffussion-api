@@ -108,7 +108,7 @@ export class DocumentsController {
     return this.documentsService.remove(id, user.sub);
   }
 
-  // Authorization (uploader / site responsible / platform admin) is
+  // Authorization (uploader / company responsible / company administrator) is
   // enforced inside DocumentsService.setOwner.
   @Patch(':id/owner')
   setOwner(

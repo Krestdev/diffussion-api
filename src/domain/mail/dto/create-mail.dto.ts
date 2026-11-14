@@ -33,7 +33,7 @@ export class CourrierDocumentDto {
 export class CreateMailDto {
   @ApiPropertyOptional({
     description:
-      "Optional: whoever registers a courrier may not know its dossier. It then belongs to the registrant's site, and the dossier is attached later (PATCH /courriers/:id) — before it can be transmitted.",
+      "Optional: whoever registers a courrier may not know its dossier. It then belongs to the registrant's company, and the dossier is attached later (PATCH /courriers/:id) — before it can be transmitted.",
   })
   @IsOptional()
   @EmptyToUndefined()
@@ -126,7 +126,7 @@ export class CreateMailDto {
   @ApiPropertyOptional({
     example: '2026-11-20',
     description:
-      "The effet's deadline. Left out at creation: its site's default delay (PA·8) — an entrant's treatment from its reception, a sortant's sending from today",
+      "The effet's deadline. Left out at creation: its company's default delay (PA·8) — an entrant's treatment from its reception, a sortant's sending from today",
   })
   @IsOptional()
   @EmptyToUndefined()
@@ -154,7 +154,7 @@ export class CreateMailDto {
 
   @ApiPropertyOptional({
     description:
-      'Effet type (GET /effet-types): a global type or one of its site. Defaults to "Courrier".',
+      'Effet type (GET /effet-types): a global type or one of its company. Defaults to "Courrier".',
   })
   @IsOptional()
   @EmptyToUndefined()

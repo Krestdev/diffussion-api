@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
+import { Permission } from '../auth/permissions';
 import {
   BadRequestException,
   ConflictException,
@@ -11,7 +11,7 @@ import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ActivityService } from '../activity/activity.service';
 import { StorageService } from '../storage/storage.service';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
 import { SettingsService } from '../administration/settings/settings.service';
 import {
   InstructionStatus,
@@ -19,9 +19,9 @@ import {
   UserInstructionRole,
 } from '../../generated/prisma/client';
 
-// Dossier-state rules (RG-DOS-007, site activity, progress) are covered by
+// Dossier-state rules (RG-DOS-007, company activity, progress) are covered by
 // the DossierService spec; here they're stubbed so fixtures don't need a
-// full dossier/site graph.
+// full dossier/company graph.
 jest.mock('../common/utils/dossier-lifecycle', () => ({
   assertDossierOpenForActivity: jest.fn(),
   markDossierInProgress: jest.fn(),
@@ -34,10 +34,11 @@ describe('InstructionsService', () => {
   let activity: { tryRecord: jest.Mock; record: jest.Mock };
   let storage: { upload: jest.Mock; delete: jest.Mock };
   let rbac: {
-    hasPermission: jest.Mock;
-    hasPermissionAtSite: jest.Mock;
-    hasGlobalPermission: jest.Mock;
-    resolveSiteId: jest.Mock;
+    has: jest.Mock;
+    hasAtCompany: jest.Mock;
+    worksAtCompany: jest.Mock;
+    companyOf: jest.Mock;
+    resolveCompanyId: jest.Mock;
   };
   let database: {
     instruction: Record<string, jest.Mock>;
@@ -103,10 +104,12 @@ describe('InstructionsService', () => {
       delete: jest.fn().mockResolvedValue(undefined),
     };
     rbac = {
-      hasPermission: jest.fn().mockResolvedValue(true),
-      hasPermissionAtSite: jest.fn().mockResolvedValue(true),
-      hasGlobalPermission: jest.fn().mockResolvedValue(false),
-      resolveSiteId: jest.fn().mockResolvedValue('site-1'),
+      has: jest.fn().mockResolvedValue(true),
+      hasAtCompany: jest.fn().mockResolvedValue(true),
+      // Not an administrator of the record's company unless a test says so.
+      worksAtCompany: jest.fn().mockResolvedValue(false),
+      companyOf: jest.fn().mockResolvedValue('company-1'),
+      resolveCompanyId: jest.fn().mockResolvedValue('company-1'),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -116,7 +119,7 @@ describe('InstructionsService', () => {
         { provide: NotificationsService, useValue: notifications },
         { provide: ActivityService, useValue: activity },
         { provide: StorageService, useValue: storage },
-        { provide: RbacService, useValue: rbac },
+        { provide: AccessService, useValue: rbac },
         {
           provide: SettingsService,
           useValue: {
@@ -424,8 +427,8 @@ describe('InstructionsService', () => {
   describe("an effet's supervisor", () => {
     // u-sup supervises effet c-1 of dossier d-1 and holds no permission.
     beforeEach(() => {
-      rbac.hasPermission.mockResolvedValue(false);
-      rbac.hasPermissionAtSite.mockResolvedValue(false);
+      rbac.has.mockResolvedValue(false);
+      rbac.hasAtCompany.mockResolvedValue(false);
       database.courrier.findUnique.mockResolvedValue({
         supervisorId: 'u-sup',
         dossierId: 'd-1',
@@ -453,8 +456,10 @@ describe('InstructionsService', () => {
           { dossierId: 'd-2', courrierId: 'c-1', title: 'X' },
           'u-sup',
         ),
-      ).rejects.toThrow('Missing permission at this site: INSTRUCTION_CREATE');
-      expect(rbac.resolveSiteId).toHaveBeenCalledWith('dossier', 'd-2');
+      ).rejects.toThrow(
+        'Missing permission at this company: instruction.create',
+      );
+      expect(rbac.resolveCompanyId).toHaveBeenCalledWith('dossier', 'd-2');
     });
 
     it('is refused when someone else supervises the effet', async () => {
@@ -493,7 +498,9 @@ describe('InstructionsService', () => {
 
       await expect(
         service.assign('i-1', { executantIds: ['u-3'] }, 'u-sup'),
-      ).rejects.toThrow('Missing permission at this site: INSTRUCTION_ASSIGN');
+      ).rejects.toThrow(
+        'Missing permission at this company: instruction.assign',
+      );
       expect(database.instruction.update).not.toHaveBeenCalled();
     });
   });
@@ -878,17 +885,17 @@ describe('InstructionsService', () => {
   describe('who hands the livrables in', () => {
     beforeEach(() =>
       database.instruction.findUnique.mockResolvedValue({
-        dossier: { siteId: 's-1' },
+        dossier: { companyId: 's-1' },
       }),
     );
 
     it('lets the subscriber prepare livrables without the permissions', async () => {
       database.instruction.count.mockResolvedValue(1); // subscribed
-      rbac.hasPermissionAtSite.mockResolvedValue(false);
+      rbac.hasAtCompany.mockResolvedValue(false);
 
       await expect(
         service.assertMayWorkOn('i-1', 'u-exec', [
-          PermissionCode.LivrableDeposit,
+          Permission.DELIVERABLE_CREATE,
         ]),
       ).resolves.toBeUndefined();
       expect(database.instruction.count).toHaveBeenCalledWith({
@@ -902,23 +909,23 @@ describe('InstructionsService', () => {
       });
     });
 
-    it('someone else needs every permission at the task site', async () => {
+    it('someone else needs every permission at the task company', async () => {
       database.instruction.count.mockResolvedValue(0);
-      rbac.hasPermissionAtSite.mockImplementation((_u: string, perm: string) =>
-        Promise.resolve(perm !== 'LIVRABLE_SUBMIT'),
+      rbac.hasAtCompany.mockImplementation((_u: string, perm: string) =>
+        Promise.resolve(perm !== Permission.DELIVERABLE_SUBMIT),
       );
 
       await expect(
         service.assertMayWorkOn('i-1', 'u-other', [
-          PermissionCode.LivrableDeposit,
-          PermissionCode.LivrableSubmit,
+          Permission.DELIVERABLE_CREATE,
+          Permission.DELIVERABLE_SUBMIT,
         ]),
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('only the subscriber deposits — not a co-executant, nor a permission holder', async () => {
       database.instruction.count.mockResolvedValue(0);
-      rbac.hasPermissionAtSite.mockResolvedValue(true);
+      rbac.hasAtCompany.mockResolvedValue(true);
 
       await expect(
         service.assertSubscriber('i-1', 'u-co-executant'),
@@ -1251,7 +1258,7 @@ describe('InstructionsService', () => {
       title: 'Tâche Test',
       status: InstructionStatus.EN_COURS,
       dossierId: 'dos-1',
-      dossier: { id: 'dos-1', siteId: 'site-1' },
+      dossier: { id: 'dos-1', companyId: 'company-1' },
       assignees: [
         {
           role: UserInstructionRole.EXECUTANT,

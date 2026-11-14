@@ -41,7 +41,7 @@ export class CreateDossierDto {
   categoryId?: string;
 
   @ApiPropertyOptional({
-    description: 'Its kind: an active dossier type of its site (PA·7)',
+    description: 'Its kind: an active dossier type of its company (PA·7)',
   })
   @IsOptional()
   @IsUUID()
@@ -63,10 +63,10 @@ export class CreateDossierDto {
   contractId?: string;
 
   @ApiProperty({
-    description: 'Owning site (RG-DOS-003 — exactly one, mandatory)',
+    description: 'Owning company (RG-DOS-003 — exactly one, mandatory)',
   })
   @IsUUID()
-  siteId: string;
+  companyId: string;
 
   @ApiPropertyOptional({
     description:

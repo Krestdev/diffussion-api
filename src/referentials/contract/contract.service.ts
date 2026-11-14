@@ -14,9 +14,9 @@ import {
 } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService } from '../../auth/rbac/rbac.service';
-import { ownSiteFilter } from '../../common/utils/site-referentials';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
+import { ownCompanyFilter } from '../../common/utils/company-referentials';
 import {
   DEFAULT_TAKE,
   PaginationQueryDto,
@@ -50,8 +50,7 @@ type ContractRow = Prisma.ContractGetPayload<{
 /**
  * Contracts (marchés): optionally part of a project, they contain dossiers
  * (Dossier.contractId). Each may list the users allowed to open it
- * (ContractAccess, see visibleContractWhere); platform administrators see
- * them all.
+ * (ContractAccess, see visibleContractWhere).
  */
 @Injectable()
 export class ContractService {
@@ -59,7 +58,7 @@ export class ContractService {
     private readonly database: DatabaseService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     private readonly notifications: NotificationsService,
   ) {}
 
@@ -105,9 +104,9 @@ export class ContractService {
     await this.assertTypeUsable(dto.type);
     await this.assertProjectOpen(dto.projectId);
     await this.assertManages(
-      await this.siteOfProject(dto.projectId ?? null),
+      await this.companyOfProject(dto.projectId ?? null),
       actingUserId,
-      PermissionCode.ContractCreate,
+      Permission.CONTRACT_CREATE,
     );
     await this.assertLinks(data);
     const dates = toDates(startDate, endDate);
@@ -140,7 +139,7 @@ export class ContractService {
     const now = new Date();
     const where: Prisma.ContractWhereInput = {
       projectId: query.projectId,
-      project: query.siteId ? { siteId: query.siteId } : undefined,
+      project: query.companyId ? { companyId: query.companyId } : undefined,
       status: query.status,
       type: query.type,
       endDate:
@@ -230,21 +229,21 @@ export class ContractService {
   })
   async update(id: string, dto: UpdateContractDto, actingUserId: string) {
     const existing = await this.findOne(id);
-    const siteId = await this.siteOfProject(existing.projectId);
+    const companyId = await this.companyOfProject(existing.projectId);
     await this.assertManages(
-      siteId,
+      companyId,
       actingUserId,
-      PermissionCode.ContractUpdate,
+      Permission.CONTRACT_UPDATE,
     );
-    // It stays on its site: moved to another project of the same site only.
+    // It stays on its company: moved to another project of the same company only.
     if (
       dto.projectId !== undefined &&
       dto.projectId !== existing.projectId &&
       existing.projectId &&
-      (await this.siteOfProject(dto.projectId)) !== siteId
+      (await this.companyOfProject(dto.projectId)) !== companyId
     ) {
       throw new BadRequestException(
-        'A contract can only move to another project of its own site',
+        'A contract can only move to another project of its own company',
       );
     }
     if (existing.status === ContractStatus.ARCHIVED) {
@@ -285,9 +284,9 @@ export class ContractService {
   async archive(id: string, actingUserId: string, reason?: string) {
     const contract = await this.findOne(id);
     await this.assertManages(
-      await this.siteOfProject(contract.projectId),
+      await this.companyOfProject(contract.projectId),
       actingUserId,
-      PermissionCode.ContractArchive,
+      Permission.CONTRACT_ARCHIVE,
     );
     if (contract.status === ContractStatus.ARCHIVED) {
       throw new BadRequestException('This contract is already archived');
@@ -313,9 +312,9 @@ export class ContractService {
     void note; // Read by @AuditLog.
     const contract = await this.findOne(id);
     await this.assertManages(
-      await this.siteOfProject(contract.projectId),
+      await this.companyOfProject(contract.projectId),
       actingUserId,
-      PermissionCode.ContractArchive,
+      Permission.CONTRACT_ARCHIVE,
     );
     if (contract.status !== ContractStatus.ARCHIVED) {
       throw new BadRequestException('This contract is not archived');
@@ -339,9 +338,9 @@ export class ContractService {
   async remove(id: string, actingUserId: string) {
     const contract = await this.findOne(id);
     await this.assertManages(
-      await this.siteOfProject(contract.projectId),
+      await this.companyOfProject(contract.projectId),
       actingUserId,
-      PermissionCode.ContractArchive,
+      Permission.CONTRACT_ARCHIVE,
     );
     if (contract._count.dossiers > 0) {
       throw new ConflictException(
@@ -364,16 +363,19 @@ export class ContractService {
     return this.accessList(id);
   }
 
-  // Replaces the list. A platform administrator or the contract's
-  // responsible may.
+  // Replaces the list. The contract's responsible, or an administrator of its
+  // company (settings.update there), may.
   async setAccess(id: string, userIds: string[], actingUserId: string) {
     const contract = await this.findOne(id);
     if (
       contract.responsibleId !== actingUserId &&
-      !(await this.isAdmin(actingUserId))
+      !(await this.isAdmin(
+        actingUserId,
+        await this.companyOfProject(contract.projectId ?? null),
+      ))
     ) {
       throw new ForbiddenException(
-        "Only the contract's responsible or a platform administrator can change who may open it",
+        "Only the contract's responsible or an administrator can change who may open it",
       );
     }
     const before = (await this.accessList(id)).map((user) => user.id);
@@ -408,7 +410,8 @@ export class ContractService {
         skip: query.skip,
         take: query.take,
       },
-      'ALL',
+      // Seen by them, so of their company: its entries are that company's.
+      [(await this.access.companyOf(userId)) ?? ''].filter(Boolean),
     );
   }
 
@@ -448,19 +451,19 @@ export class ContractService {
     }));
   }
 
-  private isAdmin(userId: string) {
-    return this.rbac.hasGlobalPermission(
-      userId,
-      PermissionCode.AdminManageReferentials,
-    );
+  // settings.update in the contract's company (a contract without project: a
+  // super-administrator holding it).
+  private async isAdmin(userId: string, companyId: string | null) {
+    return companyId
+      ? this.access.hasAtCompany(userId, Permission.SETTINGS_UPDATE, companyId)
+      : this.access.managesCommon(userId, Permission.SETTINGS_UPDATE);
   }
 
-  // Those of its own site's projects (open to them) — all of them for a
-  // platform administrator. A contract without a project is the platform
-  // administrators' only.
+  // Those of its own company's projects (open to them). A contract without a
+  // project is listed to nobody (platform administrators saw them before 2.0.0).
   private async visibleTo(userId: string): Promise<Prisma.ContractWhereInput> {
-    const site = await ownSiteFilter(this.rbac, this.database, userId);
-    return site ? { project: site, ...visibleContractWhere(userId) } : {};
+    const company = await ownCompanyFilter(this.access, this.database, userId);
+    return company ? { project: company, ...visibleContractWhere(userId) } : {};
   }
 
   private async assertProjectOpen(projectId?: string | null) {
@@ -479,27 +482,31 @@ export class ContractService {
     }
   }
 
-  private async siteOfProject(projectId: string | null) {
+  private async companyOfProject(projectId: string | null) {
     if (!projectId) return null;
     const project = await this.database.project.findUnique({
       where: { id: projectId },
-      select: { siteId: true },
+      select: { companyId: true },
     });
     if (!project) {
       throw new BadRequestException(`Project ${projectId} not found`);
     }
-    return project.siteId;
+    return project.companyId;
   }
 
-  // A contract is managed by the responsible of its project's site, whoever
-  // holds ADMIN_MANAGE_REFERENTIALS there, or a platform administrator (the
-  // only one for a contract without project).
+  // A contract is managed by whoever holds the permission in its project's
+  // company (a contract without project: a super-administrator holding it).
   private async assertManages(
-    siteId: string | null,
+    companyId: string | null,
     userId: string,
-    permission: PermissionCode,
+    permission: Permission,
   ) {
-    await this.rbac.assertManagesSite(userId, permission, siteId, 'Ce contrat');
+    await this.access.assertManages(
+      userId,
+      permission,
+      companyId,
+      'Ce contrat',
+    );
   }
 
   // A contract the user may not open is reported as not found.

@@ -13,12 +13,9 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../auth/rbac/permission.guard';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import {
-  PlatformOnly,
-  RequirePermission,
-} from '../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../auth/access/permissions.guard';
+import { Permission } from '../auth/permissions';
+import { PlatformAdmin, RequirePermissions } from '../auth/access/decorators';
 import { AuthUser } from '../auth/types/auth-user.type';
 import { NotificationStatus } from '../../generated/prisma/client';
 import { CreateNotificationDto } from './dto/create-notification.dto';
@@ -27,7 +24,7 @@ import { NotificationsService } from './notifications.service';
 
 @ApiTags('notifications')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionsGuard)
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
@@ -37,8 +34,8 @@ export class NotificationsController {
   // reserved to platform administrators. The inbox routes below stay open
   // to every user, for their own notifications.
   @Post()
-  @RequirePermission(PermissionCode.AdminManageUsers)
-  @PlatformOnly()
+  @RequirePermissions(Permission.ROLE_ASSIGN)
+  @PlatformAdmin()
   create(@Body() dto: CreateNotificationDto) {
     return this.notificationsService.create(dto);
   }

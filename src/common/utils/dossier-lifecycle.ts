@@ -4,7 +4,7 @@ import {
   InstructionStatus,
   Prisma,
 } from '../../../generated/prisma/client';
-import { assertSiteActive } from './referential-guards';
+import { assertCompanyActive } from './referential-guards';
 
 type Db = Prisma.TransactionClient;
 
@@ -20,13 +20,13 @@ export const ACTIVE_DOSSIER_STATUSES: DossierStatus[] = [
 
 /**
  * RG-DOS-007: a CLOSED or ARCHIVED dossier can only be consulted — nothing
- * new may be attached to it. Also enforces the owning site being active
- * (see assertSiteActive).
+ * new may be attached to it. Also enforces the owning company being active
+ * (see assertCompanyActive).
  */
 export async function assertDossierOpenForActivity(db: Db, dossierId: string) {
   const dossier = await db.dossier.findUnique({
     where: { id: dossierId },
-    select: { number: true, status: true, siteId: true },
+    select: { number: true, status: true, companyId: true },
   });
   if (!dossier) {
     throw new NotFoundException(`Dossier ${dossierId} not found`);
@@ -36,7 +36,7 @@ export async function assertDossierOpenForActivity(db: Db, dossierId: string) {
       `Dossier ${dossier.number} is ${dossier.status.toLowerCase()} and can only be consulted — nothing new can be attached to it`,
     );
   }
-  await assertSiteActive(db, dossier.siteId);
+  await assertCompanyActive(db, dossier.companyId);
 }
 
 // Work has started on the dossier (first courrier or instruction attached):

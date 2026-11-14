@@ -16,9 +16,9 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { AuthUser } from '../../auth/types/auth-user.type';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
+import { RequirePermissions } from '../../auth/access/decorators';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { CorrespondantService } from './correspondent.service';
 import {
@@ -31,21 +31,21 @@ import { UpdateCorrespondantDto } from './dto/update-correspondent.dto';
 
 @ApiTags('correspondents')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionsGuard)
 @Controller('correspondents')
 export class CorrespondantController {
   constructor(private readonly correspondentService: CorrespondantService) {}
 
   @Post()
-  @RequirePermission(PermissionCode.CorrespondentCreate)
+  @RequirePermissions(Permission.CORRESPONDENT_CREATE)
   create(@Body() dto: CreateCorrespondentDto, @CurrentUser() user: AuthUser) {
     return this.correspondentService.create(dto, user.sub);
   }
 
-  // The caller's own site's correspondents — every site's for a platform
-  // administrator (optionally ?siteId=).
+  // The caller's own company's correspondents — every company's for a platform
+  // administrator (optionally ?companyId=).
   @Get()
-  @RequirePermission(PermissionCode.CorrespondentRead)
+  @RequirePermissions(Permission.CORRESPONDENT_READ)
   findAll(
     @Query() query: FindCorrespondantsQueryDto,
     @CurrentUser() user: AuthUser,
@@ -54,7 +54,7 @@ export class CorrespondantController {
   }
 
   @Get(':uuid')
-  @RequirePermission(PermissionCode.CorrespondentRead)
+  @RequirePermissions(Permission.CORRESPONDENT_READ)
   findOne(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @CurrentUser() user: AuthUser,
@@ -72,7 +72,7 @@ export class CorrespondantController {
   }
 
   @Get(':uuid/contacts')
-  @RequirePermission(PermissionCode.CorrespondentRead)
+  @RequirePermissions(Permission.CORRESPONDENT_READ)
   findContacts(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Query() query: PaginationQueryDto,
@@ -82,7 +82,7 @@ export class CorrespondantController {
   }
 
   @Post(':uuid/contacts')
-  @RequirePermission(PermissionCode.CorrespondentUpdate)
+  @RequirePermissions(Permission.CORRESPONDENT_UPDATE)
   createContact(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Body() dto: CreateCorrespondentContactDto,
@@ -92,7 +92,7 @@ export class CorrespondantController {
   }
 
   @Patch(':uuid/contacts/:contactId')
-  @RequirePermission(PermissionCode.CorrespondentUpdate)
+  @RequirePermissions(Permission.CORRESPONDENT_UPDATE)
   updateContact(
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @Param('contactId', ParseUUIDPipe) contactId: string,
@@ -108,7 +108,7 @@ export class CorrespondantController {
   }
 
   @Delete(':uuid/contacts/:contactId')
-  @RequirePermission(PermissionCode.CorrespondentUpdate)
+  @RequirePermissions(Permission.CORRESPONDENT_UPDATE)
   @HttpCode(HttpStatus.NO_CONTENT)
   removeContact(
     @Param('uuid', ParseUUIDPipe) uuid: string,
@@ -119,7 +119,7 @@ export class CorrespondantController {
   }
 
   @Delete(':uuid')
-  @RequirePermission(PermissionCode.CorrespondentArchive)
+  @RequirePermissions(Permission.CORRESPONDENT_ARCHIVE)
   @HttpCode(HttpStatus.NO_CONTENT)
   remove(
     @Param('uuid', ParseUUIDPipe) uuid: string,

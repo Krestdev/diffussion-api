@@ -42,7 +42,7 @@ export class NotificationsService {
     private readonly moduleNotifications: ModuleNotificationsService,
   ) {}
 
-  // Each recipient whose site doesn't show this type in the application
+  // Each recipient whose company doesn't show this type in the application
   // (PA·9), or who turned it off themselves, is left out; with nobody left,
   // nothing is written (null).
   async create(dto: CreateNotificationDto) {

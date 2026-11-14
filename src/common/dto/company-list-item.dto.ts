@@ -16,11 +16,11 @@ import {
 } from 'class-validator';
 
 /**
- * An item of a site's reference list (PA·7): canal, correspondent type,
- * dossier type — a name unique within its site, a description, and whether
+ * An item of a company's reference list (PA·7): canal, correspondent type,
+ * dossier type — a name unique within its company, a description, and whether
  * it is still offered (deactivated rather than deleted once used).
  */
-export class CreateSiteListItemDto {
+export class CreateCompanyListItemDto {
   @ApiProperty({ example: 'Administration publique' })
   @IsString()
   @IsNotEmpty()
@@ -43,28 +43,28 @@ export class CreateSiteListItemDto {
 
   @ApiPropertyOptional({
     description:
-      "The site it belongs to. Left out: the caller's site when they manage only one",
+      "The company it belongs to. Left out: the caller's company when they manage only one",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 }
 
-// Its site never changes.
-export class UpdateSiteListItemDto extends PartialType(
-  OmitType(CreateSiteListItemDto, ['siteId'] as const),
+// Its company never changes.
+export class UpdateCompanyListItemDto extends PartialType(
+  OmitType(CreateCompanyListItemDto, ['companyId'] as const),
 ) {}
 
 // The same skip / take / search as every list (PaginationQueryDto), and
 // the same `{ data, total, skip, take }` response.
-export class FindSiteListQueryDto extends PaginationQueryDto {
+export class FindCompanyListQueryDto extends PaginationQueryDto {
   @ApiPropertyOptional({
     description:
-      "Only this site's (a platform administrator; anyone else only ever sees their own site's)",
+      "Only this company's (a platform administrator; anyone else only ever sees their own company's)",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({ description: 'true: the active ones only' })
   @IsOptional()

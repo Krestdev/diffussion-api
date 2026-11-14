@@ -7,33 +7,33 @@ import {
 import { Prisma } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService, SiteScopeList } from '../../auth/rbac/rbac.service';
-import { FindSiteListQueryDto } from '../../common/dto/site-list-item.dto';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
+import { FindCompanyListQueryDto } from '../../common/dto/company-list-item.dto';
 import {
-  assertSiteExists,
-  siteReferentialsWhere,
-} from '../../common/utils/site-referentials';
+  assertCompanyExists,
+  companyReferentialsWhere,
+} from '../../common/utils/company-referentials';
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
 import { DatabaseService } from '../../database/database.service';
 import { CreateCorrespondentTypeDto } from './dto/create-correspondent-type.dto';
 import { UpdateCorrespondentTypeDto } from './dto/update-correspondent-type.dto';
 
 const include = {
-  site: { select: { id: true, code: true, name: true } },
+  company: { select: { id: true, code: true, name: true } },
   _count: { select: { correspondents: true } },
 } satisfies Prisma.CorrespondentTypeInclude;
 
 /**
- * Kinds of correspondent (PA·7) — each site's own, like its canaux: managed
- * by its responsible or whoever holds ADMIN_MANAGE_REFERENTIALS there.
+ * Kinds of correspondent (PA·7) — each company's own, like its canaux: managed
+ * by whoever holds settings.update there.
  * Deactivated rather than deleted once used.
  */
 @Injectable()
 export class CorrespondentTypeService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
   ) {}
@@ -44,30 +44,26 @@ export class CorrespondentTypeService {
     operation: 'CREATE',
   })
   async create(dto: CreateCorrespondentTypeDto, actingUserId: string) {
-    const scope = await this.manageScope(actingUserId);
-    const siteId = siteForNew(scope, dto.siteId);
-    await this.rbac.explainOutOfScope(
-      scope,
-      siteId,
-      'Ce type de correspondant',
-      PermissionCode.AdminManageReferentials,
-    );
-    await assertSiteExists(this.database, siteId);
-    await this.assertNameAvailable(dto.name, siteId);
+    const companyId =
+      dto.companyId ?? (await this.access.companyOf(actingUserId));
+    if (!companyId) throw new BadRequestException('companyId is required');
+    await this.assertManages(companyId, actingUserId);
+    await assertCompanyExists(this.database, companyId);
+    await this.assertNameAvailable(dto.name, companyId);
     return this.database.correspondentType.create({
-      data: { ...dto, siteId },
+      data: { ...dto, companyId },
       include,
     });
   }
 
   // Paginated like every list: { data, total, skip, take }.
-  async findAll(query: FindSiteListQueryDto, actingUserId: string) {
+  async findAll(query: FindCompanyListQueryDto, actingUserId: string) {
     const where = {
-      ...(await siteReferentialsWhere(
-        this.rbac,
+      ...(await companyReferentialsWhere(
+        this.access,
         this.database,
         actingUserId,
-        query.siteId,
+        query.companyId,
       )),
       active: query.active,
       ...(query.search
@@ -111,9 +107,9 @@ export class CorrespondentTypeService {
     actingUserId: string,
   ) {
     const type = await this.findOne(id);
-    await this.assertManages(type.siteId, actingUserId);
+    await this.assertManages(type.companyId, actingUserId);
     if (dto.name !== undefined && dto.name !== type.name) {
-      await this.assertNameAvailable(dto.name, type.siteId);
+      await this.assertNameAvailable(dto.name, type.companyId);
     }
     return this.database.correspondentType.update({
       where: { id },
@@ -130,7 +126,7 @@ export class CorrespondentTypeService {
   })
   async remove(id: string, actingUserId: string) {
     const type = await this.findOne(id);
-    await this.assertManages(type.siteId, actingUserId);
+    await this.assertManages(type.companyId, actingUserId);
     if (type._count.correspondents > 0) {
       throw new ConflictException(
         `This type is used by ${type._count.correspondents} correspondent(s) — deactivate it instead`,
@@ -139,37 +135,24 @@ export class CorrespondentTypeService {
     await this.database.correspondentType.delete({ where: { id } });
   }
 
-  private async manageScope(userId: string): Promise<SiteScopeList> {
-    return this.rbac.managedSites(
+  private async assertManages(companyId: string, userId: string) {
+    await this.access.assertManages(
       userId,
-      PermissionCode.AdminManageReferentials,
-    );
-  }
-
-  private async assertManages(siteId: string, userId: string) {
-    await this.rbac.assertManagesSite(
-      userId,
-      PermissionCode.AdminManageReferentials,
-      siteId,
+      Permission.SETTINGS_UPDATE,
+      companyId,
       'Ce type de correspondant',
     );
   }
 
-  private async assertNameAvailable(name: string, siteId: string) {
+  private async assertNameAvailable(name: string, companyId: string) {
     const taken = await this.database.correspondentType.findFirst({
-      where: { name, siteId },
+      where: { name, companyId },
       select: { id: true },
     });
     if (taken) {
       throw new ConflictException(
-        `A correspondent type "${name}" already exists on this site`,
+        `A correspondent type "${name}" already exists on this company`,
       );
     }
   }
-}
-
-function siteForNew(scope: SiteScopeList, requested?: string): string {
-  if (requested) return requested;
-  if (scope !== 'ALL' && scope.length === 1) return scope[0];
-  throw new BadRequestException('siteId is required');
 }

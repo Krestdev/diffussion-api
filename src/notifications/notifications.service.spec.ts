@@ -15,7 +15,7 @@ describe('NotificationsService', () => {
     $transaction: jest.Mock;
   };
   let realtime: { emitToUsers: jest.Mock; broadcast: jest.Mock };
-  // Every recipient's site shows every event, unless a test says otherwise.
+  // Every recipient's company shows every event, unless a test says otherwise.
   let moduleNotifications: { inAppRecipients: jest.Mock };
 
   beforeEach(async () => {
@@ -54,7 +54,7 @@ describe('NotificationsService', () => {
     expect(service).toBeDefined();
   });
 
-  it('leaves out the recipients whose site turned the event off (PA·9)', async () => {
+  it('leaves out the recipients whose company turned the event off (PA·9)', async () => {
     moduleNotifications.inAppRecipients.mockResolvedValue([]);
 
     const res = await service.create({

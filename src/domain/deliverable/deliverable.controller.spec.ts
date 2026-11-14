@@ -1,6 +1,6 @@
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
 import { InstructionsService } from '../../instructions/instructions.service';
 import { DeliverableController } from './deliverable.controller';
 import { DeliverableService } from './deliverable.service';
@@ -36,7 +36,7 @@ describe('DeliverableController', () => {
         { provide: InstructionsService, useValue: instructions },
       ],
     })
-      .overrideGuard(PermissionGuard)
+      .overrideGuard(PermissionsGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })
@@ -56,13 +56,15 @@ describe('DeliverableController', () => {
         sub: 'u-1',
         email: 'u@x.com',
         name: 'U',
-        siteId: 's-1',
+        companyId: 's-1',
         sid: 'sid-1',
         impersonator: null,
+        permissions: new Set<string>(),
+        platformAdmin: false,
       },
     );
     expect(instructions.assertMayWorkOn).toHaveBeenCalledWith('i-1', 'u-1', [
-      'LIVRABLE_DEPOSIT',
+      'deliverable.create',
     ]);
     expect(service.create).toHaveBeenCalledWith(
       { instructionId: 'i-1', title: 'X' },
@@ -79,9 +81,11 @@ describe('DeliverableController', () => {
         sub: 'u-1',
         email: 'u@x.com',
         name: 'U',
-        siteId: 's-1',
+        companyId: 's-1',
         sid: 'sid-1',
         impersonator: null,
+        permissions: new Set<string>(),
+        platformAdmin: false,
       }),
     ).rejects.toThrow('forbidden');
     expect(service.submit).not.toHaveBeenCalled();

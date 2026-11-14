@@ -13,17 +13,17 @@
 // - `Livrable` did not exist as a model at all (7.4) despite a `deliverable`
 //   module already scaffolded on the API — added, versioned (RG-LIV-007).
 // - `Role` was owned by a single `Assignment` (one bespoke role per
-//   site-assignment). BAD 6.1.1/9.7 and RG-ORG-003 describe roles as reusable,
+//   company-assignment). BAD 6.1.1/9.7 and RG-ORG-003 describe roles as reusable,
 //   named templates a user can hold several of at once — switched to a plain
-//   User<->Role many-to-many (`UserRole`), since scoped to a site (or global).
+//   User<->Role many-to-many (`UserRole`), since scoped to a company (or global).
 // - Several free-text fields were capped at `VarChar(10)`, too short for real
 //   values already in use ("Administration publique", "DOSSIER_TRANSMIT",
 //   "Modification") — widened or left unbounded.
 // - `Category` was missing `retentionMonths` despite RG-ARC-001 ("chaque
 //   catégorie de dossier peut être associée à une durée de conservation").
 // - `Correspondent` was missing address/contact fields listed in 7.5.3.
-// - `Site` had no responsible user despite RG the frontend already models
-//   ("Responsable du site").
+// - `Company` had no responsible user despite RG the frontend already models
+//   ("Responsable de la société").
 // - Instruction dependency (RG-LIV-006) is "one or more", modeled as a
 //   self many-to-many instead of a single `parentId`.
 // - Added `Delegation` (7.6.6) and a small set of admin referentials
@@ -60,7 +60,7 @@ enum AccessProfile {
 /// A person, as the CREAPP core knows them (same id): name, email, phone,
 /// job title, status and last sign-in are copied from the core's directory
 /// and never edited here. People sign in at the core: Diffusion keeps no
-/// password. Their site is their company in the core. Diffusion owns their
+/// password. Their company is the core's. Diffusion owns their
 /// roles (UserRole).
 model User {
   id           String  @id @default(uuid())
@@ -87,15 +87,15 @@ model User {
   /// Last time the core's directory listed the person.
   coreSyncedAt    DateTime?
 
-  /// The one site the user belongs to (RG-ORG-001, revised: one site per
+  /// The one company the user belongs to (RG-ORG-001, revised: one company per
   /// user). Null for platform users (super-admins), whose roles are global.
-  siteId String?
+  companyId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Restrict: a site can't be deleted while users still belong to it.
-  site               Site?            @relation("SiteUsers", fields: [siteId], references: [id], onDelete: Restrict)
+  // Restrict: a company can't be deleted while users still belong to it.
+  company               Company?            @relation("CompanyUsers", fields: [companyId], references: [id], onDelete: Restrict)
   deactivatedBy      User?            @relation("UserDeactivatedBy", fields: [deactivatedById], references: [id], onDelete: SetNull)
   deactivatedUsers   User[]           @relation("UserDeactivatedBy")
   archivedRoles      Role[]           @relation("RoleArchivedBy")
@@ -110,7 +110,7 @@ model User {
   subscriptions           InstructionSubscription[]
   notificationPreferences NotificationPreference[]
 
-  managedSites               Site[]               @relation("SiteManager")
+  managedCompanies               Company[]               @relation("CompanyManager")
   responsibleDossiers        Dossier[]            @relation("DossierResponsible")
   responsibleProjects        Project[]            @relation("ProjectResponsible")
   createdDossiers            Dossier[]            @relation("DossierCreatedBy")
@@ -139,64 +139,69 @@ model User {
   analysisSheets             AnalysisSheet[]      @relation("AnalysisSheetAuthor")
   analysisDecisions          AnalysisSheet[]      @relation("AnalysisSheetDecidedBy")
 
-  @@index([siteId])
+  @@index([companyId])
   @@map("user")
 }
 
-enum SiteStatus {
+enum CompanyStatus {
   ACTIVE
   INACTIVE
 }
 
 /// A company of the CREAPP platform (9.5): the core's company, same id.
-/// Owns dossiers as their "site propriétaire" (RG-DOS-003) and has a
+/// Owns dossiers as their "société propriétaire" (RG-DOS-003) and has a
 /// responsible user. Created, named and (de)activated by the directory sync
 /// (src/core/directory-sync.service.ts); the core is the source of truth.
-model Site {
+model Company {
   id            String     @id @default(uuid())
   code          String     @unique @db.VarChar(30)
   name          String     @db.VarChar(100)
   city          String?    @db.VarChar(100)
-  status        SiteStatus @default(ACTIVE)
+  status        CompanyStatus @default(ACTIVE)
   responsibleId String?
-  /// Last time the core's directory listed the company (null: a site made
+  /// Last time the core's directory listed the company (null: a company made
   /// before Diffusion moved onto the core, not matched yet).
   coreSyncedAt  DateTime?
+  /// The permission catalogue version its roles follow (src/auth/permissions.ts
+  /// CATALOG_VERSION): moved once to each newer version at start-up.
+  permissionsVersion String @default("2.0.0") @db.VarChar(20)
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
-  responsible        User?                       @relation("SiteManager", fields: [responsibleId], references: [id])
-  users              User[]                      @relation("SiteUsers")
+  responsible        User?                       @relation("CompanyManager", fields: [responsibleId], references: [id])
+  users              User[]                      @relation("CompanyUsers")
   roles              Role[]
   effetTypes         EffetType[]
   canals             Canal[]
   projects           Project[]
   analysisCriteria   AnalysisCriterionTemplate[]
-  analysisSettings   AnalysisSiteSettings?
-  settings           SiteSettings?
+  analysisSettings   AnalysisCompanySettings?
+  settings           CompanySettings?
   correspondents     Correspondent[]
-  userRoles          UserRole[]
   dossiers           Dossier[]
   delegations        Delegation[]
   correspondentTypes CorrespondentType[]
   dossierTypes       DossierType[]
 
-  @@map("site")
+  @@map("company")
 }
 
-/// Reusable named permission set ("Exécutant", "Administrateur", ...).
-/// Reusable template (RG-ORG-003: cumulative). Held per site or globally — see UserRole.
-/// Global (`siteId` null): made by a platform administrator, usable on
-/// every site. Otherwise a role of that site only, made and managed by the
-/// site's responsible, and held by that site's users only.
+/// Reusable named permission set ("Exécutant", "Administrateur", ...), cumulative
+/// (RG-ORG-003). A role belongs to one company (permissions 2.0.0: no global
+/// roles) and is held by that company's people only. `code`: ADMIN for the
+/// protected system role holding every permission, the default roles' codes
+/// (RECEPTIONIST, DISPATCHER, ADMIN_DISPATCHER), else a generated one.
 model Role {
   id               String    @id @default(uuid())
-  code             String    @unique @db.VarChar(30)
+  code             String    @db.VarChar(30)
   name             String    @db.VarChar(50)
   description      String?
-  siteId           String?
-  /// Archived (A·9): held by nobody any more, never offered, restorable.
-  /// A role is never deleted.
+  companyId        String
+  /// A default role (restorable to its default permissions); ADMIN is never
+  /// edited nor archived.
+  isSystem         Boolean   @default(false)
+  /// Archived (A·9, CDC G5): held by nobody any more, never offered,
+  /// restorable. A role is never deleted.
   archivedAt       DateTime?
   archivedById     String?
   /// How many users held it when it was archived; 0 once restored.
@@ -204,41 +209,33 @@ model Role {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  site            Site?            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Restrict)
   archivedBy      User?            @relation("RoleArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
   userRoles       UserRole[]
   rolePermissions RolePermission[]
   delegations     Delegation[]
 
-  /// A name is unique among the global roles and within each site (NULLS
-  /// NOT DISTINCT, see the migration).
-  @@unique([siteId, name])
+  @@unique([companyId, code])
+  @@unique([companyId, name])
   @@map("role")
 }
 
-/// A role held by a user: at the user's own site (`siteId` = User.siteId),
-/// or globally (`siteId` null) for a platform user, who has no site. A
-/// global grant gives the role's permissions everywhere. The unique key
-/// treats null as a value (NULLS NOT DISTINCT, see the migration), so a
-/// global grant can't be duplicated either.
+/// A role held by a user. The role carries its company, which is the user's own.
 model UserRole {
-  id     String  @id @default(uuid())
+  id     String @id @default(uuid())
   userId String
   roleId String
-  siteId String?
 
-  user User  @relation(fields: [userId], references: [id])
-  role Role  @relation(fields: [roleId], references: [id])
-  // Restrict: SetNull (the default for an optional relation) would turn a
-  // site grant into a global one.
-  site Site? @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  user User @relation(fields: [userId], references: [id])
+  role Role @relation(fields: [roleId], references: [id])
 
-  @@unique([userId, roleId, siteId])
-  @@index([siteId, roleId])
+  @@unique([userId, roleId])
+  @@index([roleId])
   @@map("user_role")
 }
 
-/// A single grantable action (e.g. DOSSIER_CLOSE) — see PermissionCode.
+/// A single grantable action (e.g. dossier.close) — the catalogue is
+/// src/auth/permissions.ts; this table mirrors it (kept in step at start-up).
 model Permission {
   id          String   @id @default(uuid())
   code        String   @unique @db.VarChar(50)
@@ -270,10 +267,10 @@ model Delegation {
   id             String   @id @default(uuid())
   delegantId     String
   delegataireId  String
-  /// What is handed over: one role, at one site. The delegataire is treated
-  /// as holding `role` at `site` while the window is open.
+  /// What is handed over: one role, at one company. The delegataire is treated
+  /// as holding `role` at `company` while the window is open.
   roleId         String
-  siteId         String
+  companyId         String
   /// Free-text label kept for the register ("Responsable de dossier"), no
   /// longer what drives the grant.
   responsibility String?  @db.VarChar(100)
@@ -286,9 +283,9 @@ model Delegation {
   delegant    User @relation("DelegationDelegant", fields: [delegantId], references: [id])
   delegataire User @relation("DelegationDelegataire", fields: [delegataireId], references: [id])
   role        Role @relation(fields: [roleId], references: [id])
-  site        Site @relation(fields: [siteId], references: [id])
+  company        Company @relation(fields: [companyId], references: [id])
 
-  @@index([delegataireId, roleId, siteId])
+  @@index([delegataireId, roleId, companyId])
   @@map("delegation")
 }
 
@@ -313,8 +310,8 @@ model Category {
 }
 
 /// Kind of effet: courrier, bordereau de transmission, matière ou spécimen,
-/// document, support numérique, dossier complet... Global (`siteId` null,
-/// made by a platform administrator) or a site's own (made by its
+/// document, support numérique, dossier complet... Global (`companyId` null,
+/// made by a platform administrator) or a company's own (made by its
 /// responsible), like roles.
 model EffetType {
   id            String   @id @default(uuid())
@@ -328,17 +325,17 @@ model EffetType {
   active        Boolean  @default(true)
   /// How its sortants' references are built (see reference-model.ts).
   referenceModel Json?
-  siteId        String?
+  companyId        String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  site               Site?                    @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company               Company?                    @relation(fields: [companyId], references: [id], onDelete: Restrict)
   courriers          Courrier[]
   referenceSequences EffetReferenceSequence[]
 
-  /// A name is unique among the global types and within each site (NULLS
+  /// A name is unique among the global types and within each company (NULLS
   /// NOT DISTINCT, see the migration).
-  @@unique([siteId, name])
+  @@unique([companyId, name])
   @@map("effet_type")
 }
 
@@ -356,7 +353,7 @@ model CourrierNature {
 }
 
 /// Communication channel referential (6.4), used by Courrier.
-/// Belongs to one site: only that site's effets use it (unique per site).
+/// Belongs to one company: only that company's effets use it (unique per company).
 model Canal {
   id          String   @id @default(uuid())
   name        String   @db.VarChar(100)
@@ -364,35 +361,35 @@ model Canal {
   /// An inactive canal is no longer offered for new effets (kept for the
   /// effets that used it) — deactivated rather than deleted.
   active      Boolean  @default(true)
-  siteId      String
+  companyId      String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  site      Site       @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Restrict)
   courriers Courrier[]
 
-  @@unique([siteId, name])
+  @@unique([companyId, name])
   @@map("canal")
 }
 
-/// Belongs to one site, like canals: only that site's correspondents use it.
+/// Belongs to one company, like canals: only that company's correspondents use it.
 model CorrespondentType {
   id          String   @id @default(uuid())
   name        String   @db.VarChar(100)
   description String?
   active      Boolean  @default(true)
-  siteId      String
+  companyId      String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  site           Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company           Company            @relation(fields: [companyId], references: [id], onDelete: Restrict)
   correspondents Correspondent[]
 
-  @@unique([siteId, name])
+  @@unique([companyId, name])
   @@map("correspondent_type")
 }
 
-/// The kinds of contract (PA·7) — common to every site, managed by a
+/// The kinds of contract (PA·7) — common to every company, managed by a
 /// platform administrator. A contract's `type` is one of their codes.
 model ContractTypeItem {
   id          String   @id @default(uuid())
@@ -409,20 +406,20 @@ model ContractTypeItem {
   @@map("contract_type")
 }
 
-/// The kinds of dossier (PA·7) of a site.
+/// The kinds of dossier (PA·7) of a company.
 model DossierType {
   id          String   @id @default(uuid())
   name        String   @db.VarChar(100)
   description String?
   active      Boolean  @default(true)
-  siteId      String
+  companyId      String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  site     Site      @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company     Company      @relation(fields: [companyId], references: [id], onDelete: Restrict)
   dossiers Dossier[]
 
-  @@unique([siteId, name])
+  @@unique([companyId, name])
   @@map("dossier_type")
 }
 
@@ -444,19 +441,19 @@ model Correspondent {
   phone       String?             @db.VarChar(30)
   mainContact String?             @db.VarChar(150)
   status      CorrespondentStatus @default(ACTIVE)
-  /// Belongs to one site: only that site's effets use it.
-  siteId      String
+  /// Belongs to one company: only that company's effets use it.
+  companyId      String
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
-  site            Site                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company            Company                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
   type            CorrespondentType?     @relation(fields: [typeId], references: [id])
   courriers       Courrier[]
   maitreOuvrageOf Project[]              @relation("ProjectMaitreOuvrage")
   clientOf        Contract[]             @relation("ContractClient")
   contacts        CorrespondentContact[]
 
-  @@index([siteId])
+  @@index([companyId])
   @@map("correspondent")
 }
 
@@ -595,14 +592,14 @@ model Dossier {
   title           String                 @db.VarChar(200)
   description     String?
   categoryId      String?
-  /// Its kind (PA·7): one of its site's dossier types.
+  /// Its kind (PA·7): one of its company's dossier types.
   typeId          String?
   /// Optional grouping of dossiers under a wider project/programme.
   projectId       String?
   /// The contract this dossier is carried out under, if any.
   contractId      String?
-  /// RG-DOS-003: exactly one owning site.
-  siteId          String
+  /// RG-DOS-003: exactly one owning company.
+  companyId          String
   /// RG-DOS-004: always has a responsible at any instant.
   responsibleId   String?
   priority        DossierPriority        @default(NORMAL)
@@ -630,7 +627,7 @@ model Dossier {
   type        DossierType? @relation(fields: [typeId], references: [id], onDelete: Restrict)
   project     Project?     @relation(fields: [projectId], references: [id])
   contract    Contract?    @relation(fields: [contractId], references: [id], onDelete: Restrict)
-  site        Site         @relation(fields: [siteId], references: [id])
+  company        Company         @relation(fields: [companyId], references: [id])
   responsible User?        @relation("DossierResponsible", fields: [responsibleId], references: [id])
   createdBy   User?        @relation("DossierCreatedBy", fields: [createdById], references: [id])
 
@@ -660,10 +657,10 @@ model Project {
   maitreOuvrageId String?
   /// Who answers for the project.
   responsibleId   String?
-  /// The site it belongs to: managed by that site's responsible (or a
-  /// platform administrator), seen by that site's users only. Its dossiers
-  /// and effets are on that site; its contracts follow it.
-  siteId          String
+  /// The company it belongs to: managed by that company's responsible (or a
+  /// platform administrator), seen by that company's users only. Its dossiers
+  /// and effets are on that company; its contracts follow it.
+  companyId          String
   /// What it holds, chosen at its creation: dossiers directly, or contracts
   /// (with their dossiers under them).
   contentType     ProjectContentType
@@ -679,7 +676,7 @@ model Project {
   updatedAt       DateTime      @updatedAt
 
   maitreOuvrage  Correspondent?  @relation("ProjectMaitreOuvrage", fields: [maitreOuvrageId], references: [id])
-  site           Site            @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company           Company            @relation(fields: [companyId], references: [id], onDelete: Restrict)
   responsible    User?           @relation("ProjectResponsible", fields: [responsibleId], references: [id], onDelete: SetNull)
   dossiers       Dossier[]
   contracts      Contract[]
@@ -690,7 +687,7 @@ model Project {
 
   @@index([status])
   @@index([responsibleId])
-  @@index([siteId])
+  @@index([companyId])
   @@map("project")
 }
 
@@ -827,7 +824,7 @@ enum CourrierStatus {
   /// -> TRANSMIS.
   AFFECTE
   /// Submitted, awaiting its validator's decision (the dossier's
-  /// responsible, or the site's) — VALIDE or A_CORRIGER.
+  /// responsible, or the company's) — VALIDE or A_CORRIGER.
   EN_ATTENTE_VALIDATION
   A_CORRIGER
   VALIDE
@@ -892,7 +889,7 @@ model Courrier {
   dischargedStamp    Boolean   @default(false)
 
   /// Person in charge of the courrier ("Affectations"): set at creation or
-  /// later by the creator, the owning site's responsible, or a platform
+  /// later by the creator, the owning company's responsible, or a platform
   /// admin. Also gets access to its documents.
   ownerId String?
 
@@ -912,7 +909,7 @@ model Courrier {
   supervisorDueDate     DateTime?
   supervisorNote        String?
   /// The effet's default deadline (PA·8): an entrant's treatment, a
-  /// sortant's sending — from its site's settings, unless one is given.
+  /// sortant's sending — from its company's settings, unless one is given.
   /// The supervisor's (supervisorDueDate) prevails once set.
   dueDate               DateTime?
   /// A sent sortant's discharge is expected by then (PA·8).
@@ -1015,18 +1012,18 @@ model CourrierSequence {
   @@map("courrier_sequence")
 }
 
-/// Last number given to the sortants of a type, per site and period.
-/// `siteKey` is the site's id, "NONE" without a site.
+/// Last number given to the sortants of a type, per company and period.
+/// `companyKey` is the company's id, "NONE" without a company.
 model EffetReferenceSequence {
   effetTypeId String
-  siteKey     String @db.VarChar(36)
+  companyKey     String @db.VarChar(36)
   /// "ALL", "2026" or "2026-11", from the type's counterReset.
   period      String @db.VarChar(7)
   last        Int    @default(0)
 
   effetType EffetType @relation(fields: [effetTypeId], references: [id], onDelete: Cascade)
 
-  @@id([effetTypeId, siteKey, period])
+  @@id([effetTypeId, companyKey, period])
   @@map("effet_reference_sequence")
 }
 
@@ -1472,10 +1469,10 @@ model ActivityLog {
   message     String?        @db.Text
   stack       String?        @db.Text
   metadata    Json?
-  /// The site the entry belongs to: its object's site (an effet's, a
+  /// The company the entry belongs to: its object's company (an effet's, a
   /// dossier's, a project's...), else its author's. Null: a platform-wide
   /// object (a global role, a common referential) — platform audit only.
-  siteId      String?
+  companyId      String?
   /// The author's IP address.
   ip          String?        @db.VarChar(64)
 
@@ -1483,7 +1480,7 @@ model ActivityLog {
   children ActivityLog[] @relation("ActivityLogTree")
 
   @@index([parentLogId])
-  @@index([siteId, createdAt])
+  @@index([companyId, createdAt])
   @@index([createdAt])
   @@index([entityType, entityId])
   @@index([userId, createdAt])
@@ -1491,13 +1488,13 @@ model ActivityLog {
   @@map("activity_log")
 }
 
-/// A batch of audit journal entries past their site's retention (PA·8),
+/// A batch of audit journal entries past their company's retention (PA·8),
 /// exported as CSV to the file storage before being deleted — the trace
-/// that stays. No foreign key: it outlives the site it mentions.
+/// that stays. No foreign key: it outlives the company it mentions.
 model AuditArchive {
   id             String   @id @default(uuid())
-  /// The site whose entries these were; null: the platform's own.
-  siteId         String?
+  /// The company whose entries these were; null: the platform's own.
+  companyId         String?
   storageKey     String
   /// The oldest and newest entry of the batch.
   fromDate       DateTime
@@ -1507,7 +1504,7 @@ model AuditArchive {
   retentionYears Int
   createdAt      DateTime @default(now())
 
-  @@index([siteId, createdAt])
+  @@index([companyId, createdAt])
   @@map("audit_archive")
 }
 
@@ -1555,9 +1552,9 @@ model AnalysisSheet {
   /// superseded by a new version, so several sheets can share one courrier —
   /// only one of them is ever live (see assertNoLiveSheet).
   courrierId    String
-  /// Denormalised from the courrier, for listing and site scoping: its
+  /// Denormalised from the courrier, for listing and company scoping: its
   /// dossier, or its contract when it has none — at least one of the two.
-  /// Without a dossier, the fiche belongs to the site of whoever registered
+  /// Without a dossier, the fiche belongs to the company of whoever registered
   /// the courrier.
   dossierId     String?
   contractId    String?
@@ -1688,14 +1685,14 @@ model AnalysisItemCriterion {
 /// Admin-managed default grid ("document de critères d'analyse"): Forme,
 /// Fonctionnalité, Constitution, Conformité aux cahiers des charges,
 /// Exploitabilité, Autres conformités.
-/// A criterion of the catalogue: common to every site (no site, managed by
-/// a platform administrator), or of one site (managed by whoever holds
+/// A criterion of the catalogue: common to every company (no company, managed by
+/// a platform administrator), or of one company (managed by whoever holds
 /// ADMIN_MANAGE_ANALYSIS_CRITERIA there). A fiche offers the common ones plus
-/// its site's.
+/// its company's.
 model AnalysisCriterionTemplate {
   id               String  @id @default(uuid())
   label            String  @db.VarChar(150)
-  siteId           String?
+  companyId           String?
   description      String?
   order            Int     @default(0)
   isActive         Boolean @default(true)
@@ -1705,12 +1702,12 @@ model AnalysisCriterionTemplate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  site     Site?                   @relation(fields: [siteId], references: [id], onDelete: Restrict)
+  company     Company?                   @relation(fields: [companyId], references: [id], onDelete: Restrict)
   criteria AnalysisItemCriterion[]
 
-  /// A label is unique among the common criteria and within each site (NULLS
+  /// A label is unique among the common criteria and within each company (NULLS
   /// NOT DISTINCT, see the migration).
-  @@unique([siteId, label])
+  @@unique([companyId, label])
   @@map("analysis_criterion_template")
 }
 
@@ -1735,11 +1732,11 @@ model AppSettings {
   @@map("app_settings")
 }
 
-/// A site's own settings, over the common ones (AppSettings): a key it
+/// A company's own settings, over the common ones (AppSettings): a key it
 /// doesn't set — a null column, a key absent from `values` /
 /// `notifications` — is inherited.
-model SiteSettings {
-  siteId         String   @id
+model CompanySettings {
+  companyId         String   @id
   values         Json?
   notifications  Json?
   accentColor    String?  @db.VarChar(9)
@@ -1748,9 +1745,9 @@ model SiteSettings {
   logoMime       String?  @db.VarChar(50)
   updatedAt      DateTime @updatedAt
 
-  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  @@map("site_settings")
+  @@map("company_settings")
 }
 
 /// Settings of the fiches d'analyse: a single row (id 1).
@@ -1763,14 +1760,14 @@ model AnalysisSettings {
   @@map("analysis_settings")
 }
 
-/// A site's own settings for its fiches, over the common ones
+/// A company's own settings for its fiches, over the common ones
 /// (AnalysisSettings) — absent: the common ones apply.
-model AnalysisSiteSettings {
-  siteId              String   @id
+model AnalysisCompanySettings {
+  companyId              String   @id
   allowCustomCriteria Boolean
   updatedAt           DateTime @updatedAt
 
-  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  @@map("analysis_site_settings")
+  @@map("analysis_company_settings")
 }

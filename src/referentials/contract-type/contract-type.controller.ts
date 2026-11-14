@@ -14,12 +14,9 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import {
-  PlatformOnly,
-  RequirePermission,
-} from '../../auth/rbac/require-permission.decorator';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
+import { Permission } from '../../auth/permissions';
+import { RequirePermissions } from '../../auth/access/decorators';
 import {
   ContractTypeService,
   CreateContractTypeDto,
@@ -27,11 +24,11 @@ import {
   UpdateContractTypeDto,
 } from './contract-type.service';
 
-// One list for every site: read by everyone, managed by a platform
-// administrator.
+// One list for every company: read by everyone, managed (settings.update) like
+// the other reference lists (owner decision, permissions 2.0.0).
 @ApiTags('contract-types')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
+@UseGuards(CoreAuthGuard, PermissionsGuard)
 @Controller('contract-types')
 export class ContractTypeController {
   constructor(private readonly types: ContractTypeService) {}
@@ -47,15 +44,13 @@ export class ContractTypeController {
   }
 
   @Post()
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  @PlatformOnly()
+  @RequirePermissions(Permission.SETTINGS_UPDATE)
   create(@Body() dto: CreateContractTypeDto) {
     return this.types.create(dto);
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  @PlatformOnly()
+  @RequirePermissions(Permission.SETTINGS_UPDATE)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateContractTypeDto,
@@ -65,8 +60,7 @@ export class ContractTypeController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AdminManageReferentials)
-  @PlatformOnly()
+  @RequirePermissions(Permission.SETTINGS_UPDATE)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.types.remove(id);
   }

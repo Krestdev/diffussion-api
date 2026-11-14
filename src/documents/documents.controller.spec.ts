@@ -41,9 +41,11 @@ describe('DocumentsController', () => {
           sub: 'u-1',
           email: 'u@x.com',
           name: 'U',
-          siteId: 's-1',
+          companyId: 's-1',
           sid: 'sid-1',
           impersonator: null,
+          permissions: new Set<string>(),
+          platformAdmin: false,
         },
       ),
     ).toThrow(BadRequestException);

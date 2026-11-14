@@ -1,8 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { CourrierStatus } from '../../generated/prisma/client';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
 import { DatabaseService } from '../database/database.service';
 import { DashboardService } from './dashboard.service';
 
@@ -14,10 +13,9 @@ describe('DashboardService', () => {
     courrier: { count: jest.fn(), findMany: jest.fn() },
   };
   const rbac = {
-    getPermissionCodes: jest.fn(),
-    managedSites: jest.fn(),
-    // Global grant: no site restriction.
-    siteFilter: jest.fn().mockResolvedValue({}),
+    has: jest.fn(),
+    scope: jest.fn(),
+    companyFilter: jest.fn().mockResolvedValue({ companyId: { in: ['s-1'] } }),
   };
 
   beforeEach(async () => {
@@ -43,7 +41,7 @@ describe('DashboardService', () => {
       providers: [
         DashboardService,
         { provide: DatabaseService, useValue: database },
-        { provide: RbacService, useValue: rbac },
+        { provide: AccessService, useValue: rbac },
       ],
     }).compile();
     service = module.get(DashboardService);
@@ -62,8 +60,8 @@ describe('DashboardService', () => {
 
     beforeEach(() => database.courrier.findMany.mockResolvedValue([]));
 
-    it("keeps a site's administrator to their site in every query", async () => {
-      rbac.managedSites.mockResolvedValue(['s-1']);
+    it("keeps a company's administrator to their company in every query", async () => {
+      rbac.scope.mockResolvedValue(['s-1']);
 
       const stats = await service.getStats('u1', { scope: 'global' });
 
@@ -72,16 +70,8 @@ describe('DashboardService', () => {
       for (const where of scoped()) expect(where).toContain('s-1');
     });
 
-    it('counts every site for a global grant', async () => {
-      rbac.managedSites.mockResolvedValue('ALL');
-
-      await service.getStats('u1', { scope: 'global' });
-
-      for (const where of scoped()) expect(where).not.toContain('siteId');
-    });
-
     it('is refused without the permission anywhere', async () => {
-      rbac.managedSites.mockResolvedValue([]);
+      rbac.scope.mockResolvedValue([]);
 
       await expect(
         service.getStats('u1', { scope: 'global' }),
@@ -90,8 +80,8 @@ describe('DashboardService', () => {
     });
   });
 
-  it('hides courrier sections without COURRIER_READ', async () => {
-    rbac.getPermissionCodes.mockResolvedValue([]);
+  it('hides courrier sections without incoming.read', async () => {
+    rbac.has.mockResolvedValue(false);
 
     const stats = await service.getStats('u1', {});
 
@@ -107,7 +97,7 @@ describe('DashboardService', () => {
   });
 
   it('buckets incoming courriers per local day, oldest first', async () => {
-    rbac.getPermissionCodes.mockResolvedValue([PermissionCode.CourrierRead]);
+    rbac.has.mockResolvedValue(true);
     database.courrier.findMany.mockResolvedValue([
       // 23:30 UTC on the 27th is already the 28th in Douala (UTC+1).
       { receivedAt: new Date('2026-09-27T23:30:00Z'), createdAt: new Date() },
@@ -139,7 +129,7 @@ describe('DashboardService', () => {
   });
 
   it('returns 30 points for the 30-day period', async () => {
-    rbac.getPermissionCodes.mockResolvedValue([PermissionCode.CourrierRead]);
+    rbac.has.mockResolvedValue(true);
     database.courrier.findMany.mockResolvedValue([]);
 
     const stats = await service.getStats('u1', { days: 30 });

@@ -7,35 +7,35 @@ import {
 import { Prisma } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService, SiteScopeList } from '../../auth/rbac/rbac.service';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
 import {
-  CreateSiteListItemDto,
-  FindSiteListQueryDto,
-  UpdateSiteListItemDto,
-} from '../../common/dto/site-list-item.dto';
+  CreateCompanyListItemDto,
+  FindCompanyListQueryDto,
+  UpdateCompanyListItemDto,
+} from '../../common/dto/company-list-item.dto';
 import {
-  assertSiteExists,
-  siteReferentialsWhere,
-} from '../../common/utils/site-referentials';
+  assertCompanyExists,
+  companyReferentialsWhere,
+} from '../../common/utils/company-referentials';
 import { DEFAULT_TAKE } from '../../common/dto/pagination.query.dto';
 import { DatabaseService } from '../../database/database.service';
 
 const include = {
-  site: { select: { id: true, code: true, name: true } },
+  company: { select: { id: true, code: true, name: true } },
   _count: { select: { dossiers: true } },
 } satisfies Prisma.DossierTypeInclude;
 
 /**
- * Kinds of dossier (PA·7) — each site's own: managed by its responsible or
- * whoever holds ADMIN_MANAGE_REFERENTIALS there. Deactivated rather than
+ * Kinds of dossier (PA·7) — each company's own: managed by whoever holds
+ * settings.update there. Deactivated rather than
  * deleted once used.
  */
 @Injectable()
 export class DossierTypeService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
   ) {}
@@ -45,34 +45,32 @@ export class DossierTypeService {
     entityType: 'dossier-type',
     operation: 'CREATE',
   })
-  async create(dto: CreateSiteListItemDto, actingUserId: string) {
-    const scope = await this.rbac.managedSites(
+  async create(dto: CreateCompanyListItemDto, actingUserId: string) {
+    const companyId =
+      dto.companyId ?? (await this.access.companyOf(actingUserId));
+    if (!companyId) throw new BadRequestException('companyId is required');
+    await this.access.assertManages(
       actingUserId,
-      PermissionCode.AdminManageReferentials,
-    );
-    const siteId = siteForNew(scope, dto.siteId);
-    await this.rbac.explainOutOfScope(
-      scope,
-      siteId,
+      Permission.SETTINGS_UPDATE,
+      companyId,
       'Ce type de dossier',
-      PermissionCode.AdminManageReferentials,
     );
-    await assertSiteExists(this.database, siteId);
-    await this.assertNameAvailable(dto.name, siteId);
+    await assertCompanyExists(this.database, companyId);
+    await this.assertNameAvailable(dto.name, companyId);
     return this.database.dossierType.create({
-      data: { ...dto, siteId },
+      data: { ...dto, companyId },
       include,
     });
   }
 
   // Paginated like every list: { data, total, skip, take }.
-  async findAll(query: FindSiteListQueryDto, actingUserId: string) {
+  async findAll(query: FindCompanyListQueryDto, actingUserId: string) {
     const where = {
-      ...(await siteReferentialsWhere(
-        this.rbac,
+      ...(await companyReferentialsWhere(
+        this.access,
         this.database,
         actingUserId,
-        query.siteId,
+        query.companyId,
       )),
       active: query.active,
       ...(query.search
@@ -108,11 +106,15 @@ export class DossierTypeService {
     entityType: 'dossier-type',
     operation: 'UPDATE',
   })
-  async update(id: string, dto: UpdateSiteListItemDto, actingUserId: string) {
+  async update(
+    id: string,
+    dto: UpdateCompanyListItemDto,
+    actingUserId: string,
+  ) {
     const type = await this.findOne(id);
-    await this.assertManages(type.siteId, actingUserId);
+    await this.assertManages(type.companyId, actingUserId);
     if (dto.name !== undefined && dto.name !== type.name) {
-      await this.assertNameAvailable(dto.name, type.siteId);
+      await this.assertNameAvailable(dto.name, type.companyId);
     }
     return this.database.dossierType.update({
       where: { id },
@@ -128,7 +130,7 @@ export class DossierTypeService {
   })
   async remove(id: string, actingUserId: string) {
     const type = await this.findOne(id);
-    await this.assertManages(type.siteId, actingUserId);
+    await this.assertManages(type.companyId, actingUserId);
     if (type._count.dossiers > 0) {
       throw new ConflictException(
         `This type is used by ${type._count.dossiers} dossier(s) — deactivate it instead`,
@@ -137,48 +139,42 @@ export class DossierTypeService {
     await this.database.dossierType.delete({ where: { id } });
   }
 
-  private assertManages(siteId: string, userId: string) {
-    return this.rbac.assertManagesSite(
+  private assertManages(companyId: string, userId: string) {
+    return this.access.assertManages(
       userId,
-      PermissionCode.AdminManageReferentials,
-      siteId,
+      Permission.SETTINGS_UPDATE,
+      companyId,
       'Ce type de dossier',
     );
   }
 
-  private async assertNameAvailable(name: string, siteId: string) {
+  private async assertNameAvailable(name: string, companyId: string) {
     const taken = await this.database.dossierType.findFirst({
-      where: { name, siteId },
+      where: { name, companyId },
       select: { id: true },
     });
     if (taken) {
       throw new ConflictException(
-        `A dossier type "${name}" already exists on this site`,
+        `A dossier type "${name}" already exists on this company`,
       );
     }
   }
 }
 
-function siteForNew(scope: SiteScopeList, requested?: string): string {
-  if (requested) return requested;
-  if (scope !== 'ALL' && scope.length === 1) return scope[0];
-  throw new BadRequestException('siteId is required');
-}
-
-/** A dossier's kind: an active type of the dossier's own site. */
+/** A dossier's kind: an active type of the dossier's own company. */
 export async function assertDossierTypeUsable(
   db: DatabaseService,
   typeId: string,
-  siteId: string,
+  companyId: string,
 ) {
   const type = await db.dossierType.findUnique({
     where: { id: typeId },
-    select: { name: true, siteId: true, active: true },
+    select: { name: true, companyId: true, active: true },
   });
   if (!type) throw new BadRequestException(`Dossier type ${typeId} not found`);
-  if (type.siteId !== siteId) {
+  if (type.companyId !== companyId) {
     throw new BadRequestException(
-      `The dossier type « ${type.name} » belongs to another site`,
+      `The dossier type « ${type.name} » belongs to another company`,
     );
   }
   if (!type.active) {

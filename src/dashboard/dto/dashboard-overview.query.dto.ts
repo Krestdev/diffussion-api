@@ -48,9 +48,9 @@ export const EXPORT_SECTIONS = [
 export type ExportSection = (typeof EXPORT_SECTIONS)[number];
 
 export class DashboardOverviewQueryDto {
-  @ApiProperty({ description: 'The site shown — never any other' })
+  @ApiProperty({ description: 'The company shown — never any other' })
   @IsUUID('4')
-  siteId!: string;
+  companyId!: string;
 
   @ApiPropertyOptional({ enum: OVERVIEW_PERIODS, default: '30d' })
   @IsOptional()
@@ -95,7 +95,7 @@ export class DashboardOverviewQueryDto {
 
   @ApiPropertyOptional({
     description:
-      'A team: the id of one of the site roles listed in `teams`. Effets whose person in charge or supervisor holds it',
+      'A team: the id of one of the company roles listed in `teams`. Effets whose person in charge or supervisor holds it',
   })
   @IsOptional()
   @IsUUID('4')

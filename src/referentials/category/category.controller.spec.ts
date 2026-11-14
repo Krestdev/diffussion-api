@@ -1,6 +1,6 @@
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
 import { Test, TestingModule } from '@nestjs/testing';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
 import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
 import { CategoryController } from './category.controller';
@@ -18,7 +18,7 @@ describe('CategoryController', () => {
         { provide: ActivityService, useValue: {} },
       ],
     })
-      .overrideGuard(PermissionGuard)
+      .overrideGuard(PermissionsGuard)
       .useValue({ canActivate: () => true })
       .overrideGuard(CoreAuthGuard)
       .useValue({ canActivate: () => true })

@@ -11,7 +11,7 @@ import { StorageService } from '../storage/storage.service';
 
 // Every 6 hours: each run exports and deletes only what is past retention.
 const SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
-// Entries per CSV file, and files per site and run.
+// Entries per CSV file, and files per company and run.
 const BATCH = 5000;
 const MAX_BATCHES = 20;
 // Never less, whatever the settings say.
@@ -20,7 +20,7 @@ export const MIN_AUDIT_RETENTION_YEARS = 1;
 const COLUMNS = [
   'id',
   'createdAt',
-  'siteId',
+  'companyId',
   'userId',
   'actorLabel',
   'source',
@@ -37,11 +37,11 @@ const COLUMNS = [
 type Entry = Prisma.ActivityLogGetPayload<object>;
 
 /**
- * PA·8 "conservation du journal d'audit": each site's entries older than
+ * PA·8 "conservation du journal d'audit": each company's entries older than
  * its auditRetentionYears (1 year at least) are first exported as CSV to
  * the file storage — recorded in AuditArchive, downloadable — then deleted,
  * batch by batch, and only once their file is safely stored. The
- * platform's own entries (no site) follow the common settings.
+ * platform's own entries (no company) follow the common settings.
  */
 @Injectable()
 export class AuditRetentionService
@@ -68,17 +68,22 @@ export class AuditRetentionService
 
   async sweep(now = new Date()) {
     try {
-      const sites = await this.database.site.findMany({ select: { id: true } });
-      for (const siteId of [...sites.map((site) => site.id), null]) {
-        const { auditRetentionYears } = await this.settings.get(siteId);
+      const companies = await this.database.company.findMany({
+        select: { id: true },
+      });
+      for (const companyId of [
+        ...companies.map((company) => company.id),
+        null,
+      ]) {
+        const { auditRetentionYears } = await this.settings.get(companyId);
         const years = Math.max(
           MIN_AUDIT_RETENTION_YEARS,
           auditRetentionYears || MIN_AUDIT_RETENTION_YEARS,
         );
-        const purged = await this.purgeSite(siteId, years, now);
+        const purged = await this.purgeCompany(companyId, years, now);
         if (purged) {
           this.logger.log(
-            `${purged} audit entr(ies) exported then deleted (site ${siteId ?? '—'}, ${years} year(s))`,
+            `${purged} audit entr(ies) exported then deleted (company ${companyId ?? '—'}, ${years} year(s))`,
           );
         }
       }
@@ -87,14 +92,14 @@ export class AuditRetentionService
     }
   }
 
-  // Returns how many entries of `siteId` were exported then deleted.
-  async purgeSite(siteId: string | null, years: number, now: Date) {
+  // Returns how many entries of `companyId` were exported then deleted.
+  async purgeCompany(companyId: string | null, years: number, now: Date) {
     const cutoff = new Date(now);
     cutoff.setUTCFullYear(cutoff.getUTCFullYear() - years);
     let total = 0;
     for (let batch = 0; batch < MAX_BATCHES; batch++) {
       const entries = await this.database.activityLog.findMany({
-        where: { siteId, createdAt: { lt: cutoff } },
+        where: { companyId, createdAt: { lt: cutoff } },
         orderBy: { createdAt: 'asc' },
         take: BATCH,
       });
@@ -103,15 +108,15 @@ export class AuditRetentionService
       // Stored first: nothing is deleted without its file.
       const from = entries[0].createdAt;
       const to = entries[entries.length - 1].createdAt;
-      const name = `journal-${siteId ?? 'plateforme'}-${stamp(from)}-${stamp(to)}.csv`;
+      const name = `journal-${companyId ?? 'plateforme'}-${stamp(from)}-${stamp(to)}.csv`;
       const { key } = await this.storage.upload(Buffer.from(toCsv(entries)), {
         originalName: name,
         contentType: 'text/csv',
-        prefix: `audit-archives/${siteId ?? 'platform'}`,
+        prefix: `audit-archives/${companyId ?? 'platform'}`,
       });
       const archive = await this.database.auditArchive.create({
         data: {
-          siteId,
+          companyId,
           storageKey: key,
           fromDate: from,
           toDate: to,
@@ -132,7 +137,7 @@ export class AuditRetentionService
             action: 'audit.purged',
             entityType: 'audit-archive',
             entityId: archive.id,
-            siteId,
+            companyId,
             message: `${count} entrée(s) du journal antérieures au ${stamp(cutoff)} exportées puis supprimées (conservation : ${years} an(s))`,
             metadata: { entries: count, from, to, file: key },
           },

@@ -3,7 +3,7 @@ import { Transform } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -11,7 +11,7 @@ import {
   Max,
   Min,
 } from 'class-validator';
-import { PermissionCode } from '../../../auth/rbac/rbac.constants';
+import { ALL_PERMISSIONS, type Permission } from '../../../auth/permissions';
 
 /**
  * GET /users/directory — the people pickers (superviseur, agents,
@@ -20,11 +20,11 @@ import { PermissionCode } from '../../../auth/rbac/rbac.constants';
 export class FindDirectoryQueryDto {
   @ApiPropertyOptional({
     description:
-      "Only this site's people. Anyone but a platform administrator only ever gets their own site's.",
+      "Only this company's people: everyone only ever gets their own company's.",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({ description: 'Name, email or function, partial' })
   @IsOptional()
@@ -32,18 +32,18 @@ export class FindDirectoryQueryDto {
   search?: string;
 
   @ApiPropertyOptional({
-    enum: PermissionCode,
+    enum: ALL_PERMISSIONS,
     description:
-      'Only those holding this permission at that site (or globally), e.g. INSTRUCTION_ASSIGN for a superviseur, ANALYSIS_DECIDE for a validateur',
+      'Only those holding this permission in their company (through a role or a delegation in force), e.g. instruction.assign for a superviseur, analysis.approve for a validateur',
   })
   @IsOptional()
-  @IsEnum(PermissionCode)
-  permission?: PermissionCode;
+  @IsIn(ALL_PERMISSIONS)
+  permission?: Permission;
 
   @ApiPropertyOptional({
     type: String,
     description:
-      'Comma-separated ids to resolve (names of people already chosen): returned whatever their site or status',
+      'Comma-separated ids to resolve (names of people already chosen): returned whatever their company or status',
   })
   @IsOptional()
   @Transform(({ value }: { value: unknown }) =>

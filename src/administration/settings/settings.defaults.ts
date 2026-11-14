@@ -1,5 +1,5 @@
 /**
- * The general settings (PA·5, PA·8) and their defaults — what a site gets
+ * The general settings (PA·5, PA·8) and their defaults — what a company gets
  * until the common settings or its own say otherwise.
  *
  * Several are only stored here for the front to apply (session warning,

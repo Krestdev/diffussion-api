@@ -65,22 +65,22 @@ export const NOTIFICATION_DESCRIPTIONS: Record<NotificationType, string> = {
   TASK_COMPLETED: 'Toutes les personnes affectées à la tâche.',
   TASK_OVERDUE_AGENT: 'Toutes les personnes affectées à la tâche.',
   TASK_OVERDUE:
-    "Les superviseurs et le créateur de la tâche, et le responsable désigné de l'effet si le site l'a activé.",
+    "Les superviseurs et le créateur de la tâche, et le responsable désigné de l'effet si la société l'a activé.",
   TASK_REMINDER: 'Les exécutants de la tâche.',
   TASK_DUE_SOON: 'Les personnes affectées à la tâche, hors validateurs.',
   COURRIER_DUE_SOON:
     "Le superviseur de l'effet, sinon son responsable désigné, et l'auteur d'un sortant.",
   COURRIER_OVERDUE:
-    "Le superviseur de l'effet, sinon son responsable désigné, l'auteur d'un sortant, et le responsable désigné si le site l'a activé.",
+    "Le superviseur de l'effet, sinon son responsable désigné, l'auteur d'un sortant, et le responsable désigné si la société l'a activé.",
   COURRIER_DISCHARGE_OVERDUE:
-    "L'auteur de l'effet, celui qui l'a transmis, et le responsable désigné si le site l'a activé.",
+    "L'auteur de l'effet, celui qui l'a transmis, et le responsable désigné si la société l'a activé.",
   COURRIER_REGISTERED:
-    "Les personnes pouvant dispatcher ou valider un dispatching sur le site de l'effet.",
+    "Les personnes pouvant dispatcher ou valider un dispatching dans la société de l'effet.",
   COURRIER_DISPATCH_PROPOSED:
-    "Les personnes pouvant dispatcher ou valider un dispatching sur le site de l'effet.",
+    "Les personnes pouvant dispatcher ou valider un dispatching dans la société de l'effet.",
   COURRIER_DISPATCH_VALIDATED: 'La personne qui a proposé le dispatching.',
   ACCESS_CHANGED: "L'utilisateur concerné.",
-  ACCESS_REQUESTED: 'Les administrateurs du site.',
+  ACCESS_REQUESTED: 'Les administrateurs de la société.',
 };
 
 export function isNotificationType(type: string): type is NotificationType {

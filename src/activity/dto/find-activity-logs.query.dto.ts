@@ -59,11 +59,11 @@ export class FindActivityLogsQueryDto {
 
   @ApiPropertyOptional({
     description:
-      "Only this site's entries — within the sites the caller may audit (every site for a platform administrator)",
+      "Only this company's entries — within the companies the caller may audit (every company for a platform administrator)",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({
     description: 'From this date-time (inclusive), ISO 8601',

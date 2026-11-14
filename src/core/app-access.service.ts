@@ -5,7 +5,8 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
+import { CATALOG_VERSION } from '../auth/permissions';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../database/database.service';
 import {
@@ -24,14 +25,13 @@ import {
 
 /** People kept at most in the guard's cache (oldest dropped first). */
 const ACCESS_CACHE_LIMIT = 5000;
-/** The permission catalog version published with the codes (informative for the core). */
-const CATALOG_VERSION = '1';
 
 /**
  * People's roles and permissions in Diffusion (Diffusion owns them, as every app of the
  * platform). Computed from Diffusion's tables for the guard, and published to the session store
  * (appAccessKey) with an event on EVENTS_CHANNEL each time they change, so the core's launcher and
- * console show who may open Diffusion. Permissions are the codes held at any site.
+ * console show who may open Diffusion. Permissions are the person's codes in their company (roles
+ * of that company and delegations in force there, normalised).
  */
 @Injectable()
 export class AppAccessService implements OnModuleInit, OnModuleDestroy {
@@ -44,7 +44,7 @@ export class AppAccessService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     @Inject(SESSION_STORE) private readonly store: SessionStore,
     private readonly config: AppConfigService,
   ) {}
@@ -71,28 +71,40 @@ export class AppAccessService implements OnModuleInit, OnModuleDestroy {
       where: { id: { in: userIds } },
       select: {
         id: true,
-        siteId: true,
+        companyId: true,
         userRoles: {
           where: { role: { archivedAt: null } },
-          select: { role: { select: { id: true, name: true } } },
+          select: {
+            role: { select: { id: true, name: true, companyId: true } },
+          },
         },
       },
     });
     const now = new Date().toISOString();
     const result = new Map<string, StoredAppAccess>();
     for (const user of users) {
+      // Only the roles of their company count (a role belongs to one company).
       const roles = new Map(
-        user.userRoles.map(({ role }) => [role.id, role.name]),
+        user.userRoles
+          .filter(({ role }) => role.companyId === user.companyId)
+          .map(({ role }) => [role.id, role.name]),
       );
       result.set(user.id, {
         v: STORE_VERSION,
         appId: this.appId,
         userId: user.id,
-        tenantId: user.siteId ?? '',
+        tenantId: user.companyId ?? '',
         roles: [...roles]
           .map(([id, name]) => ({ id, name }))
           .sort((a, b) => a.name.localeCompare(b.name)),
-        permissions: (await this.rbac.getPermissionCodes(user.id)).sort(),
+        permissions: user.companyId
+          ? [
+              ...(await this.access.computePermissions(
+                user.id,
+                user.companyId,
+              )),
+            ].sort()
+          : [],
         catalogVersion: CATALOG_VERSION,
         updatedAt: now,
       });

@@ -9,7 +9,7 @@ const NOW = new Date('2026-11-10T00:00:00Z');
 const entry = (id: string, createdAt: string) => ({
   id,
   createdAt: new Date(createdAt),
-  siteId: 's-1',
+  companyId: 's-1',
   userId: 'u-1',
   actorLabel: 'a@b.c',
   source: 'USER',
@@ -27,7 +27,7 @@ const entry = (id: string, createdAt: string) => ({
 describe('AuditRetentionService', () => {
   let service: AuditRetentionService;
   let database: {
-    site: Record<string, jest.Mock>;
+    company: Record<string, jest.Mock>;
     activityLog: Record<string, jest.Mock>;
     auditArchive: Record<string, jest.Mock>;
   };
@@ -37,7 +37,7 @@ describe('AuditRetentionService', () => {
   beforeEach(async () => {
     retention = { 's-1': 2 };
     database = {
-      site: { findMany: jest.fn().mockResolvedValue([{ id: 's-1' }]) },
+      company: { findMany: jest.fn().mockResolvedValue([{ id: 's-1' }]) },
       activityLog: {
         findMany: jest
           .fn()
@@ -61,9 +61,9 @@ describe('AuditRetentionService', () => {
         {
           provide: SettingsService,
           useValue: {
-            get: jest.fn((siteId: string | null) =>
+            get: jest.fn((companyId: string | null) =>
               Promise.resolve({
-                auditRetentionYears: siteId ? retention[siteId] : 10,
+                auditRetentionYears: companyId ? retention[companyId] : 10,
               }),
             ),
           },
@@ -74,24 +74,24 @@ describe('AuditRetentionService', () => {
     service = module.get(AuditRetentionService);
   });
 
-  it("exports a site's entries past its retention, then deletes them", async () => {
+  it("exports a company's entries past its retention, then deletes them", async () => {
     await service.sweep(NOW);
 
     expect(database.activityLog.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          siteId: 's-1',
+          companyId: 's-1',
           createdAt: { lt: new Date('2024-11-10T00:00:00Z') },
         },
       }),
     );
     const csv = (storage.upload.mock.calls[0][0] as Buffer).toString();
-    expect(csv).toContain('id;createdAt;siteId');
+    expect(csv).toContain('id;createdAt;companyId');
     // A cell with ; or " is quoted.
     expect(csv).toContain('"Validé; ""ok"""');
     expect(database.auditArchive.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        siteId: 's-1',
+        companyId: 's-1',
         storageKey: 'k/1.csv',
         entries: 2,
         retentionYears: 2,
@@ -118,7 +118,7 @@ describe('AuditRetentionService', () => {
     expect(database.activityLog.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          siteId: 's-1',
+          companyId: 's-1',
           createdAt: { lt: new Date('2025-11-10T00:00:00Z') },
         },
       }),

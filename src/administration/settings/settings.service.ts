@@ -1,8 +1,8 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService, SiteScopeList } from '../../auth/rbac/rbac.service';
+import { Permission } from '../../auth/permissions';
+import { AccessService } from '../../auth/access/access.service';
 import { DatabaseService } from '../../database/database.service';
 import { SettingsQueryDto, UpdateSettingsDto } from './dto/update-settings.dto';
 import {
@@ -22,29 +22,29 @@ function asValues(json: Prisma.JsonValue | null | undefined): Values {
 }
 
 /**
- * The settings (PA·5, PA·8): common ones, which every site inherits, and
- * each site's own over them. A site's administrator — its responsible, or
- * whoever holds ADMIN_MANAGE_SETTINGS there — sets their site's; a platform
- * administrator sets the common ones (and any site's).
+ * The settings (PA·5, PA·8): common ones, which every company inherits, and
+ * each company's own over them. A company's administrator — its responsible, or
+ * whoever holds ADMIN_MANAGE_SETTINGS there — sets their company's; a platform
+ * administrator sets the common ones (and any company's).
  */
 @Injectable()
 export class SettingsService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     private readonly activity: ActivityService,
   ) {}
 
   /**
-   * The settings in force at `siteId` (the common ones without a site):
-   * defaults, then the common values, then the site's own. `inherited`
-   * lists the keys the site doesn't set itself.
+   * The settings in force at `companyId` (the common ones without a company):
+   * defaults, then the common values, then the company's own. `inherited`
+   * lists the keys the company doesn't set itself.
    */
-  async get(siteId?: string | null) {
+  async get(companyId?: string | null) {
     const [common, own] = await Promise.all([
       this.database.appSettings.findUnique({ where: { id: SETTINGS_ID } }),
-      siteId
-        ? this.database.siteSettings.findUnique({ where: { siteId } })
+      companyId
+        ? this.database.companySettings.findUnique({ where: { companyId } })
         : null,
     ]);
     const commonValues: Values = {
@@ -60,67 +60,68 @@ export class SettingsService {
     const values = {
       ...GENERAL_SETTINGS_DEFAULTS,
       ...commonValues,
-      ...(siteId ? ownValues : {}),
+      ...(companyId ? ownValues : {}),
     } as GeneralSettings;
     return {
-      siteId: siteId ?? null,
+      companyId: companyId ?? null,
       ...values,
-      inherited: siteId
+      inherited: companyId
         ? GENERAL_SETTING_KEYS.filter((key) => !(key in ownValues))
         : [],
-      updatedAt: (siteId ? own?.updatedAt : null) ?? common?.updatedAt ?? null,
+      updatedAt:
+        (companyId ? own?.updatedAt : null) ?? common?.updatedAt ?? null,
     };
   }
 
   /**
-   * Readable by every signed-in user — their own site's (e.g. the agents'
-   * capacity when assigning a task, the session timeout); another site's
+   * Readable by every signed-in user — their own company's (e.g. the agents'
+   * capacity when assigning a task, the session timeout); another company's
    * only for whoever administers it.
    */
   async getFor(query: SettingsQueryDto, userId: string) {
-    const own = await this.ownSite(userId);
-    const siteId = query.siteId ?? own;
-    if (query.siteId && query.siteId !== own) {
-      await this.rbac.assertManagesSite(
+    const own = await this.ownCompany(userId);
+    const companyId = query.companyId ?? own;
+    if (query.companyId && query.companyId !== own) {
+      await this.access.assertManages(
         userId,
-        PermissionCode.AdminManageSettings,
-        query.siteId,
+        Permission.SETTINGS_UPDATE,
+        query.companyId,
         'Ce réglage',
       );
     }
-    return this.get(siteId);
+    return this.get(companyId);
   }
 
   async update(dto: UpdateSettingsDto, userId: string) {
-    const { siteId: requested, reset, ...changes } = dto;
-    const scope = await this.rbac.managedSites(
+    const { companyId: requested, reset, ...changes } = dto;
+    const companyId = targetCompany(
+      await this.access.scope(userId, Permission.SETTINGS_UPDATE),
+      await this.access.isPlatformAdmin(userId),
+      requested,
+    );
+    await this.access.assertManages(
       userId,
-      PermissionCode.AdminManageSettings,
+      Permission.SETTINGS_UPDATE,
+      companyId,
+      companyId ? 'Ce réglage' : 'Ce réglage commun',
     );
-    const siteId = targetSite(scope, requested);
-    await this.rbac.explainOutOfScope(
-      scope,
-      siteId,
-      siteId ? 'Ce réglage' : 'Ce réglage commun',
-      PermissionCode.AdminManageSettings,
-    );
-    if (!siteId && reset?.length) {
+    if (!companyId && reset?.length) {
       throw new BadRequestException(
-        'Only a site gives a setting up: the common settings have no parent',
+        'Only a company gives a setting up: the common settings have no parent',
       );
     }
 
-    const before = await this.get(siteId);
-    if (siteId) {
-      const own = await this.database.siteSettings.findUnique({
-        where: { siteId },
+    const before = await this.get(companyId);
+    if (companyId) {
+      const own = await this.database.companySettings.findUnique({
+        where: { companyId },
         select: { values: true },
       });
       const values: Values = { ...asValues(own?.values), ...changes };
       for (const key of reset ?? []) delete values[key];
-      await this.database.siteSettings.upsert({
-        where: { siteId },
-        create: { siteId, values: values as Prisma.InputJsonValue },
+      await this.database.companySettings.upsert({
+        where: { companyId },
+        create: { companyId, values: values as Prisma.InputJsonValue },
         update: { values: values as Prisma.InputJsonValue },
       });
     } else {
@@ -146,7 +147,7 @@ export class SettingsService {
         update: { values: values as Prisma.InputJsonValue, ...column },
       });
     }
-    const after = await this.get(siteId);
+    const after = await this.get(companyId);
 
     // Before / after, for the audit journal.
     const diff: Record<string, [unknown, unknown]> = {};
@@ -157,32 +158,37 @@ export class SettingsService {
       .tryRecord({
         action: 'settings.updated',
         entityType: 'settings',
-        entityId: siteId ?? String(SETTINGS_ID),
-        siteId,
+        entityId: companyId ?? String(SETTINGS_ID),
+        companyId,
         changes: diff,
-        metadata: { scope: siteId ? 'site' : 'common', reset: reset ?? [] },
+        metadata: {
+          scope: companyId ? 'company' : 'common',
+          reset: reset ?? [],
+        },
       })
       .catch(() => undefined);
     return after;
   }
 
-  private async ownSite(userId: string) {
+  private async ownCompany(userId: string) {
     const user = await this.database.user.findUnique({
       where: { id: userId },
-      select: { siteId: true },
+      select: { companyId: true },
     });
-    return user?.siteId ?? null;
+    return user?.companyId ?? null;
   }
 }
 
-// The settings PATCH applies to: the site named, else the only site the
+// The settings PATCH applies to: the company named, else the only company the
 // caller manages, else (a platform administrator) the common ones.
-function targetSite(
-  scope: SiteScopeList,
+function targetCompany(
+  scope: string[],
+  platformAdmin: boolean,
   requested: string | undefined,
 ): string | null {
   if (requested) return requested;
-  if (scope === 'ALL') return null;
+  // A super-administrator naming no company changes the common ones.
+  if (platformAdmin) return null;
   if (scope.length === 1) return scope[0];
-  throw new BadRequestException('siteId is required');
+  throw new BadRequestException('companyId is required');
 }

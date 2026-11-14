@@ -5,11 +5,11 @@ import { IsBoolean, IsOptional, IsUUID } from 'class-validator';
 export class FindEffetTypesQueryDto {
   @ApiPropertyOptional({
     description:
-      'Only the types of this site. Everyone only ever sees the global types plus those of their own site.',
+      'Only the types of this company. Everyone only ever sees the global types plus those of their own company.',
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 
   @ApiPropertyOptional({
     description: 'true: only the types offered for new effets',

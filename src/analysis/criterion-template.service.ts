@@ -8,8 +8,9 @@ import {
 import { Prisma } from '../../generated/prisma/client';
 import { ActivityService } from '../activity/activity.service';
 import { AuditLog } from '../activity/decorators/audit-log.decorator';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RbacService, SiteScopeList } from '../auth/rbac/rbac.service';
+import { Permission } from '../auth/permissions';
+import { AccessService } from '../auth/access/access.service';
+import { forbidden } from '../auth/access/permissions.guard';
 import { DatabaseService } from '../database/database.service';
 import {
   CreateCriterionTemplateDto,
@@ -22,13 +23,13 @@ import {
 const SETTINGS_ID = 1;
 
 const templateInclude = {
-  site: { select: { id: true, code: true, name: true } },
+  company: { select: { id: true, code: true, name: true } },
 } satisfies Prisma.AnalysisCriterionTemplateInclude;
 
 /**
  * The "document de critères d'analyse" as data: the default grid proposed on
- * every element. Common criteria (no site) serve every site and are managed
- * by a platform administrator; a site's own criteria serve its fiches only
+ * every element. Common criteria (no company) serve every company and are managed
+ * by a platform administrator; a company's own criteria serve its fiches only
  * and are managed by whoever holds ADMIN_MANAGE_ANALYSIS_CRITERIA there (or
  * its responsible). Editing them never rewrites sheets already filled —
  * criteria are copied onto each element at creation.
@@ -37,7 +38,7 @@ const templateInclude = {
 export class CriterionTemplateService {
   constructor(
     private readonly database: DatabaseService,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
   ) {}
@@ -48,58 +49,58 @@ export class CriterionTemplateService {
     operation: 'CREATE',
   })
   async create(dto: CreateCriterionTemplateDto, actingUserId: string) {
-    const scope = await this.manageScope(actingUserId);
-    const { siteId: requested, ...data } = dto;
-    const siteId = siteForNew(scope, requested);
-    await this.rbac.explainOutOfScope(
-      scope,
-      siteId,
-      siteId ? 'Ce critère' : 'Un critère commun (modèle)',
-      PermissionCode.AdminManageAnalysisCriteria,
+    if (!(await this.access.has(actingUserId, Permission.SETTINGS_UPDATE))) {
+      throw forbidden(Permission.SETTINGS_UPDATE);
+    }
+    const { companyId: requested, ...data } = dto;
+    const companyId = companyForNew(
+      await this.access.scope(actingUserId, Permission.SETTINGS_UPDATE),
+      await this.access.isPlatformAdmin(actingUserId),
+      requested,
     );
-    await this.assertLabelAvailable(dto.label, siteId);
+    await this.access.assertManages(
+      actingUserId,
+      Permission.SETTINGS_UPDATE,
+      companyId,
+      companyId ? 'Ce critère' : 'Un critère commun (modèle)',
+    );
+    await this.assertLabelAvailable(dto.label, companyId);
     return this.database.analysisCriterionTemplate.create({
-      data: { ...data, siteId },
+      data: { ...data, companyId },
       include: templateInclude,
     });
   }
 
-  // The common criteria plus those of one site: `siteId`, else the caller's
-  // own (every site's for a platform administrator).
-  private async assertReadsSite(siteId: string, userId: string) {
-    if (
-      !(await this.rbac.worksAtSite(
-        userId,
-        PermissionCode.AnalysisRead,
-        siteId,
-      ))
-    ) {
+  // The common criteria plus those of one company: `companyId`, else the caller's
+  // own.
+  private async assertReadsCompany(companyId: string, userId: string) {
+    if (!(await this.access.worksAtCompany(userId, companyId))) {
       throw new ForbiddenException(
-        'Ces critères appartiennent à un autre site',
+        'Ces critères appartiennent à un autre société',
       );
     }
   }
 
   async findAll(query: FindCriteriaQueryDto = {}, actingUserId?: string) {
-    if (query.siteId && actingUserId) {
-      await this.assertReadsSite(query.siteId, actingUserId);
+    if (query.companyId && actingUserId) {
+      await this.assertReadsCompany(query.companyId, actingUserId);
     }
     return this.database.analysisCriterionTemplate.findMany({
-      where: await this.offeredAt(query.siteId, actingUserId),
+      where: await this.offeredAt(query.companyId, actingUserId),
       orderBy: [{ order: 'asc' }, { label: 'asc' }],
       include: templateInclude,
     });
   }
 
   /**
-   * What a fiche of `siteId` offers: its site's own criteria — every site
-   * has its own (copied from the common model when the site is created).
-   * The common model only serves an effet whose site is unknown.
+   * What a fiche of `companyId` offers: its company's own criteria — every company
+   * has its own (copied from the common model when the company is created).
+   * The common model only serves an effet whose company is unknown.
    */
   offeredWhere(
-    siteId: string | null,
+    companyId: string | null,
   ): Prisma.AnalysisCriterionTemplateWhereInput {
-    return { siteId: siteId ?? null };
+    return { companyId: companyId ?? null };
   }
 
   async findOne(id: string) {
@@ -126,7 +127,7 @@ export class CriterionTemplateService {
     const template = await this.findOne(id);
     await this.assertManages(actingUserId, template);
     if (dto.label !== undefined && dto.label !== template.label) {
-      await this.assertLabelAvailable(dto.label, template.siteId);
+      await this.assertLabelAvailable(dto.label, template.companyId);
     }
     return this.database.analysisCriterionTemplate.update({
       where: { id },
@@ -149,37 +150,33 @@ export class CriterionTemplateService {
   }
 
   /**
-   * The fiches' settings: a site's own when it has some, else the common
+   * The fiches' settings: a company's own when it has some, else the common
    * ones — the defaults until an admin changes them. `inherited` says
-   * whether a site uses the common settings.
+   * whether a company uses the common settings.
    */
-  async getSettingsFor(siteId: string | undefined, userId: string) {
-    if (siteId) await this.assertReadsSite(siteId, userId);
-    return this.getSettings(siteId);
+  async getSettingsFor(companyId: string | undefined, userId: string) {
+    if (companyId) await this.assertReadsCompany(companyId, userId);
+    return this.getSettings(companyId);
   }
 
   async findOneFor(id: string, userId: string) {
     const template = await this.findOne(id);
     if (
-      template.siteId &&
-      !(await this.rbac.worksAtSite(
-        userId,
-        PermissionCode.AnalysisRead,
-        template.siteId,
-      ))
+      template.companyId &&
+      !(await this.access.worksAtCompany(userId, template.companyId))
     ) {
       throw new NotFoundException(`Criterion template ${id} not found`);
     }
     return template;
   }
 
-  async getSettings(siteId?: string | null) {
-    if (siteId) {
-      const own = await this.database.analysisSiteSettings.findUnique({
-        where: { siteId },
+  async getSettings(companyId?: string | null) {
+    if (companyId) {
+      const own = await this.database.analysisCompanySettings.findUnique({
+        where: { companyId },
         select: { allowCustomCriteria: true, updatedAt: true },
       });
-      if (own) return { ...own, siteId, inherited: false };
+      if (own) return { ...own, companyId, inherited: false };
     }
     const common = await this.database.analysisSettings.findUnique({
       where: { id: SETTINGS_ID },
@@ -187,23 +184,23 @@ export class CriterionTemplateService {
     });
     return {
       ...(common ?? { allowCustomCriteria: true, updatedAt: null }),
-      siteId: siteId ?? null,
-      inherited: Boolean(siteId),
+      companyId: companyId ?? null,
+      inherited: Boolean(companyId),
     };
   }
 
   async updateSettings(dto: UpdateAnalysisSettingsDto, actingUserId: string) {
-    const { siteId, ...data } = dto;
-    await this.rbac.assertManagesSite(
+    const { companyId, ...data } = dto;
+    await this.access.assertManages(
       actingUserId,
-      PermissionCode.AdminManageAnalysisCriteria,
-      siteId ?? null,
-      siteId ? 'Le réglage de ce site' : 'Le réglage commun',
+      Permission.SETTINGS_UPDATE,
+      companyId ?? null,
+      companyId ? 'Le réglage de cette société' : 'Le réglage commun',
     );
-    if (siteId) {
-      await this.database.analysisSiteSettings.upsert({
-        where: { siteId },
-        create: { siteId, ...data },
+    if (companyId) {
+      await this.database.analysisCompanySettings.upsert({
+        where: { companyId },
+        create: { companyId, ...data },
         update: data,
       });
     } else {
@@ -217,88 +214,64 @@ export class CriterionTemplateService {
       .tryRecord({
         action: 'analysis-settings.updated',
         entityType: 'analysis-settings',
-        entityId: siteId ?? String(SETTINGS_ID),
+        entityId: companyId ?? String(SETTINGS_ID),
         metadata: { ...dto },
       })
       .catch(() => undefined);
-    return this.getSettings(siteId);
-  }
-
-  // 'ALL' through a global grant, else the sites the caller manages
-  // (holding the permission there, or being their responsible).
-  private async manageScope(actingUserId: string): Promise<SiteScopeList> {
-    const scope = await this.rbac.managedSites(
-      actingUserId,
-      PermissionCode.AdminManageAnalysisCriteria,
-    );
-    // Says why when the permission is held nowhere.
-    await this.rbac.explainOutOfScope(
-      scope === 'ALL' || scope.length ? 'ALL' : scope,
-      null,
-      'Ce critère',
-      PermissionCode.AdminManageAnalysisCriteria,
-    );
-    return scope;
+    return this.getSettings(companyId);
   }
 
   private assertManages(
     actingUserId: string,
-    template: { label: string; siteId: string | null },
+    template: { label: string; companyId: string | null },
   ) {
-    return this.rbac.assertManagesSite(
+    return this.access.assertManages(
       actingUserId,
-      PermissionCode.AdminManageAnalysisCriteria,
-      template.siteId,
-      template.siteId
+      Permission.SETTINGS_UPDATE,
+      template.companyId,
+      template.companyId
         ? `Le critère « ${template.label} »`
         : `Le critère « ${template.label} » (modèle commun)`,
     );
   }
 
   private async offeredAt(
-    siteId: string | undefined,
+    companyId: string | undefined,
     actingUserId: string | undefined,
   ): Promise<Prisma.AnalysisCriterionTemplateWhereInput> {
-    if (siteId) return this.offeredWhere(siteId);
+    if (companyId) return this.offeredWhere(companyId);
     if (!actingUserId) return {};
-    if (
-      await this.rbac.hasGlobalPermission(
-        actingUserId,
-        PermissionCode.AdminManageAnalysisCriteria,
-      )
-    ) {
-      return {};
-    }
     const user = await this.database.user.findUnique({
       where: { id: actingUserId },
-      select: { siteId: true },
+      select: { companyId: true },
     });
-    return this.offeredWhere(user?.siteId ?? null);
+    return this.offeredWhere(user?.companyId ?? null);
   }
 
-  private async assertLabelAvailable(label: string, siteId: string | null) {
+  private async assertLabelAvailable(label: string, companyId: string | null) {
     const taken = await this.database.analysisCriterionTemplate.findFirst({
-      where: { label, siteId },
+      where: { label, companyId },
       select: { id: true },
     });
     if (taken) {
       throw new ConflictException(
-        siteId
-          ? `A criterion "${label}" already exists for this site`
+        companyId
+          ? `A criterion "${label}" already exists for this company`
           : `A common criterion "${label}" already exists`,
       );
     }
   }
 }
 
-// A platform administrator makes common criteria unless they name a site;
-// someone managing a single site makes that site's without naming it.
-function siteForNew(
-  scope: SiteScopeList,
+// A super-administrator makes common criteria unless they name a company;
+// someone managing their company makes that company's without naming it.
+function companyForNew(
+  scope: string[],
+  platformAdmin: boolean,
   requested: string | undefined,
 ): string | null {
   if (requested !== undefined) return requested;
-  if (scope === 'ALL') return null;
+  if (platformAdmin) return null;
   if (scope.length === 1) return scope[0];
-  throw new BadRequestException('siteId is required');
+  throw new BadRequestException('companyId is required');
 }

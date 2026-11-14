@@ -24,14 +24,10 @@ import { ArchiveReasonDto } from '../common/dto/archive-reason.dto';
 import { attachmentUploadOptions } from '../common/utils/attachment-upload';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { CoreAuthGuard } from '../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../auth/rbac/permission.guard';
-import { PermissionCode } from '../auth/rbac/rbac.constants';
-import { RequirePermission } from '../auth/rbac/require-permission.decorator';
-import {
-  SiteScope,
-  fromBody,
-  fromParam,
-} from '../auth/rbac/site-scope.decorator';
+import { PermissionsGuard } from '../auth/access/permissions.guard';
+import { Permission } from '../auth/permissions';
+import { RequirePermissions } from '../auth/access/decorators';
+import { SameCompany, fromBody, fromParam } from '../auth/access/decorators';
 import { AuthUser } from '../auth/types/auth-user.type';
 import { AnalysisSheetService } from './analysis-sheet.service';
 import {
@@ -48,22 +44,22 @@ import {
 
 @ApiTags('analysis-sheets')
 @ApiBearerAuth()
-@UseGuards(CoreAuthGuard, PermissionGuard)
-// Permissions are checked at the site of the targeted resource.
-@SiteScope(fromParam('analysisSheet'))
+@UseGuards(CoreAuthGuard, PermissionsGuard)
+// Permissions are checked at the company of the targeted resource.
+@SameCompany(fromParam('analysisSheet'))
 @Controller('analysis-sheets')
 export class AnalysisController {
   constructor(private readonly sheets: AnalysisSheetService) {}
 
   @Post()
-  @RequirePermission(PermissionCode.AnalysisCreate)
-  @SiteScope(fromBody('courrier', 'courrierId'))
+  @RequirePermissions(Permission.ANALYSIS_CREATE)
+  @SameCompany(fromBody('courrier', 'courrierId'))
   create(@Body() dto: CreateAnalysisSheetDto, @CurrentUser() user: AuthUser) {
     return this.sheets.create(dto, user.sub);
   }
 
   @Get()
-  @RequirePermission(PermissionCode.AnalysisRead)
+  @RequirePermissions(Permission.ANALYSIS_READ)
   findAll(
     @Query() query: FindAnalysisSheetsQueryDto,
     @CurrentUser() user: AuthUser,
@@ -72,20 +68,20 @@ export class AnalysisController {
   }
 
   @Get(':id')
-  @RequirePermission(PermissionCode.AnalysisRead)
+  @RequirePermissions(Permission.ANALYSIS_READ)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.sheets.findOne(id);
   }
 
   /** Récapitulatif: one line per element with its avis (spec §8). */
   @Get(':id/summary')
-  @RequirePermission(PermissionCode.AnalysisRead)
+  @RequirePermissions(Permission.ANALYSIS_READ)
   summary(@Param('id', ParseUUIDPipe) id: string) {
     return this.sheets.summary(id);
   }
 
   @Get(':id/pdf')
-  @RequirePermission(PermissionCode.AnalysisRead)
+  @RequirePermissions(Permission.ANALYSIS_READ)
   @Header('Content-Type', 'application/pdf')
   async pdf(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
     const { pdf, filename } = await this.sheets.pdf(id);
@@ -96,7 +92,7 @@ export class AnalysisController {
   // A draft (BROUILLON) only.
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @RequirePermissions(Permission.ANALYSIS_UPDATE)
   remove(@Param('id', ParseUUIDPipe) id: string) {
     return this.sheets.remove(id);
   }
@@ -104,7 +100,7 @@ export class AnalysisController {
   // BROUILLON or ENREGISTREE -> SIGNEE, locked: the signed PDF, its
   // signatory, its date.
   @Post(':id/sign')
-  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @RequirePermissions(Permission.ANALYSIS_UPDATE)
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
@@ -130,7 +126,7 @@ export class AnalysisController {
   // From an ENREGISTREE or SIGNEE fiche: a new BROUILLON, elements and
   // criteria copied.
   @Post(':id/new-version')
-  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @RequirePermissions(Permission.ANALYSIS_UPDATE)
   newVersion(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: NewAnalysisVersionDto,
@@ -139,7 +135,7 @@ export class AnalysisController {
   }
 
   @Post(':id/archive')
-  @RequirePermission(PermissionCode.AnalysisArchive)
+  @RequirePermissions(Permission.ANALYSIS_ARCHIVE)
   archive(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ArchiveReasonDto,
@@ -148,13 +144,13 @@ export class AnalysisController {
   }
 
   @Post(':id/unarchive')
-  @RequirePermission(PermissionCode.AnalysisArchive)
+  @RequirePermissions(Permission.ANALYSIS_ARCHIVE)
   unarchive(@Param('id', ParseUUIDPipe) id: string) {
     return this.sheets.unarchive(id);
   }
 
   @Patch(':id')
-  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @RequirePermissions(Permission.ANALYSIS_UPDATE)
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateAnalysisSheetDto,
@@ -163,7 +159,7 @@ export class AnalysisController {
   }
 
   @Post(':id/items')
-  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @RequirePermissions(Permission.ANALYSIS_UPDATE)
   addItem(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateAnalysisItemDto,
@@ -172,8 +168,8 @@ export class AnalysisController {
   }
 
   @Patch('items/:itemId')
-  @RequirePermission(PermissionCode.AnalysisUpdate)
-  @SiteScope(fromParam('analysisItem', 'itemId'))
+  @RequirePermissions(Permission.ANALYSIS_UPDATE)
+  @SameCompany(fromParam('analysisItem', 'itemId'))
   updateItem(
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Body() dto: UpdateAnalysisItemDto,
@@ -182,16 +178,16 @@ export class AnalysisController {
   }
 
   @Delete('items/:itemId')
-  @SiteScope(fromParam('analysisItem', 'itemId'))
-  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @SameCompany(fromParam('analysisItem', 'itemId'))
+  @RequirePermissions(Permission.ANALYSIS_UPDATE)
   removeItem(@Param('itemId', ParseUUIDPipe) itemId: string) {
     return this.sheets.removeItem(itemId);
   }
 
   /** Full-replace of one element's criteria grid. */
   @Put('items/:itemId/criteria')
-  @RequirePermission(PermissionCode.AnalysisUpdate)
-  @SiteScope(fromParam('analysisItem', 'itemId'))
+  @RequirePermissions(Permission.ANALYSIS_UPDATE)
+  @SameCompany(fromParam('analysisItem', 'itemId'))
   setCriteria(
     @Param('itemId', ParseUUIDPipe) itemId: string,
     @Body() dto: SetCriteriaDto,
@@ -202,7 +198,7 @@ export class AnalysisController {
   /** The author hands the fiche over for validation. */
   @Post(':id/submit')
   @HttpCode(HttpStatus.OK)
-  @RequirePermission(PermissionCode.AnalysisUpdate)
+  @RequirePermissions(Permission.ANALYSIS_UPDATE)
   submit(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
@@ -212,7 +208,7 @@ export class AnalysisController {
 
   @Post(':id/decide')
   @HttpCode(HttpStatus.OK)
-  @RequirePermission(PermissionCode.AnalysisDecide)
+  @RequirePermissions(Permission.ANALYSIS_APPROVE)
   decide(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DecideAnalysisSheetDto,

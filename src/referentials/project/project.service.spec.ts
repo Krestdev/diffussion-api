@@ -6,11 +6,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ActivityService } from '../../activity/activity.service';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { AccessService } from '../../auth/access/access.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { ProjectService } from './project.service';
-import { withScopeChecks } from '../../auth/rbac/rbac.testing-spec';
+import { accessMock, AccessMock } from '../access-mock.testing-spec';
 
 describe('ProjectService', () => {
   let service: ProjectService;
@@ -26,13 +26,13 @@ describe('ProjectService', () => {
     instruction: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
-  let rbac: { hasGlobalPermission: jest.Mock; managedSites: jest.Mock };
+  let access: AccessMock;
 
   const project = (over: Record<string, unknown> = {}) => ({
     id: 'p-1',
     status: 'ACTIVE',
     responsibleId: 'u-resp',
-    siteId: 's-1',
+    companyId: 's-1',
     maitreOuvrageId: null,
     startDate: null,
     endDate: null,
@@ -65,7 +65,7 @@ describe('ProjectService', () => {
       },
       user: {
         findMany: jest.fn().mockResolvedValue([]),
-        findUnique: jest.fn().mockResolvedValue({ siteId: 's-1' }),
+        findUnique: jest.fn().mockResolvedValue({ companyId: 's-1' }),
       },
       contract: {
         count: jest.fn().mockResolvedValue(0),
@@ -98,16 +98,14 @@ describe('ProjectService', () => {
           : Promise.all(work as unknown[]),
       ),
     };
-    rbac = {
-      hasGlobalPermission: jest.fn().mockResolvedValue(false),
-      managedSites: jest.fn().mockResolvedValue('ALL'),
-    };
+    // Every permission, in their company s-1.
+    access = accessMock();
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProjectService,
         { provide: DatabaseService, useValue: database },
-        { provide: RbacService, useValue: withScopeChecks(rbac) },
+        { provide: AccessService, useValue: access },
         {
           provide: NotificationsService,
           useValue: { notifyAccessChanged: jest.fn() },
@@ -134,7 +132,7 @@ describe('ProjectService', () => {
           id: 'p-1',
           AND: [
             {
-              siteId: 's-1',
+              companyId: 's-1',
               OR: [
                 { accesses: { none: {} } },
                 { responsibleId: 'u-1' },
@@ -146,19 +144,23 @@ describe('ProjectService', () => {
       });
     });
 
-    it('does not filter for a platform administrator', async () => {
-      rbac.hasGlobalPermission.mockResolvedValue(true);
+    it('shows nothing to someone without a company', async () => {
+      access.state.companyId = null;
       database.project.count.mockResolvedValue(0);
 
       await expect(service.findOneFor('p-1', 'admin')).rejects.toBeInstanceOf(
         NotFoundException,
       );
       expect(database.project.count).toHaveBeenCalledWith({
-        where: { id: 'p-1', AND: [{}] },
+        where: {
+          id: 'p-1',
+          AND: [expect.objectContaining({ companyId: { in: [] } })],
+        },
       });
     });
 
     it('only the responsible or an administrator changes the list', async () => {
+      access.state.permissions = ['project.read'];
       await expect(
         service.setAccess('p-1', ['u-2'], 'u-1'),
       ).rejects.toBeInstanceOf(ForbiddenException);
@@ -350,7 +352,12 @@ describe('ProjectService', () => {
   describe("maître d'ouvrage by name", () => {
     it('reuses the correspondent with that name', async () => {
       database.correspondent.findMany.mockResolvedValue([
-        { id: 'c-1', name: 'Port Autonome', status: 'ACTIVE', siteId: 's-1' },
+        {
+          id: 'c-1',
+          name: 'Port Autonome',
+          status: 'ACTIVE',
+          companyId: 's-1',
+        },
       ]);
 
       await service.update(
@@ -363,7 +370,7 @@ describe('ProjectService', () => {
       expect(updatedData().maitreOuvrageId).toBe('c-1');
     });
 
-    it("creates it on the project's site when there is none", async () => {
+    it("creates it on the project's company when there is none", async () => {
       await service.update(
         'p-1',
         { maitreOuvrageName: 'Mairie de Kribi' },
@@ -374,7 +381,7 @@ describe('ProjectService', () => {
         expect.objectContaining({
           data: expect.objectContaining({
             name: 'Mairie de Kribi',
-            siteId: 's-1',
+            companyId: 's-1',
           }),
         }),
       );

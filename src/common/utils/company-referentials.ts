@@ -3,59 +3,49 @@ import {
   ProjectContentType,
   ProjectStatus,
 } from '../../../generated/prisma/client';
-import { PermissionCode } from '../../auth/rbac/rbac.constants';
-import { RbacService } from '../../auth/rbac/rbac.service';
+import { AccessService } from '../../auth/access/access.service';
 import { DatabaseService } from '../../database/database.service';
 
 /**
- * Canaux and correspondents belong to one site: only that site's effets use
- * them. A platform administrator (ADMIN_MANAGE_REFERENTIALS, held globally)
- * sees and manages every site's; anyone else sees their own site's only.
+ * Canaux and correspondents belong to one company: only that company's effets use
+ * them. Everyone sees their own company's only (permissions 2.0.0: a person acts
+ * in their own company); `requestedCompanyId` naming another gives nothing.
  */
-export async function siteReferentialsWhere(
-  rbac: RbacService,
-  db: DatabaseService,
+export async function companyReferentialsWhere(
+  access: AccessService,
+  _db: DatabaseService,
   userId: string,
-  requestedSiteId?: string,
-): Promise<{ siteId?: string | { in: string[] } }> {
-  if (
-    await rbac.hasGlobalPermission(
-      userId,
-      PermissionCode.AdminManageReferentials,
-    )
-  ) {
-    return requestedSiteId ? { siteId: requestedSiteId } : {};
+  requestedCompanyId?: string,
+): Promise<{ companyId?: string | { in: string[] } }> {
+  const own = await access.companyOf(userId);
+  if (!own || (requestedCompanyId && requestedCompanyId !== own)) {
+    return { companyId: { in: [] } };
   }
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    select: { siteId: true },
-  });
-  const own = user?.siteId;
-  if (!own || (requestedSiteId && requestedSiteId !== own)) {
-    return { siteId: { in: [] } };
-  }
-  return { siteId: own };
+  return { companyId: own };
 }
 
-// The site a new canal or correspondent goes to must exist.
-export async function assertSiteExists(db: DatabaseService, siteId: string) {
-  const site = await db.site.findUnique({
-    where: { id: siteId },
+// The company a new canal or correspondent goes to must exist.
+export async function assertCompanyExists(
+  db: DatabaseService,
+  companyId: string,
+) {
+  const company = await db.company.findUnique({
+    where: { id: companyId },
     select: { id: true },
   });
-  if (!site) throw new NotFoundException(`Site ${siteId} not found`);
+  if (!company) throw new NotFoundException(`Company ${companyId} not found`);
 }
 
-// An effet only uses its own site's canal. `siteId` null: an effet whose
-// site is unknown (registered by a platform user, no dossier) — not checked.
-export async function assertCanalOfSite(
+// An effet only uses its own company's canal. `companyId` null: an effet whose
+// company is unknown (registered by a platform user, no dossier) — not checked.
+export async function assertCanalOfCompany(
   db: DatabaseService,
   canalId: string,
-  siteId: string | null,
+  companyId: string | null,
 ) {
   const canal = await db.canal.findUnique({
     where: { id: canalId },
-    select: { name: true, siteId: true, active: true },
+    select: { name: true, companyId: true, active: true },
   });
   if (!canal) throw new BadRequestException(`Canal ${canalId} not found`);
   if (!canal.active) {
@@ -63,24 +53,24 @@ export async function assertCanalOfSite(
       `The canal "${canal.name}" is inactive and can no longer be chosen`,
     );
   }
-  if (siteId && canal.siteId !== siteId) {
+  if (companyId && canal.companyId !== companyId) {
     throw new BadRequestException(
-      `The canal "${canal.name}" belongs to another site`,
+      `The canal "${canal.name}" belongs to another company`,
     );
   }
   return canal;
 }
 
-// A project belongs to one site: its dossiers and effets are on that site.
-// `siteId` null: an effet whose site is unknown — not checked.
-export async function assertProjectOfSite(
+// A project belongs to one company: its dossiers and effets are on that company.
+// `companyId` null: an effet whose company is unknown — not checked.
+export async function assertProjectOfCompany(
   db: DatabaseService,
   projectId: string,
-  siteId: string | null,
+  companyId: string | null,
 ) {
   const project = await db.project.findUnique({
     where: { id: projectId },
-    select: { name: true, siteId: true, status: true },
+    select: { name: true, companyId: true, status: true },
   });
   if (!project) throw new BadRequestException(`Project ${projectId} not found`);
   if (
@@ -91,9 +81,9 @@ export async function assertProjectOfSite(
       `The project "${project.name}" is closed — nothing new can be added to it`,
     );
   }
-  if (siteId && project.siteId !== siteId) {
+  if (companyId && project.companyId !== companyId) {
     throw new BadRequestException(
-      `The project "${project.name}" belongs to another site`,
+      `The project "${project.name}" belongs to another company`,
     );
   }
   return project;
@@ -115,24 +105,12 @@ export async function assertProjectTakesDossiers(
   }
 }
 
-// The caller's own site, for the visibility of per-site data: null for a
-// platform administrator (sees every site) — see siteReferentialsWhere.
-export async function ownSiteFilter(
-  rbac: RbacService,
-  db: DatabaseService,
+// The caller's own company, for the visibility of per-company data (never null
+// since permissions 2.0.0: nobody sees every company).
+export async function ownCompanyFilter(
+  access: AccessService,
+  _db: DatabaseService,
   userId: string,
-): Promise<{ siteId: string | { in: string[] } } | null> {
-  if (
-    await rbac.hasGlobalPermission(
-      userId,
-      PermissionCode.AdminManageReferentials,
-    )
-  ) {
-    return null;
-  }
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    select: { siteId: true },
-  });
-  return { siteId: user?.siteId ?? { in: [] } };
+): Promise<{ companyId: string | { in: string[] } } | null> {
+  return { companyId: (await access.companyOf(userId)) ?? { in: [] } };
 }

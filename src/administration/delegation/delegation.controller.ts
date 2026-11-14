@@ -25,7 +25,7 @@ import { DelegationService } from './delegation.service';
 @ApiBearerAuth()
 // A delegation hands one user's responsibilities to another, so managing
 // them is an administration act over people — same gate as user management.
-// Scope (platform administrator, or the site's responsible) is enforced in
+// Scope (platform administrator, or the company's responsible) is enforced in
 // DelegationService.
 @UseGuards(CoreAuthGuard)
 @Controller('delegations')

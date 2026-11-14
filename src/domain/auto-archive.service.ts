@@ -36,10 +36,10 @@ const ARCHIVABLE: {
 ];
 
 /**
- * PA·8 "archivage automatique après clôture": each site's effets closed
+ * PA·8 "archivage automatique après clôture": each company's effets closed
  * (an entrant), discharged (a sortant) or cancelled more than
  * autoArchiveAfterMonths months ago are archived — never deleted, and
- * restorable like any archived effet. Sites set to null: never.
+ * restorable like any archived effet. Companies set to null: never.
  */
 @Injectable()
 export class AutoArchiveService
@@ -65,20 +65,25 @@ export class AutoArchiveService
 
   async sweep(now = new Date()) {
     try {
-      const sites = await this.database.site.findMany({ select: { id: true } });
-      // Every site, and the effets of no site (the common settings).
-      for (const siteId of [...sites.map((site) => site.id), null]) {
-        const { autoArchiveAfterMonths } = await this.settings.get(siteId);
+      const companies = await this.database.company.findMany({
+        select: { id: true },
+      });
+      // Every company, and the effets of no company (the common settings).
+      for (const companyId of [
+        ...companies.map((company) => company.id),
+        null,
+      ]) {
+        const { autoArchiveAfterMonths } = await this.settings.get(companyId);
         if (!autoArchiveAfterMonths) continue;
-        const archived = await this.archiveSite(
-          siteId,
+        const archived = await this.archiveCompany(
+          companyId,
           monthsBefore(now, autoArchiveAfterMonths),
           autoArchiveAfterMonths,
           now,
         );
         if (archived) {
           this.logger.log(
-            `${archived} effet(s) archived automatically (site ${siteId ?? '—'})`,
+            `${archived} effet(s) archived automatically (company ${companyId ?? '—'})`,
           );
         }
       }
@@ -87,30 +92,30 @@ export class AutoArchiveService
     }
   }
 
-  // Returns how many effets of `siteId` were archived.
-  async archiveSite(
-    siteId: string | null,
+  // Returns how many effets of `companyId` were archived.
+  async archiveCompany(
+    companyId: string | null,
     cutoff: Date,
     months: number,
     now: Date,
   ) {
-    const ofSite: Prisma.CourrierWhereInput = siteId
+    const ofCompany: Prisma.CourrierWhereInput = companyId
       ? {
           OR: [
-            { dossier: { siteId } },
-            { dossierId: null, createdBy: { siteId } },
+            { dossier: { companyId } },
+            { dossierId: null, createdBy: { companyId } },
           ],
         }
       : {
           dossierId: null,
-          OR: [{ createdById: null }, { createdBy: { siteId: null } }],
+          OR: [{ createdById: null }, { createdBy: { companyId: null } }],
         };
     const reason = `Archivage automatique : ${months} mois après clôture`;
     let total = 0;
     for (const rule of ARCHIVABLE) {
       const due = await this.database.courrier.findMany({
         where: {
-          ...ofSite,
+          ...ofCompany,
           status: rule.status,
           ...(rule.direction ? { direction: rule.direction } : {}),
           [rule.since]: { lt: cutoff },
@@ -139,7 +144,7 @@ export class AutoArchiveService
             action: 'COURRIER_ARCHIVE_AUTO',
             entityType: 'Courrier',
             entityId: id,
-            siteId,
+            companyId,
             message: reason,
             metadata: { from: rule.status, months },
           })),

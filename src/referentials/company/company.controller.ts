@@ -10,25 +10,28 @@ import {
 } from '@nestjs/common';
 import { ApiCookieAuth, ApiTags } from '@nestjs/swagger';
 import { CoreAuthGuard } from '../../auth/guards/core-auth.guard';
-import { PermissionGuard } from '../../auth/rbac/permission.guard';
+import { PermissionsGuard } from '../../auth/access/permissions.guard';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
 import { AuthUser } from '../../auth/types/auth-user.type';
-import { UpdateSiteDto } from './dto/update-site.dto';
-import { FindSitesQueryDto } from './dto/find-sites.query.dto';
-import { SiteService } from './site.service';
+import { UpdateCompanyDto } from './dto/update-company.dto';
+import { FindCompaniesQueryDto } from './dto/find-companies.query.dto';
+import { CompanyService } from './company.service';
 
-@ApiTags('sites')
+@ApiTags('companies')
 @ApiCookieAuth('creapp_access')
-@UseGuards(CoreAuthGuard, PermissionGuard)
-// Sites are the core's companies: created, named, (de)activated and removed
+@UseGuards(CoreAuthGuard, PermissionsGuard)
+// Companies are the core's companies: created, named, (de)activated and removed
 // there (DirectorySyncService). Diffusion edits their city and responsible.
-@Controller('sites')
-export class SiteController {
-  constructor(private readonly siteService: SiteService) {}
+@Controller('companies')
+export class CompanyController {
+  constructor(private readonly companyService: CompanyService) {}
 
   @Get()
-  findAll(@Query() query: FindSitesQueryDto, @CurrentUser() user: AuthUser) {
-    return this.siteService.findAll(query, user.sub);
+  findAll(
+    @Query() query: FindCompaniesQueryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.companyService.findAll(query, user.sub);
   }
 
   @Get(':uuid')
@@ -36,17 +39,16 @@ export class SiteController {
     @Param('uuid', ParseUUIDPipe) uuid: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.siteService.findVisible(uuid, user.sub);
+    return this.companyService.findVisible(uuid, user.sub);
   }
 
-  // A platform administrator, or the site's responsible for their own site
-  // — checked in SiteService.
+  // company.update, for the person's own company — checked in CompanyService.
   @Patch(':uuid')
   update(
     @Param('uuid', ParseUUIDPipe) uuid: string,
-    @Body() dto: UpdateSiteDto,
+    @Body() dto: UpdateCompanyDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.siteService.update(uuid, dto, user.sub);
+    return this.companyService.update(uuid, dto, user.sub);
   }
 }

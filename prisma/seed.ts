@@ -3,122 +3,77 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
 import { PrismaClient } from '../generated/prisma/client';
 import {
-  PERMISSION_LABELS,
-  PermissionCode,
-} from '../src/auth/rbac/rbac.constants';
+  createDefaultRoles,
+  giveAdminRole,
+  syncPermissionCatalog,
+} from '../src/auth/default-roles';
+import { ALL_PERMISSIONS } from '../src/auth/permissions';
 
 // People come from the CREAPP core (they sign in there): the seed makes no
-// account. A company administrator gets the site's Admin role at their first
-// directory sync; SEED_ADMIN_EMAIL (optional) names a person already synced
-// from the core who also gets every role and restricted dossier, for tests.
-const ADMIN_ROLE_NAME = 'Administrateur';
-const DEFAULT_SITE_NAME = 'Cristal';
+// account. A company administrator gets the company's ADMIN role at their
+// first directory sync; SEED_ADMIN_EMAIL (optional) names a person already
+// synced from the core who also gets every role of their company, every
+// restricted dossier and the SUPER_ADMIN profile, for tests.
+const DEFAULT_COMPANY_NAME = 'Cristal';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
 
+// The permission table mirrors the catalogue (src/auth/permissions.ts).
 async function seedPermissions() {
-  const codes = Object.values(PermissionCode);
-  await Promise.all(
-    codes.map((code) =>
-      prisma.permission.upsert({
-        where: { code },
-        update: {},
-        create: { code, description: PERMISSION_LABELS[code] },
-      }),
-    ),
-  );
-  // Label permissions created before labels existed; a reworded label is
-  // left alone.
-  await Promise.all(
-    codes.map((code) =>
-      prisma.permission.updateMany({
-        where: { code, description: null },
-        data: { description: PERMISSION_LABELS[code] },
-      }),
-    ),
-  );
-  console.log(`✓ ${codes.length} permissions ensured`);
-  return codes;
+  await prisma.$transaction((tx) => syncPermissionCatalog(tx));
+  console.log(`✓ ${ALL_PERMISSIONS.length} permissions ensured`);
 }
 
-async function seedAdminRole(allPermissionCodes: string[]) {
-  const permissions = await prisma.permission.findMany({
-    where: { code: { in: allPermissionCodes } },
-  });
-
-  // A global role (no site). Looked up rather than upserted: a nullable
-  // column can't be part of a Prisma unique-key lookup.
-  const role =
-    (await prisma.role.findFirst({
-      where: { name: ADMIN_ROLE_NAME, siteId: null },
-    })) ??
-    (await prisma.role.create({
-      data: {
-        code: 'RO-ADMIN',
-        name: ADMIN_ROLE_NAME,
-        description: 'Accès complet — tous les droits, pour les tests',
-      },
-    }));
-
-  // Replace-set: make sure the admin role always ends up with every
-  // permission that currently exists, even if it was created earlier with
-  // a smaller set.
-  await prisma.rolePermission.deleteMany({ where: { roleId: role.id } });
-  await prisma.rolePermission.createMany({
-    data: permissions.map((permission) => ({
-      roleId: role.id,
-      permissionId: permission.id,
-    })),
-  });
-
-  console.log(
-    `✓ Role "${ADMIN_ROLE_NAME}" ensured with ${permissions.length} permissions`,
-  );
-  return role;
-}
-
-async function seedSite() {
-  const existing = await prisma.site.findFirst({
-    where: { name: DEFAULT_SITE_NAME },
+async function seedCompany() {
+  const existing = await prisma.company.findFirst({
+    where: { name: DEFAULT_COMPANY_NAME },
   });
   if (existing) return existing;
 
-  const site = await prisma.site.create({
-    data: { code: 'ST-001', name: DEFAULT_SITE_NAME, city: 'Douala' },
+  const company = await prisma.company.create({
+    data: { code: 'CO-001', name: DEFAULT_COMPANY_NAME, city: 'Douala' },
   });
-  console.log(`✓ Site "${DEFAULT_SITE_NAME}" created`);
-  return site;
+  await prisma.$transaction((tx) => createDefaultRoles(tx, company.id));
+  console.log(`✓ Company "${DEFAULT_COMPANY_NAME}" created`);
+  return company;
 }
 
-// A person already synced from the core, made platform administrator
-// (global grant of the admin role) for tests. Null when SEED_ADMIN_EMAIL is
-// unset or that person hasn't signed in to Diffusion / been synced yet.
-async function seedAdminUser(roleId: string) {
+// A person already synced from the core, given their company's ADMIN role,
+// every other role of their company and the SUPER_ADMIN profile (what every
+// company shares) for tests. Null when SEED_ADMIN_EMAIL is unset or that
+// person hasn't signed in to Diffusion / been synced yet.
+async function seedAdminUser() {
   const email = process.env.SEED_ADMIN_EMAIL?.trim().toLowerCase();
   if (!email) return null;
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) {
+  if (!user?.companyId) {
     console.log(`! ${email} is not synced from the core yet: no admin granted`);
     return null;
   }
-  // Global grant (siteId null). skipDuplicates relies on the
-  // NULLS NOT DISTINCT unique index to keep re-runs idempotent.
-  await prisma.userRole.createMany({
-    data: [{ userId: user.id, roleId, siteId: null }],
-    skipDuplicates: true,
+  const companyId = user.companyId;
+  await prisma.$transaction(async (tx) => {
+    await createDefaultRoles(tx, companyId);
+    await giveAdminRole(tx, companyId, [user.id]);
+    await tx.user.update({
+      where: { id: user.id },
+      data: { accessProfile: 'SUPER_ADMIN' },
+    });
   });
-  console.log(`✓ ${email} holds "${ADMIN_ROLE_NAME}" globally`);
+  console.log(`✓ ${email} holds ADMIN and the SUPER_ADMIN profile`);
   return user;
 }
 
 /// Test-only: RESTRICTED dossiers need a DossierAccess row — holding every
-/// permission doesn't cover them. Give the admin every role (globally) and
-/// every restricted dossier. Re-run the seed after creating new
+/// permission doesn't cover them. Give the admin every role of their company
+/// and every restricted dossier. Re-run the seed after creating new
 /// roles/dossiers to catch up.
-async function grantAdminFullAccess(userId: string) {
+async function grantAdminFullAccess(userId: string, companyId: string) {
   const [roles, restrictedDossiers] = await Promise.all([
-    prisma.role.findMany({ select: { id: true } }),
+    prisma.role.findMany({
+      where: { companyId, archivedAt: null },
+      select: { id: true },
+    }),
     prisma.dossier.findMany({
       where: { confidentiality: 'RESTRICTED' },
       select: { id: true },
@@ -126,7 +81,7 @@ async function grantAdminFullAccess(userId: string) {
   ]);
 
   await prisma.userRole.createMany({
-    data: roles.map((role) => ({ userId, roleId: role.id, siteId: null })),
+    data: roles.map((role) => ({ userId, roleId: role.id })),
     skipDuplicates: true,
   });
   for (const dossier of restrictedDossiers) {
@@ -197,7 +152,7 @@ const EFFET_TYPES = [
 async function seedEffetTypes() {
   for (const type of EFFET_TYPES) {
     const existing = await prisma.effetType.findFirst({
-      where: { name: type.name, siteId: null },
+      where: { name: type.name, companyId: null },
       select: { id: true },
     });
     if (!existing) await prisma.effetType.create({ data: type });
@@ -205,8 +160,8 @@ async function seedEffetTypes() {
   console.log(`✓ ${EFFET_TYPES.length} effet types ensured`);
 }
 
-// Canaux belong to a site: the default ones go to the default site.
-async function seedReferentials(siteId: string) {
+// Canaux belong to a company: the default ones go to the default company.
+async function seedReferentials(companyId: string) {
   const correspondentTypes = [
     'Administration publique',
     'Entreprise',
@@ -228,18 +183,18 @@ async function seedReferentials(siteId: string) {
   await Promise.all(
     correspondentTypes.map((name) =>
       prisma.correspondentType.upsert({
-        where: { siteId_name: { siteId, name } },
+        where: { companyId_name: { companyId, name } },
         update: {},
-        create: { name, siteId },
+        create: { name, companyId },
       }),
     ),
   );
   await Promise.all(
     canaux.map((name) =>
       prisma.canal.upsert({
-        where: { siteId_name: { siteId, name } },
+        where: { companyId_name: { companyId, name } },
         update: {},
-        create: { name, siteId },
+        create: { name, companyId },
       }),
     ),
   );
@@ -281,9 +236,9 @@ const DEFAULT_ANALYSIS_CRITERIA = [
 async function seedAnalysisCriteria() {
   await Promise.all(
     DEFAULT_ANALYSIS_CRITERIA.map((label, index) =>
-      // Common criteria (no site): a nullable key can't be upserted on.
+      // Common criteria (no company): a nullable key can't be upserted on.
       prisma.analysisCriterionTemplate
-        .findFirst({ where: { label, siteId: null }, select: { id: true } })
+        .findFirst({ where: { label, companyId: null }, select: { id: true } })
         .then((found) =>
           found
             ? prisma.analysisCriterionTemplate.update({
@@ -302,14 +257,13 @@ async function seedAnalysisCriteria() {
 }
 
 async function main() {
-  const permissionCodes = await seedPermissions();
-  const role = await seedAdminRole(permissionCodes);
-  const site = await seedSite();
-  const admin = await seedAdminUser(role.id);
-  await seedReferentials(site.id);
+  await seedPermissions();
+  const company = await seedCompany();
+  const admin = await seedAdminUser();
+  await seedReferentials(company.id);
   await seedEffetTypes();
   await seedAnalysisCriteria();
-  if (admin) await grantAdminFullAccess(admin.id);
+  if (admin?.companyId) await grantAdminFullAccess(admin.id, admin.companyId);
 
   console.log('\nSeed complete. Sign in through the CREAPP core.');
 }

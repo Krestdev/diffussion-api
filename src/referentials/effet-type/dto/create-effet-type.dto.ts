@@ -62,9 +62,9 @@ export class CreateEffetTypeDto {
 
   @ApiPropertyOptional({
     description:
-      "The site this type belongs to. A site's responsible may omit it (their own site is used) and can't pick another; omitted by a platform administrator: a global type, usable on every site.",
+      "The company this type belongs to: the person's own when omitted (another is refused); omitted by a Diffusion super-administrator: a global type, usable on every company.",
   })
   @IsOptional()
   @IsUUID('4')
-  siteId?: string;
+  companyId?: string;
 }

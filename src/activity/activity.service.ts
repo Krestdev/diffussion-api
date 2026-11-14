@@ -8,7 +8,7 @@ import { ClsService } from 'nestjs-cls';
 import { Prisma } from '../../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
 import { AppClsStore } from '../cls.store';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
 import { StorageService } from '../storage/storage.service';
 import { categoriesWhere, categoryOf } from './audit-categories';
 import { FindActivityLogsQueryDto } from './dto/find-activity-logs.query.dto';
@@ -24,8 +24,8 @@ export interface ActivityPayload {
   stack?: string;
   changes?: Record<string, [unknown, unknown]>;
   metadata?: Record<string, unknown>;
-  /** The entry's site, when the caller knows it better than its object. */
-  siteId?: string | null;
+  /** The entry's company, when the caller knows it better than its object. */
+  companyId?: string | null;
 }
 
 // Column limits from schema.prisma — a value longer than its column used to
@@ -47,7 +47,7 @@ const USER_ACTIONS: Prisma.ActivityLogWhereInput = {
 // The most rows an export returns.
 const MAX_EXPORT = 10_000;
 
-// Objects common to every site: their entries have no site (platform audit
+// Objects common to every company: their entries have no company (platform audit
 // only) — never their author's.
 const PLATFORM_OBJECTS = new Set([
   'role',
@@ -71,7 +71,7 @@ type LogRow = {
   action: string;
   entityType: string | null;
   entityId: string | null;
-  siteId?: string | null;
+  companyId?: string | null;
 };
 
 type Reference = { ref: string | null; context: string | null };
@@ -83,7 +83,7 @@ export class ActivityService {
   constructor(
     private readonly db: DatabaseService,
     private readonly cls: ClsService<AppClsStore>,
-    private readonly rbac: RbacService,
+    private readonly access: AccessService,
     private readonly storage: StorageService,
   ) {}
 
@@ -101,10 +101,10 @@ export class ActivityService {
     if (payload.metadata) Object.assign(meta, payload.metadata);
 
     const userId = this.cls.get('userId') ?? null;
-    const siteId =
-      payload.siteId !== undefined
-        ? payload.siteId
-        : await this.siteOf(payload.entityType, payload.entityId, userId);
+    const companyId =
+      payload.companyId !== undefined
+        ? payload.companyId
+        : await this.companyOf(payload.entityType, payload.entityId, userId);
     const log = await this.db.activityLog.create({
       data: {
         parentLogId: this.cls.get('parentLogId') ?? null,
@@ -125,7 +125,7 @@ export class ActivityService {
         metadata: Object.keys(meta).length
           ? (meta as Prisma.InputJsonValue)
           : undefined,
-        siteId,
+        companyId,
         ip: this.cls.get('ip') ?? null,
       },
     });
@@ -177,12 +177,12 @@ export class ActivityService {
   /**
    * The Journal d'audit (AU·1): root entries of user actions only — the
    * request-scoped children are traceable detail, and system entries
-   * (errors, work no user triggered) are never returned. `siteIds`: the
-   * sites the caller may audit ('ALL' for a platform administrator): an
-   * entry belongs to its object's site, else its author's.
+   * (errors, work no user triggered) are never returned. `companyIds`: the
+   * companies the caller may audit (their own, with audit.read): an
+   * entry belongs to its object's company, else its author's.
    */
-  async findAll(query: FindActivityLogsQueryDto, siteIds: 'ALL' | string[]) {
-    const where = await this.journalWhere(query, siteIds);
+  async findAll(query: FindActivityLogsQueryDto, companyIds: string[]) {
+    const where = await this.journalWhere(query, companyIds);
     const skip = query.skip ?? 0;
     const take = query.take ?? 20;
     const [data, total] = await this.db.$transaction([
@@ -198,9 +198,9 @@ export class ActivityService {
   }
 
   /** The same entries as findAll, every page, as CSV (`;`-separated). */
-  async exportCsv(query: FindActivityLogsQueryDto, siteIds: 'ALL' | string[]) {
+  async exportCsv(query: FindActivityLogsQueryDto, companyIds: string[]) {
     const rows = await this.db.activityLog.findMany({
-      where: await this.journalWhere(query, siteIds),
+      where: await this.journalWhere(query, companyIds),
       orderBy: { createdAt: 'desc' },
       take: MAX_EXPORT,
     });
@@ -213,7 +213,7 @@ export class ActivityService {
       'Objet',
       'Référence',
       'Contexte',
-      'Site',
+      'Company',
       'IP',
       'Message',
     ];
@@ -226,7 +226,7 @@ export class ActivityService {
         log.entityType,
         log.entityReference,
         log.contextReference,
-        log.site?.name,
+        log.company?.name,
         log.ip,
         log.message,
       ]
@@ -237,13 +237,13 @@ export class ActivityService {
     return '﻿' + [header.join(';'), ...lines].join('\r\n');
   }
 
-  /** The exported batches (PA·8) of the sites the caller may audit. */
-  async archives(siteIds: 'ALL' | string[], siteId?: string) {
+  /** The exported batches (PA·8) of the companies the caller may audit. */
+  async archives(companyIds: string[], companyId?: string) {
     return this.db.auditArchive.findMany({
       where: {
         AND: [
-          siteIds === 'ALL' ? {} : { siteId: { in: siteIds } },
-          siteId ? { siteId } : {},
+          { companyId: { in: companyIds } },
+          companyId ? { companyId } : {},
         ],
       },
       orderBy: { createdAt: 'desc' },
@@ -251,14 +251,11 @@ export class ActivityService {
   }
 
   /** One exported batch's CSV file. */
-  async archiveFile(id: string, siteIds: 'ALL' | string[]) {
+  async archiveFile(id: string, companyIds: string[]) {
     const archive = await this.db.auditArchive.findUnique({ where: { id } });
     if (!archive) throw new NotFoundException(`Archive ${id} not found`);
-    if (
-      siteIds !== 'ALL' &&
-      !(archive.siteId && siteIds.includes(archive.siteId))
-    ) {
-      throw new ForbiddenException('This belongs to another site');
+    if (!(archive.companyId && companyIds.includes(archive.companyId))) {
+      throw new ForbiddenException('This belongs to another company');
     }
     const file = await this.storage.download(archive.storageKey);
     const day = (date: Date) => date.toISOString().slice(0, 10);
@@ -334,7 +331,7 @@ export class ActivityService {
           entityId: true,
           message: true,
           metadata: true,
-          siteId: true,
+          companyId: true,
         },
       }),
       this.db.activityLog.count({ where }),
@@ -342,9 +339,9 @@ export class ActivityService {
     return { data: await this.withNames(data), total, skip, take };
   }
 
-  async findOne(id: string, siteIds: 'ALL' | string[]) {
+  async findOne(id: string, companyIds: string[]) {
     const log = await this.db.activityLog.findFirst({
-      where: { id, AND: [USER_ACTIONS, sitesWhere(siteIds)] },
+      where: { id, AND: [USER_ACTIONS, companiesWhere(companyIds)] },
       include: {
         children: { where: USER_ACTIONS, orderBy: { createdAt: 'asc' } },
       },
@@ -353,7 +350,8 @@ export class ActivityService {
       const exists = await this.db.activityLog.count({
         where: { id, ...USER_ACTIONS },
       });
-      if (exists) throw new ForbiddenException('This belongs to another site');
+      if (exists)
+        throw new ForbiddenException('This belongs to another company');
       throw new NotFoundException(`Activity log ${id} not found`);
     }
     const [named, ...children] = await this.withNames([log, ...log.children]);
@@ -366,17 +364,17 @@ export class ActivityService {
    * (`entityReference`: M-…, T-…, D-…, CT-…, FA-…), its context
    * (`contextReference`: the contract — its own reference, else its number —
    * or the dossier of the effet / instruction / fiche), its `category` and
-   * its `site`. One query per kind of object for the whole page. Null when
+   * its `company`. One query per kind of object for the whole page. Null when
    * unknown or deleted since.
    */
   async withNames<T extends LogRow>(logs: T[]) {
     const userIds = [
       ...new Set(logs.map((log) => log.userId).filter((id) => id !== null)),
     ];
-    const siteIds = [
+    const companyIds = [
       ...new Set(
         logs
-          .map((log) => log.siteId)
+          .map((log) => log.companyId)
           .filter((id): id is string => typeof id === 'string'),
       ),
     ];
@@ -388,16 +386,16 @@ export class ActivityService {
       byType.set(log.entityType, ids);
     }
 
-    const [users, sites, references] = await Promise.all([
+    const [users, companies, references] = await Promise.all([
       userIds.length
         ? this.db.user.findMany({
             where: { id: { in: userIds } },
             select: { id: true, name: true },
           })
         : Promise.resolve([] as { id: string; name: string }[]),
-      siteIds.length
-        ? this.db.site.findMany({
-            where: { id: { in: siteIds } },
+      companyIds.length
+        ? this.db.company.findMany({
+            where: { id: { in: companyIds } },
             select: { id: true, code: true, name: true },
           })
         : Promise.resolve([] as { id: string; code: string; name: string }[]),
@@ -411,7 +409,9 @@ export class ActivityService {
       ),
     ]);
     const names = new Map(users.map((user) => [user.id, user.name]));
-    const siteById = new Map(sites.map((site) => [site.id, site]));
+    const companyById = new Map(
+      companies.map((company) => [company.id, company]),
+    );
     const refs = new Map(references);
 
     return logs.map((log) => {
@@ -426,7 +426,7 @@ export class ActivityService {
         entityReference: reference?.ref ?? null,
         contextReference: reference?.context ?? null,
         category: categoryOf(log),
-        site: (log.siteId && siteById.get(log.siteId)) || null,
+        company: (log.companyId && companyById.get(log.companyId)) || null,
       };
     });
   }
@@ -435,7 +435,7 @@ export class ActivityService {
 
   private async journalWhere(
     query: FindActivityLogsQueryDto,
-    siteIds: 'ALL' | string[],
+    companyIds: string[],
   ): Promise<Prisma.ActivityLogWhereInput> {
     const to = query.to ? endOf(query.to) : undefined;
     // A correspondent's history includes its effets' events.
@@ -451,7 +451,7 @@ export class ActivityService {
     return {
       AND: [
         USER_ACTIONS,
-        sitesWhere(siteIds),
+        companiesWhere(companyIds),
         correspondentId
           ? {
               OR: [
@@ -463,7 +463,7 @@ export class ActivityService {
               ],
             }
           : {},
-        query.siteId ? { siteId: query.siteId } : {},
+        query.companyId ? { companyId: query.companyId } : {},
         query.category?.length ? categoriesWhere(query.category) : {},
         query.action?.length ? { action: { in: query.action } } : {},
         query.search
@@ -490,117 +490,117 @@ export class ActivityService {
     };
   }
 
-  // ------------------------------------------------------------------- site
+  // ------------------------------------------------------------------- company
 
   /**
-   * The site an entry belongs to: its object's — an effet's, an
+   * The company an entry belongs to: its object's — an effet's, an
    * instruction's, a dossier's, a project's... — else, for an object that
-   * isn't common to every site, its author's.
+   * isn't common to every company, its author's.
    */
-  private async siteOf(
+  private async companyOf(
     entityType: string | undefined,
     entityId: string | undefined,
     userId: string | null,
   ): Promise<string | null> {
     const type = entityType?.toLowerCase();
     if (type && entityId) {
-      const found = await this.objectSite(type, entityId).catch(
+      const found = await this.objectCompany(type, entityId).catch(
         () => undefined,
       );
       if (found) return found;
       // A common object (a global role, a common referential...): platform
-      // audit only, never its author's site.
+      // audit only, never its author's company.
       if (found === null || PLATFORM_OBJECTS.has(type)) return null;
     }
     if (!userId) return null;
     const author = await this.db.user.findUnique({
       where: { id: userId },
-      select: { siteId: true },
+      select: { companyId: true },
     });
-    return author?.siteId ?? null;
+    return author?.companyId ?? null;
   }
 
-  // undefined: unknown kind or object; null: an object of no site.
-  private async objectSite(
+  // undefined: unknown kind or object; null: an object of no company.
+  private async objectCompany(
     type: string,
     id: string,
   ): Promise<string | null | undefined> {
     switch (type) {
       case 'courrier':
-        return this.rbac.resolveSiteId('courrier', id);
+        return this.access.resolveCompanyId('courrier', id);
       case 'instruction':
-        return this.rbac.resolveSiteId('instruction', id);
+        return this.access.resolveCompanyId('instruction', id);
       case 'livrable':
-        return this.rbac.resolveSiteId('livrable', id);
+        return this.access.resolveCompanyId('livrable', id);
       case 'dossier':
-        return this.rbac.resolveSiteId('dossier', id);
+        return this.access.resolveCompanyId('dossier', id);
       case 'analysis-sheet':
-        return this.rbac.resolveSiteId('analysisSheet', id);
-      case 'site':
-        return this.rbac.resolveSiteId('site', id);
+        return this.access.resolveCompanyId('analysisSheet', id);
+      case 'company':
+        return this.access.resolveCompanyId('company', id);
       case 'project':
         return (
           await this.db.project.findUnique({
             where: { id },
-            select: { siteId: true },
+            select: { companyId: true },
           })
-        )?.siteId;
+        )?.companyId;
       case 'contract': {
         const contract = await this.db.contract.findUnique({
           where: { id },
-          select: { project: { select: { siteId: true } } },
+          select: { project: { select: { companyId: true } } },
         });
-        return contract ? (contract.project?.siteId ?? null) : undefined;
+        return contract ? (contract.project?.companyId ?? null) : undefined;
       }
       case 'canal':
         return (
           await this.db.canal.findUnique({
             where: { id },
-            select: { siteId: true },
+            select: { companyId: true },
           })
-        )?.siteId;
+        )?.companyId;
       case 'correspondent':
         return (
           await this.db.correspondent.findUnique({
             where: { id },
-            select: { siteId: true },
+            select: { companyId: true },
           })
-        )?.siteId;
+        )?.companyId;
       case 'analysis-criterion-template': {
         const row = await this.db.analysisCriterionTemplate.findUnique({
           where: { id },
-          select: { siteId: true },
+          select: { companyId: true },
         });
-        return row ? row.siteId : undefined;
+        return row ? row.companyId : undefined;
       }
       case 'effet-type': {
         const row = await this.db.effetType.findUnique({
           where: { id },
-          select: { siteId: true },
+          select: { companyId: true },
         });
-        return row ? row.siteId : undefined;
+        return row ? row.companyId : undefined;
       }
       case 'role': {
         const row = await this.db.role.findUnique({
           where: { id },
-          select: { siteId: true },
+          select: { companyId: true },
         });
-        return row ? row.siteId : undefined;
+        return row ? row.companyId : undefined;
       }
       case 'user': {
         const row = await this.db.user.findUnique({
           where: { id },
-          select: { siteId: true },
+          select: { companyId: true },
         });
-        return row ? row.siteId : undefined;
+        return row ? row.companyId : undefined;
       }
       case 'delegation':
         return (
           await this.db.delegation.findUnique({
             where: { id },
-            select: { siteId: true },
+            select: { companyId: true },
           })
-        )?.siteId;
+        )?.companyId;
       default:
         return undefined;
     }
@@ -720,10 +720,10 @@ export class ActivityService {
             context: contractRef(row.contract) ?? row.dossier?.number ?? null,
           })),
         );
-      case 'site':
+      case 'company':
         return map(
           (
-            await this.db.site.findMany({
+            await this.db.company.findMany({
               where,
               select: { id: true, code: true },
             })
@@ -753,9 +753,9 @@ export class ActivityService {
   }
 }
 
-// The sites a caller may audit: every one, or theirs.
-function sitesWhere(siteIds: 'ALL' | string[]): Prisma.ActivityLogWhereInput {
-  return siteIds === 'ALL' ? {} : { siteId: { in: siteIds } };
+// The companies a caller may audit: every one, or theirs.
+function companiesWhere(companyIds: string[]): Prisma.ActivityLogWhereInput {
+  return { companyId: { in: companyIds } };
 }
 
 // `to` as an exclusive bound: a bare date covers its whole day.

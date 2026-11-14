@@ -1,29 +1,29 @@
 import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ActivityService } from '../activity/activity.service';
-import { RbacService } from '../auth/rbac/rbac.service';
+import { AccessService } from '../auth/access/access.service';
+import { Permission } from '../auth/permissions';
 import { DatabaseService } from '../database/database.service';
 import { CriterionTemplateService } from './criterion-template.service';
-import { withScopeChecks } from '../auth/rbac/rbac.testing-spec';
+import {
+  accessMock,
+  type AccessMock,
+} from '../activity/access-mock.testing-spec';
 
 describe('CriterionTemplateService', () => {
   let service: CriterionTemplateService;
   let database: {
     analysisCriterionTemplate: Record<string, jest.Mock>;
     analysisSettings: Record<string, jest.Mock>;
-    analysisSiteSettings: Record<string, jest.Mock>;
+    analysisCompanySettings: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
   };
-  let rbac: {
-    managedSites: jest.Mock;
-    hasGlobalPermission: jest.Mock;
-    worksAtSite: jest.Mock;
-  };
+  let access: AccessMock;
 
   const createdData = () =>
     (
       database.analysisCriterionTemplate.create.mock.calls[0][0] as {
-        data: { siteId: string | null };
+        data: { companyId: string | null };
       }
     ).data;
 
@@ -44,24 +44,23 @@ describe('CriterionTemplateService', () => {
         }),
         upsert: jest.fn(),
       },
-      analysisSiteSettings: {
+      analysisCompanySettings: {
         findUnique: jest.fn().mockResolvedValue(null),
         upsert: jest.fn(),
       },
-      user: { findUnique: jest.fn().mockResolvedValue({ siteId: 's-1' }) },
+      user: { findUnique: jest.fn().mockResolvedValue({ companyId: 's-1' }) },
     };
-    // Manages the criteria of site s-1 only.
-    rbac = {
-      managedSites: jest.fn().mockResolvedValue(['s-1']),
-      hasGlobalPermission: jest.fn().mockResolvedValue(false),
-      worksAtSite: jest.fn().mockResolvedValue(true),
-    };
+    // Manages the criteria of company s-1 only.
+    access = accessMock({
+      companyId: 's-1',
+      permissions: [Permission.SETTINGS_UPDATE, Permission.ANALYSIS_READ],
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CriterionTemplateService,
         { provide: DatabaseService, useValue: database },
-        { provide: RbacService, useValue: withScopeChecks(rbac) },
+        { provide: AccessService, useValue: access },
         {
           provide: ActivityService,
           useValue: { tryRecord: jest.fn().mockResolvedValue(null) },
@@ -72,28 +71,28 @@ describe('CriterionTemplateService', () => {
     service = module.get(CriterionTemplateService);
   });
 
-  describe('a site manager', () => {
-    it("creates their site's criteria without naming it", async () => {
+  describe('a company manager', () => {
+    it("creates their company's criteria without naming it", async () => {
       await service.create({ label: 'Lisibilité' }, 'u-s1');
 
-      expect(createdData().siteId).toBe('s-1');
+      expect(createdData().companyId).toBe('s-1');
     });
 
-    it("cannot create another site's, nor a common one", async () => {
+    it("cannot create another company's, nor a common one", async () => {
       await expect(
-        service.create({ label: 'X', siteId: 's-2' }, 'u-s1'),
+        service.create({ label: 'X', companyId: 's-2' }, 'u-s1'),
       ).rejects.toBeInstanceOf(ForbiddenException);
-      rbac.managedSites.mockResolvedValue(['s-1', 's-2']);
+      access.state.permissions = [];
       await expect(
-        service.create({ label: 'X', siteId: undefined }, 'u-s1'),
-      ).rejects.toThrow('siteId is required');
+        service.create({ label: 'X', companyId: undefined }, 'u-s1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('cannot change a common criterion', async () => {
       database.analysisCriterionTemplate.findUnique.mockResolvedValue({
         id: 't-1',
         label: 'Forme',
-        siteId: null,
+        companyId: null,
       });
 
       await expect(
@@ -101,12 +100,12 @@ describe('CriterionTemplateService', () => {
       ).rejects.toBeInstanceOf(ForbiddenException);
     });
 
-    it("sets their site's settings, not the common ones", async () => {
+    it("sets their company's settings, not the common ones", async () => {
       await service.updateSettings(
-        { siteId: 's-1', allowCustomCriteria: false },
+        { companyId: 's-1', allowCustomCriteria: false },
         'u-s1',
       );
-      expect(database.analysisSiteSettings.upsert).toHaveBeenCalled();
+      expect(database.analysisCompanySettings.upsert).toHaveBeenCalled();
 
       await expect(
         service.updateSettings({ allowCustomCriteria: false }, 'u-s1'),
@@ -114,28 +113,28 @@ describe('CriterionTemplateService', () => {
     });
   });
 
-  it('a platform administrator creates common criteria', async () => {
-    rbac.managedSites.mockResolvedValue('ALL');
+  it('a super-administrator creates common criteria', async () => {
+    access.state.platformAdmin = true;
 
     await service.create({ label: 'Forme' }, 'super');
 
-    expect(createdData().siteId).toBeNull();
+    expect(createdData().companyId).toBeNull();
   });
 
-  it("offers a site's fiches its own criteria only", async () => {
-    await service.findAll({ siteId: 's-1' }, 'u-s1');
+  it("offers a company's fiches its own criteria only", async () => {
+    await service.findAll({ companyId: 's-1' }, 'u-s1');
 
     expect(database.analysisCriterionTemplate.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { siteId: 's-1' } }),
+      expect.objectContaining({ where: { companyId: 's-1' } }),
     );
   });
 
-  it('a site without its own settings inherits the common ones', async () => {
+  it('a company without its own settings inherits the common ones', async () => {
     const settings = await service.getSettings('s-1');
 
     expect(settings).toMatchObject({
       allowCustomCriteria: true,
-      siteId: 's-1',
+      companyId: 's-1',
       inherited: true,
     });
   });

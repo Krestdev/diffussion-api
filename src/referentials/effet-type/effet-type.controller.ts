@@ -23,8 +23,8 @@ import { EffetTypeService } from './effet-type.service';
 
 @ApiTags('effet-types')
 @ApiBearerAuth()
-// Global types: platform administrators. A site's types: its responsible.
-// Enforced in EffetTypeService, since the responsible needs no role for it.
+// Global types: a super-administrator. A company's types: settings.update there.
+// Enforced in EffetTypeService.
 @UseGuards(CoreAuthGuard)
 @Controller('effet-types')
 export class EffetTypeController {

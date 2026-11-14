@@ -1,7 +1,7 @@
 import { OmitType, PartialType } from '@nestjs/swagger';
 import { CreateEffetTypeDto } from './create-effet-type.dto';
 
-// A type stays where it was made: global, or of its site.
+// A type stays where it was made: global, or of its company.
 export class UpdateEffetTypeDto extends PartialType(
-  OmitType(CreateEffetTypeDto, ['siteId'] as const),
+  OmitType(CreateEffetTypeDto, ['companyId'] as const),
 ) {}

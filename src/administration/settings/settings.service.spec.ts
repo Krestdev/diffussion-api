@@ -1,23 +1,27 @@
 import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ActivityService } from '../../activity/activity.service';
-import { RbacService } from '../../auth/rbac/rbac.service';
-import { withScopeChecks } from '../../auth/rbac/rbac.testing-spec';
+import { AccessService } from '../../auth/access/access.service';
+import { Permission } from '../../auth/permissions';
+import {
+  accessMock,
+  type AccessMock,
+} from '../../activity/access-mock.testing-spec';
 import { DatabaseService } from '../../database/database.service';
 import { SettingsService } from './settings.service';
 
 describe('SettingsService', () => {
   let service: SettingsService;
-  let siteValues: Record<string, unknown> | null;
+  let companyValues: Record<string, unknown> | null;
   let database: {
     appSettings: Record<string, jest.Mock>;
-    siteSettings: Record<string, jest.Mock>;
+    companySettings: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
   };
-  let rbac: { managedSites: jest.Mock };
+  let access: AccessMock;
 
   beforeEach(async () => {
-    siteValues = null;
+    companyValues = null;
     database = {
       appSettings: {
         findUnique: jest.fn().mockResolvedValue({
@@ -27,29 +31,34 @@ describe('SettingsService', () => {
         }),
         upsert: jest.fn(),
       },
-      siteSettings: {
+      companySettings: {
         findUnique: jest.fn(() =>
           Promise.resolve(
-            siteValues ? { values: siteValues, updatedAt: new Date() } : null,
+            companyValues
+              ? { values: companyValues, updatedAt: new Date() }
+              : null,
           ),
         ),
         upsert: jest.fn(
           ({ create }: { create: { values: Record<string, unknown> } }) => {
-            siteValues = create.values;
+            companyValues = create.values;
             return Promise.resolve();
           },
         ),
       },
-      user: { findUnique: jest.fn().mockResolvedValue({ siteId: 's-1' }) },
+      user: { findUnique: jest.fn().mockResolvedValue({ companyId: 's-1' }) },
     };
-    // Administers the settings of site s-1.
-    rbac = { managedSites: jest.fn().mockResolvedValue(['s-1']) };
+    // Administers the settings of company s-1.
+    access = accessMock({
+      companyId: 's-1',
+      permissions: [Permission.SETTINGS_UPDATE],
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SettingsService,
         { provide: DatabaseService, useValue: database },
-        { provide: RbacService, useValue: withScopeChecks(rbac) },
+        { provide: AccessService, useValue: access },
         {
           provide: ActivityService,
           useValue: { tryRecord: jest.fn().mockResolvedValue(null) },
@@ -60,11 +69,11 @@ describe('SettingsService', () => {
     service = module.get(SettingsService);
   });
 
-  it('a site inherits the defaults and the common values', async () => {
+  it('a company inherits the defaults and the common values', async () => {
     const settings = await service.get('s-1');
 
     expect(settings).toMatchObject({
-      siteId: 's-1',
+      companyId: 's-1',
       defaultTreatmentDays: 12, // common
       maxActiveInstructionsPerAgent: 5, // common column
       outgoingReplyDays: 15, // default
@@ -73,7 +82,7 @@ describe('SettingsService', () => {
     expect(settings.inherited).toContain('defaultTreatmentDays');
   });
 
-  it("a site's own value wins, and can be given up", async () => {
+  it("a company's own value wins, and can be given up", async () => {
     await service.update(
       { defaultTreatmentDays: 7, autoArchiveAfterMonths: null },
       'u-admin-s1',
@@ -87,19 +96,23 @@ describe('SettingsService', () => {
     expect(settings.defaultTreatmentDays).toBe(12);
   });
 
-  it("refuses another site's settings, and the common ones", async () => {
+  it("refuses another company's settings, and the common ones", async () => {
     await expect(
-      service.update({ siteId: 's-2', defaultTreatmentDays: 3 }, 'u-admin-s1'),
+      service.update(
+        { companyId: 's-2', defaultTreatmentDays: 3 },
+        'u-admin-s1',
+      ),
     ).rejects.toBeInstanceOf(ForbiddenException);
-    rbac.managedSites.mockResolvedValue(['s-1', 's-2']);
+    // Without the permission, not even their own company's.
+    access.state.permissions = [];
     await expect(
       service.update({ defaultTreatmentDays: 3 }, 'u-admin-s1'),
-    ).rejects.toThrow('siteId is required');
+    ).rejects.toThrow('companyId is required');
   });
 
-  it("reads one's own site's settings by default", async () => {
+  it("reads one's own company's settings by default", async () => {
     const settings = await service.getFor({}, 'u-agent');
 
-    expect(settings.siteId).toBe('s-1');
+    expect(settings.companyId).toBe('s-1');
   });
 });
