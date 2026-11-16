@@ -25,6 +25,37 @@ export interface AppConfig {
    * CORE_COMPANY_LINKS="<core company id>=<company id>,…" (otherwise the company of the same name).
    */
   CORE_COMPANY_LINKS: Record<string, string>;
+  /**
+   * Tools the MCP endpoint (/api/v1/mcp, for the Whass AI assistant) exposes, by risk level:
+   * MCP_TOOL_LEVELS=READ,WRITE,DECISION,ADMIN (comma-separated, default READ). Empty: the
+   * endpoint is switched off.
+   */
+  MCP_TOOL_LEVELS: McpToolLevelSetting[];
+}
+
+export const MCP_TOOL_LEVEL_VALUES = [
+  'READ',
+  'WRITE',
+  'DECISION',
+  'ADMIN',
+] as const;
+export type McpToolLevelSetting = (typeof MCP_TOOL_LEVEL_VALUES)[number];
+
+/** MCP_TOOL_LEVELS: unset = READ, empty = none; an unknown level stops the start-up. */
+export function toolLevels(value: string | undefined): McpToolLevelSetting[] {
+  const levels = (value ?? 'READ')
+    .split(',')
+    .map((level) => level.trim().toUpperCase())
+    .filter(Boolean);
+  const unknown = levels.filter(
+    (level) => !(MCP_TOOL_LEVEL_VALUES as readonly string[]).includes(level),
+  );
+  if (unknown.length) {
+    throw new Error(
+      `MCP_TOOL_LEVELS: unknown level(s) ${unknown.join(', ')} (READ, WRITE, DECISION, ADMIN)`,
+    );
+  }
+  return [...new Set(levels)] as McpToolLevelSetting[];
 }
 
 const links = (value: string | undefined): Record<string, string> =>
@@ -54,6 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     REDIS_URL: (env.REDIS_URL ?? 'redis://localhost:6379').trim(),
     ACCESS_CACHE_SECONDS: Math.max(0, number(env.ACCESS_CACHE_SECONDS, 10)),
     CORE_COMPANY_LINKS: links(env.CORE_COMPANY_LINKS),
+    MCP_TOOL_LEVELS: toolLevels(env.MCP_TOOL_LEVELS),
   };
   if (config.NODE_ENV !== 'test') {
     const missing = (['CORE_URL', 'CORE_ISSUER'] as const).filter(

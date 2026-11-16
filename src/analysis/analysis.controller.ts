@@ -69,8 +69,12 @@ export class AnalysisController {
 
   @Get(':id')
   @RequirePermissions(Permission.ANALYSIS_READ)
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.sheets.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    // With `actions`: what the signed-in person may do on it.
+    return this.sheets.findOneWithActions(id, user.sub);
   }
 
   /** Récapitulatif: one line per element with its avis (spec §8). */

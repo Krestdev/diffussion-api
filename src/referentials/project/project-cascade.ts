@@ -8,7 +8,17 @@ import {
   Prisma,
   ProjectStatus,
 } from '../../../generated/prisma/client';
+import { ANALYSIS_SHEET_STATES } from '../../analysis/analysis-sheet.states';
 import { statusForDueDate } from '../../domain/dossier/dossier.service';
+import { DOSSIER_STATES } from '../../domain/dossier/dossier.states';
+import { courrierStates } from '../../domain/mail/courrier.states';
+import { INSTRUCTION_STATES } from '../../instructions/instruction.states';
+import { TransitionTable } from '../../workflow/transition-table';
+import {
+  StatusDelegate,
+  WorkflowService,
+} from '../../workflow/workflow.service';
+import { CONTRACT_STATES } from '../contract/contract.states';
 
 // A courrier in one of these is done with: neither in progress nor waiting.
 export const COURRIER_DONE: CourrierStatus[] = [
@@ -22,6 +32,43 @@ export const COURRIER_DONE: CourrierStatus[] = [
 const CLOSING_REASON = 'Projet clôturé';
 
 type Tx = Prisma.TransactionClient;
+
+/**
+ * Where the cascade runs: the project's transaction, the workflow engine and the project's
+ * company. Every row moves through the engine as a system change (StatusHistory, no permission:
+ * the project's own change carries the person's authority).
+ */
+type Cascade = { tx: Tx; workflow: WorkflowService; companyId: string };
+
+/** One transition per row, from the status it was read in, with its own fields. */
+async function moveEach<S extends string, E extends string>(
+  cascade: Cascade,
+  table: (row: { id: string }) => TransitionTable<S, E>,
+  delegate: StatusDelegate,
+  event: E,
+  rows: {
+    id: string;
+    from: S;
+    to?: S;
+    data: Record<string, unknown>;
+  }[],
+  reason?: string | null,
+) {
+  for (const row of rows) {
+    await cascade.workflow.transition(cascade.tx, {
+      table: table(row),
+      delegate,
+      entityId: row.id,
+      event,
+      from: row.from,
+      to: row.to,
+      data: row.data,
+      reason,
+      companyId: cascade.companyId,
+      system: true,
+    });
+  }
+}
 
 function dossiersOf(projectId: string): Prisma.DossierWhereInput {
   return { OR: [{ projectId }, { contract: { projectId } }] };
@@ -58,41 +105,37 @@ function sheetsOf(projectId: string): Prisma.AnalysisSheetWhereInput {
   };
 }
 
-// One update per status, since each row keeps the status it leaves.
-async function byStatus<S>(
-  rows: { id: string; status: S }[],
-  update: (ids: string[], status: S) => Promise<unknown>,
-) {
-  const groups = new Map<S, string[]>();
-  for (const { id, status } of rows) {
-    groups.set(status, [...(groups.get(status) ?? []), id]);
-  }
-  for (const [status, ids] of groups) await update(ids, status);
-}
-
-const idAndStatus = { id: true, status: true } as const;
+const instructions = () => INSTRUCTION_STATES;
+const dossiers = () => DOSSIER_STATES;
+const contracts = () => CONTRACT_STATES;
+const sheets = () => ANALYSIS_SHEET_STATES;
 
 /** Open work ends: tasks and unsent sortants are cancelled, entrants closed. */
-async function closeContents(tx: Tx, projectId: string, now: Date) {
-  await byStatus(
-    await tx.instruction.findMany({
-      where: {
-        AND: [tasksOf(projectId)],
-        status: {
-          notIn: [InstructionStatus.TERMINEE, InstructionStatus.ANNULEE],
-        },
+async function closeContents(cascade: Cascade, projectId: string, now: Date) {
+  const { tx } = cascade;
+  const tasks = await tx.instruction.findMany({
+    where: {
+      AND: [tasksOf(projectId)],
+      status: {
+        notIn: [InstructionStatus.TERMINEE, InstructionStatus.ANNULEE],
       },
-      select: idAndStatus,
-    }),
-    (ids, status) =>
-      tx.instruction.updateMany({
-        where: { id: { in: ids } },
-        data: {
-          status: InstructionStatus.ANNULEE,
-          cancellationReason: CLOSING_REASON,
-          statusBeforeProjectClosure: status,
-        },
-      }),
+    },
+    select: { id: true, status: true },
+  });
+  await moveEach(
+    cascade,
+    instructions,
+    tx.instruction,
+    'CANCEL_BY_PROJECT',
+    tasks.map((task) => ({
+      id: task.id,
+      from: task.status,
+      data: {
+        cancellationReason: CLOSING_REASON,
+        statusBeforeProjectClosure: task.status,
+      },
+    })),
+    CLOSING_REASON,
   );
   const openEffets = (direction: CourrierDirection) =>
     tx.courrier.findMany({
@@ -101,45 +144,73 @@ async function closeContents(tx: Tx, projectId: string, now: Date) {
         direction,
         status: { notIn: COURRIER_DONE },
       },
-      select: idAndStatus,
+      select: { id: true, status: true },
     });
-  await byStatus(await openEffets(CourrierDirection.ENTRANT), (ids, status) =>
-    tx.courrier.updateMany({
-      where: { id: { in: ids } },
+  await moveEach(
+    cascade,
+    () => courrierStates(CourrierDirection.ENTRANT),
+    tx.courrier,
+    'CLOSE_BY_PROJECT',
+    (await openEffets(CourrierDirection.ENTRANT)).map((effet) => ({
+      id: effet.id,
+      from: effet.status,
       data: {
-        status: CourrierStatus.CLOTURE,
         closedAt: now,
         closingNote: CLOSING_REASON,
-        statusBeforeProjectClosure: status,
+        statusBeforeProjectClosure: effet.status,
       },
-    }),
+    })),
+    CLOSING_REASON,
   );
-  await byStatus(await openEffets(CourrierDirection.SORTANT), (ids, status) =>
-    tx.courrier.updateMany({
-      where: { id: { in: ids } },
+  await moveEach(
+    cascade,
+    () => courrierStates(CourrierDirection.SORTANT),
+    tx.courrier,
+    'CANCEL_BY_PROJECT',
+    (await openEffets(CourrierDirection.SORTANT)).map((effet) => ({
+      id: effet.id,
+      from: effet.status,
       data: {
-        status: CourrierStatus.ANNULE,
         cancelledAt: now,
         cancellationReason: CLOSING_REASON,
-        statusBeforeProjectClosure: status,
+        statusBeforeProjectClosure: effet.status,
       },
-    }),
+    })),
+    CLOSING_REASON,
   );
-  await tx.dossier.updateMany({
+  await closeDossiers(cascade, projectId, now);
+}
+
+/** The project's dossiers still active are closed with it. */
+async function closeDossiers(cascade: Cascade, projectId: string, now: Date) {
+  const { tx } = cascade;
+  const open = await tx.dossier.findMany({
     where: {
       AND: [dossiersOf(projectId)],
       status: { notIn: [DossierStatus.CLOSED, DossierStatus.ARCHIVED] },
     },
-    data: { status: DossierStatus.CLOSED, closedAt: now },
+    select: { id: true, status: true },
   });
+  await moveEach(
+    cascade,
+    dossiers,
+    tx.dossier,
+    'CLOSE_BY_PROJECT',
+    open.map((dossier) => ({
+      id: dossier.id,
+      from: dossier.status,
+      data: { closedAt: now },
+    })),
+  );
 }
 
 /** Undoes closeContents, for what the closing did and nothing else. */
 async function reopenContents(
-  tx: Tx,
+  cascade: Cascade,
   projectId: string,
   closedAt: Date | null,
 ) {
+  const { tx } = cascade;
   const tasks = await tx.instruction.findMany({
     where: {
       AND: [tasksOf(projectId)],
@@ -147,132 +218,164 @@ async function reopenContents(
     },
     select: { id: true, status: true, statusBeforeProjectClosure: true },
   });
-  await byStatus(
+  await moveEach(
+    cascade,
+    instructions,
+    tx.instruction,
+    'REOPEN_BY_PROJECT',
     tasks.map((task) => ({
       id: task.id,
-      status: task.statusBeforeProjectClosure!,
+      from: task.status,
+      to: task.statusBeforeProjectClosure!,
+      data: { cancellationReason: null, statusBeforeProjectClosure: null },
     })),
-    (ids, status) =>
-      tx.instruction.updateMany({
-        where: { id: { in: ids } },
-        data: {
-          status,
-          cancellationReason: null,
-          statusBeforeProjectClosure: null,
-        },
-      }),
   );
   const effets = await tx.courrier.findMany({
     where: {
       AND: [effetsOf(projectId)],
       statusBeforeProjectClosure: { not: null },
     },
-    select: { id: true, statusBeforeProjectClosure: true },
+    select: {
+      id: true,
+      direction: true,
+      status: true,
+      statusBeforeProjectClosure: true,
+    },
   });
-  await byStatus(
-    effets.map((effet) => ({
-      id: effet.id,
-      status: effet.statusBeforeProjectClosure!,
-    })),
-    (ids, status) =>
-      tx.courrier.updateMany({
-        where: { id: { in: ids } },
-        data: {
-          status,
-          closedAt: null,
-          closingNote: null,
-          cancelledAt: null,
-          cancellationReason: null,
-          statusBeforeProjectClosure: null,
-        },
-      }),
-  );
+  for (const direction of [
+    CourrierDirection.ENTRANT,
+    CourrierDirection.SORTANT,
+  ]) {
+    await moveEach(
+      cascade,
+      () => courrierStates(direction),
+      tx.courrier,
+      'REOPEN_BY_PROJECT',
+      effets
+        .filter((effet) => effet.direction === direction)
+        .map((effet) => ({
+          id: effet.id,
+          from: effet.status,
+          to: effet.statusBeforeProjectClosure!,
+          data: {
+            closedAt: null,
+            closingNote: null,
+            cancelledAt: null,
+            cancellationReason: null,
+            statusBeforeProjectClosure: null,
+          },
+        })),
+    );
+  }
   if (!closedAt) return;
-  const dossiers = await tx.dossier.findMany({
+  const closed = await tx.dossier.findMany({
     where: {
       AND: [dossiersOf(projectId)],
       status: DossierStatus.CLOSED,
       closedAt,
     },
-    select: { id: true, dueDate: true },
+    select: { id: true, status: true, dueDate: true },
   });
-  for (const dossier of dossiers) {
-    await tx.dossier.update({
-      where: { id: dossier.id },
-      data: {
-        status: statusForDueDate(DossierStatus.IN_PROGRESS, dossier.dueDate),
-        closedAt: null,
-      },
-    });
-  }
+  await moveEach(
+    cascade,
+    dossiers,
+    tx.dossier,
+    'REOPEN_BY_PROJECT',
+    closed.map((dossier) => ({
+      id: dossier.id,
+      from: dossier.status,
+      to: statusForDueDate(DossierStatus.IN_PROGRESS, dossier.dueDate),
+      data: { closedAt: null },
+    })),
+  );
 }
 
 async function archiveContents(
-  tx: Tx,
+  cascade: Cascade,
   projectId: string,
   now: Date,
   reason: string | null,
 ) {
-  await tx.dossier.updateMany({
-    where: {
-      AND: [dossiersOf(projectId)],
-      status: { notIn: [DossierStatus.CLOSED, DossierStatus.ARCHIVED] },
-    },
-    data: { status: DossierStatus.CLOSED, closedAt: now },
-  });
-  await tx.dossier.updateMany({
+  const { tx } = cascade;
+  await closeDossiers(cascade, projectId, now);
+  const closed = await tx.dossier.findMany({
     where: { AND: [dossiersOf(projectId)], status: DossierStatus.CLOSED },
-    data: {
-      status: DossierStatus.ARCHIVED,
-      archivedAt: now,
-      archiveReason: reason,
-    },
+    select: { id: true, status: true },
   });
-  await tx.contract.updateMany({
-    where: { projectId, status: ContractStatus.ACTIVE },
-    data: {
-      status: ContractStatus.ARCHIVED,
-      archivedAt: now,
-      archiveReason: reason,
-    },
-  });
-  await byStatus(
-    await tx.courrier.findMany({
-      where: {
-        AND: [effetsOf(projectId)],
-        status: { not: CourrierStatus.ARCHIVE },
-      },
-      select: idAndStatus,
-    }),
-    (ids, status) =>
-      tx.courrier.updateMany({
-        where: { id: { in: ids } },
-        data: {
-          status: CourrierStatus.ARCHIVE,
-          archivedAt: now,
-          archiveReason: reason,
-          archivedFromStatus: status,
-        },
-      }),
+  await moveEach(
+    cascade,
+    dossiers,
+    tx.dossier,
+    'ARCHIVE_BY_PROJECT',
+    closed.map((dossier) => ({
+      id: dossier.id,
+      from: dossier.status,
+      data: { archivedAt: now, archiveReason: reason },
+    })),
+    reason,
   );
-  await byStatus(
-    await tx.analysisSheet.findMany({
-      where: {
-        AND: [sheetsOf(projectId)],
-        status: { not: AnalysisSheetStatus.ARCHIVEE },
+  const active = await tx.contract.findMany({
+    where: { projectId, status: ContractStatus.ACTIVE },
+    select: { id: true, status: true },
+  });
+  await moveEach(
+    cascade,
+    contracts,
+    tx.contract,
+    'ARCHIVE_BY_PROJECT',
+    active.map((contract) => ({
+      id: contract.id,
+      from: contract.status,
+      data: { archivedAt: now, archiveReason: reason },
+    })),
+    reason,
+  );
+  const effets = await tx.courrier.findMany({
+    where: {
+      AND: [effetsOf(projectId)],
+      status: { not: CourrierStatus.ARCHIVE },
+    },
+    select: { id: true, direction: true, status: true },
+  });
+  await moveEach(
+    cascade,
+    (row) =>
+      courrierStates(effets.find((effet) => effet.id === row.id)!.direction),
+    tx.courrier,
+    'ARCHIVE_BY_PROJECT',
+    effets.map((effet) => ({
+      id: effet.id,
+      from: effet.status,
+      data: {
+        archivedAt: now,
+        archiveReason: reason,
+        archivedFromStatus: effet.status,
       },
-      select: idAndStatus,
-    }),
-    (ids, status) =>
-      tx.analysisSheet.updateMany({
-        where: { id: { in: ids } },
-        data: {
-          status: AnalysisSheetStatus.ARCHIVEE,
-          archivedAt: now,
-          archiveReason: reason,
-          archivedFromStatus: status,
-        },
-      }),
+    })),
+    reason,
+  );
+  const live = await tx.analysisSheet.findMany({
+    where: {
+      AND: [sheetsOf(projectId)],
+      status: { not: AnalysisSheetStatus.ARCHIVEE },
+    },
+    select: { id: true, status: true },
+  });
+  await moveEach(
+    cascade,
+    sheets,
+    tx.analysisSheet,
+    'ARCHIVE_BY_PROJECT',
+    live.map((sheet) => ({
+      id: sheet.id,
+      from: sheet.status,
+      data: {
+        archivedAt: now,
+        archiveReason: reason,
+        archivedFromStatus: sheet.status,
+      },
+    })),
+    reason,
   );
 }
 
@@ -281,24 +384,47 @@ async function archiveContents(
  * has another archiving date and stays archived.
  */
 async function restoreContents(
-  tx: Tx,
+  cascade: Cascade,
   projectId: string,
   archivedAt: Date | null,
 ) {
   if (!archivedAt) return;
+  const { tx } = cascade;
   const cleared = { archivedAt: null, archiveReason: null };
-  await tx.dossier.updateMany({
+  const archived = await tx.dossier.findMany({
     where: {
       AND: [dossiersOf(projectId)],
       status: DossierStatus.ARCHIVED,
       archivedAt,
     },
-    data: { status: DossierStatus.CLOSED, ...cleared },
+    select: { id: true, status: true },
   });
-  await tx.contract.updateMany({
+  await moveEach(
+    cascade,
+    dossiers,
+    tx.dossier,
+    'RESTORE_BY_PROJECT',
+    archived.map((dossier) => ({
+      id: dossier.id,
+      from: dossier.status,
+      data: cleared,
+    })),
+  );
+  const archivedContracts = await tx.contract.findMany({
     where: { projectId, status: ContractStatus.ARCHIVED, archivedAt },
-    data: { status: ContractStatus.ACTIVE, ...cleared },
+    select: { id: true, status: true },
   });
+  await moveEach(
+    cascade,
+    contracts,
+    tx.contract,
+    'RESTORE_BY_PROJECT',
+    archivedContracts.map((contract) => ({
+      id: contract.id,
+      from: contract.status,
+      data: cleared,
+    })),
+  );
   const effets = await tx.courrier.findMany({
     where: {
       AND: [effetsOf(projectId)],
@@ -306,46 +432,56 @@ async function restoreContents(
       archivedAt,
       archivedFromStatus: { not: null },
     },
-    select: { id: true, archivedFromStatus: true },
+    select: {
+      id: true,
+      direction: true,
+      status: true,
+      archivedFromStatus: true,
+    },
   });
-  await byStatus(
+  await moveEach(
+    cascade,
+    (row) =>
+      courrierStates(effets.find((effet) => effet.id === row.id)!.direction),
+    tx.courrier,
+    'RESTORE_BY_PROJECT',
     effets.map((effet) => ({
       id: effet.id,
-      status: effet.archivedFromStatus!,
+      from: effet.status,
+      to: effet.archivedFromStatus!,
+      data: { ...cleared, archivedFromStatus: null },
     })),
-    (ids, status) =>
-      tx.courrier.updateMany({
-        where: { id: { in: ids } },
-        data: { status, ...cleared, archivedFromStatus: null },
-      }),
   );
-  const sheets = await tx.analysisSheet.findMany({
+  const archivedSheets = await tx.analysisSheet.findMany({
     where: {
       AND: [sheetsOf(projectId)],
       status: AnalysisSheetStatus.ARCHIVEE,
       archivedAt,
       archivedFromStatus: { not: null },
     },
-    select: { id: true, archivedFromStatus: true },
+    select: { id: true, status: true, archivedFromStatus: true },
   });
-  await byStatus(
-    sheets.map((sheet) => ({
+  await moveEach(
+    cascade,
+    sheets,
+    tx.analysisSheet,
+    'RESTORE_BY_PROJECT',
+    archivedSheets.map((sheet) => ({
       id: sheet.id,
-      status: sheet.archivedFromStatus!,
+      from: sheet.status,
+      to: sheet.archivedFromStatus!,
+      data: { ...cleared, archivedFromStatus: null },
     })),
-    (ids, status) =>
-      tx.analysisSheet.updateMany({
-        where: { id: { in: ids } },
-        data: { status, ...cleared, archivedFromStatus: null },
-      }),
   );
 }
 
 /** What a project's change of status does to everything in it. */
 export async function cascadeProjectStatus(
   tx: Tx,
+  workflow: WorkflowService,
   project: {
     id: string;
+    companyId: string;
     status: ProjectStatus;
     closedAt: Date | null;
     archivedAt: Date | null;
@@ -357,18 +493,19 @@ export async function cascadeProjectStatus(
     archiveReason?: string | null;
   },
 ) {
+  const cascade: Cascade = { tx, workflow, companyId: project.companyId };
   if (to === ProjectStatus.ACTIVE) {
-    await reopenContents(tx, project.id, project.closedAt);
+    await reopenContents(cascade, project.id, project.closedAt);
   } else if (to === ProjectStatus.ARCHIVED) {
     await archiveContents(
-      tx,
+      cascade,
       project.id,
       change.archivedAt!,
       change.archiveReason ?? null,
     );
   } else if (project.status === ProjectStatus.ARCHIVED) {
-    await restoreContents(tx, project.id, project.archivedAt);
+    await restoreContents(cascade, project.id, project.archivedAt);
   } else {
-    await closeContents(tx, project.id, change.closedAt!);
+    await closeContents(cascade, project.id, change.closedAt!);
   }
 }

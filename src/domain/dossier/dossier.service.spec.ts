@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ClsServiceManager } from 'nestjs-cls';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,6 +12,16 @@ import { NotificationsService } from '../../notifications/notifications.service'
 import { AccessService } from '../../auth/access/access.service';
 import { ActivityService } from '../../activity/activity.service';
 import { DossierStatus } from '../../../generated/prisma/client';
+import { WorkflowService } from '../../workflow/workflow.service';
+
+// Runs as a signed-in person holding `permissions` (the engine checks them).
+const asPerson = <T>(permissions: string[], fn: () => Promise<T>) => {
+  const cls = ClsServiceManager.getClsService();
+  return cls.run(() => {
+    cls.set('permissions', permissions);
+    return fn();
+  });
+};
 
 describe('DossierService', () => {
   let service: DossierService;
@@ -21,6 +33,7 @@ describe('DossierService', () => {
     contract: Record<string, jest.Mock>;
     project: Record<string, jest.Mock>;
     activityLog: Record<string, jest.Mock>;
+    statusHistory: { create: jest.Mock };
     $transaction: jest.Mock;
   };
   let access: { has: jest.Mock };
@@ -34,6 +47,8 @@ describe('DossierService', () => {
         findMany: jest.fn(),
         count: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn(),
       },
       instruction: { count: jest.fn(), findMany: jest.fn() },
       courrier: { findMany: jest.fn(), count: jest.fn().mockResolvedValue(0) },
@@ -45,12 +60,18 @@ describe('DossierService', () => {
           .mockResolvedValue({ name: 'P', companyId: 's-1' }),
       },
       activityLog: { findMany: jest.fn() },
-      $transaction: jest.fn((ops: unknown[]) => Promise.all(ops)),
+      statusHistory: { create: jest.fn() },
+      $transaction: jest.fn((arg: unknown) =>
+        typeof arg === 'function'
+          ? (arg as (tx: unknown) => unknown)(database)
+          : Promise.all(arg as unknown[]),
+      ),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DossierService,
+        WorkflowService,
         { provide: DatabaseService, useValue: database },
         { provide: AccessService, useValue: access },
         {
@@ -103,19 +124,30 @@ describe('DossierService', () => {
         status: DossierStatus.IN_PROGRESS,
       });
       database.instruction.count.mockResolvedValue(0);
-      database.dossier.update.mockResolvedValue({
+      database.dossier.findUniqueOrThrow.mockResolvedValue({
         id: 'd-1',
         status: DossierStatus.CLOSED,
       });
 
-      const result = await service.close('d-1');
+      const result = await asPerson(['dossier.close'], () =>
+        service.close('d-1'),
+      );
 
-      expect(database.dossier.update).toHaveBeenCalledWith(
+      // Through the workflow engine: conditional on the status read, and recorded.
+      expect(database.dossier.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'd-1' },
+          where: { id: 'd-1', status: DossierStatus.IN_PROGRESS },
           data: expect.objectContaining({ status: DossierStatus.CLOSED }),
         }),
       );
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entity: 'Dossier',
+          fromStatus: DossierStatus.IN_PROGRESS,
+          toStatus: DossierStatus.CLOSED,
+          event: 'CLOSE',
+        }),
+      });
       expect(result.status).toBe(DossierStatus.CLOSED);
     });
 
@@ -321,9 +353,101 @@ describe('DossierService', () => {
         status: DossierStatus.OPEN,
       });
 
+      // 409 INVALID_TRANSITION (workflow engine), no longer 400.
       await expect(service.reopen('d-1')).rejects.toBeInstanceOf(
-        BadRequestException,
+        ConflictException,
       );
+      expect(database.dossier.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('reopens a closed dossier, LATE when already overdue', async () => {
+      database.dossier.findUnique.mockResolvedValue({
+        id: 'd-1',
+        status: DossierStatus.CLOSED,
+        companyId: 's-1',
+        dueDate: new Date('2020-01-01'),
+      });
+      database.dossier.findUniqueOrThrow.mockResolvedValue({ id: 'd-1' });
+      await asPerson(['dossier.reopen'], () => service.reopen('d-1'));
+      expect(database.dossier.updateMany).toHaveBeenCalledWith({
+        where: { id: 'd-1', status: DossierStatus.CLOSED },
+        data: {
+          closedAt: null,
+          archivedAt: null,
+          status: DossierStatus.LATE,
+        },
+      });
+    });
+  });
+
+  describe('due date', () => {
+    it('turns LATE when the due date moves into the past (DUE_DATE_CHANGED)', async () => {
+      database.dossier.findUnique.mockResolvedValue({
+        id: 'd-1',
+        status: DossierStatus.IN_PROGRESS,
+        companyId: 's-1',
+        responsibleId: 'u-1',
+      });
+      await asPerson(['dossier.update'], () =>
+        service.update('d-1', { dueDate: '2020-01-01' }, 'u-1'),
+      );
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          event: 'DUE_DATE_CHANGED',
+          toStatus: DossierStatus.LATE,
+        }),
+      });
+      expect(database.dossier.update.mock.calls[0][0].data).not.toHaveProperty(
+        'status',
+      );
+    });
+  });
+
+  describe('actions', () => {
+    it('lists what the role allows, blocked with its reason, and hides the rest', async () => {
+      database.instruction.count.mockResolvedValue(2);
+      const actions = await asPerson(
+        ['dossier.update', 'dossier.close', 'dossier.archive'],
+        () =>
+          service.actionsOf({ id: 'd-1', status: DossierStatus.IN_PROGRESS }),
+      );
+      expect(actions).toEqual([
+        { action: 'edit', enabled: true },
+        {
+          action: 'close',
+          enabled: false,
+          reason: 'INSTRUCTIONS_OPEN',
+          params: { count: '2' },
+        },
+        {
+          action: 'archive',
+          enabled: false,
+          reason: 'WRONG_STATUS',
+          params: { status: DossierStatus.IN_PROGRESS },
+        },
+        {
+          action: 'unarchive',
+          enabled: false,
+          reason: 'WRONG_STATUS',
+          params: { status: DossierStatus.IN_PROGRESS },
+        },
+      ]);
+    });
+
+    it('blocks closing while a courrier awaits validation', async () => {
+      database.instruction.count.mockResolvedValue(0);
+      database.courrier.count.mockResolvedValue(1);
+      const actions = await asPerson(['dossier.close'], () =>
+        service.actionsOf({ id: 'd-1', status: DossierStatus.OPEN }),
+      );
+      expect(actions).toEqual([
+        {
+          action: 'close',
+          enabled: false,
+          reason: 'PREREQUISITE_MISSING',
+          params: { missing: 'COURRIER_VALIDATION', count: '1' },
+        },
+      ]);
     });
   });
 

@@ -18,12 +18,15 @@ import { AccessModule } from './auth/access/access.module';
 import { LoggerMiddleware } from './common/middleware/logger.middleware';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { DatabaseModule } from './database/database.module';
+import { WorkflowModule } from './workflow/workflow.module';
 import { DocumentsModule } from './documents/documents.module';
 import { DomainModule } from './domain/domain.module';
 import { InstructionsModule } from './instructions/instructions.module';
 import { DbLogger } from './logging/db.logger';
 import { MailModule } from './mail/mail.module';
+import { McpModule } from './mcp/mcp.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { PortalModule } from './portal/portal.module';
 import { RealtimeModule } from './realtime/realtime.module';
 import { ReferentialsModule } from './referentials/referentials.module';
 import { StorageModule } from './storage/storage.module';
@@ -45,8 +48,9 @@ import { SupportModule } from './support/support.module';
       },
     ]),
     DatabaseModule,
+    WorkflowModule,
     // The CREAPP core: settings, shared session store, token checks and
-    // the directory sync (companies = companies, people).
+    // the directory sync (companies = core tenants, people).
     AppConfigModule,
     SessionStoreModule,
     CoreModule,
@@ -66,8 +70,12 @@ import { SupportModule } from './support/support.module';
     StorageModule,
     AnalysisModule,
     DashboardModule,
+    // The core's "Accueil du portail": what waits for the person (GET /api/v1/portal/summary, C6).
+    PortalModule,
     SupportModule,
     RealtimeModule,
+    // The Whass AI assistant's door into the API (POST /api/v1/mcp), MCP_TOOL_LEVELS.
+    McpModule,
   ],
   controllers: [AppController],
   providers: [

@@ -1,3 +1,5 @@
+import { WorkflowService } from '../workflow/workflow.service';
+import { ClsServiceManager } from 'nestjs-cls';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Permission } from '../auth/permissions';
 import {
@@ -28,6 +30,23 @@ jest.mock('../common/utils/dossier-lifecycle', () => ({
   refreshDossierProgress: jest.fn(),
 }));
 
+// The signed-in person, as CoreAuthGuard puts them in the request context: the
+// workflow engine checks its rules' permissions against theirs.
+const signedIn: Record<string, unknown> = {};
+beforeEach(() => {
+  for (const key of Object.keys(signedIn)) delete signedIn[key];
+  Object.assign(signedIn, {
+    userId: 'u-signed-in',
+    companyId: 'company-1',
+    permissions: Object.values(Permission),
+  });
+  jest.spyOn(ClsServiceManager, 'getClsService').mockReturnValue({
+    isActive: () => true,
+    get: (key: string) => signedIn[key],
+  } as never);
+});
+afterEach(() => jest.restoreAllMocks());
+
 describe('InstructionsService', () => {
   let service: InstructionsService;
   let notifications: { create: jest.Mock };
@@ -51,6 +70,7 @@ describe('InstructionsService', () => {
     courrier: Record<string, jest.Mock>;
     contract: Record<string, jest.Mock>;
     validation: Record<string, jest.Mock>;
+    statusHistory: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
 
@@ -69,6 +89,9 @@ describe('InstructionsService', () => {
         count: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn((args: { where: { id: string } }) =>
+          database.instruction.findUnique(args),
+        ),
       },
       livrable: {
         create: jest.fn(),
@@ -80,6 +103,7 @@ describe('InstructionsService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       validation: { createMany: jest.fn(), create: jest.fn() },
+      statusHistory: { create: jest.fn().mockResolvedValue({}) },
       document: { create: jest.fn() },
       userInstructions: { delete: jest.fn() },
       instructionSubscription: { create: jest.fn() },
@@ -115,6 +139,7 @@ describe('InstructionsService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         InstructionsService,
+        WorkflowService,
         { provide: DatabaseService, useValue: database },
         { provide: NotificationsService, useValue: notifications },
         { provide: ActivityService, useValue: activity },
@@ -422,6 +447,88 @@ describe('InstructionsService', () => {
         }),
       );
     });
+
+    // Owner fix 2026-11-15: changing only the superviseur or the validateur
+    // used to wipe the executants and send the task back to A_AFFECTER.
+    it('keeps the executants and the status when only the superviseur changes', async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        id: 'i-1',
+        dossierId: 'd-1',
+        status: InstructionStatus.EN_COURS,
+        assignees: [
+          { role: 'EXECUTANT', user: { id: 'u-exec', name: 'Awa' } },
+          { role: 'SUPERVISEUR', user: { id: 'u-sup', name: 'Paul' } },
+        ],
+      });
+      database.instruction.update.mockResolvedValue({ id: 'i-1' });
+
+      await service.assign('i-1', { superviseurId: 'u-sup2' }, 'u-chef');
+
+      const data = database.instruction.update.mock.calls[0][0].data;
+      expect(data.status).toBeUndefined();
+      expect(data.assignees.createMany.data).toEqual([
+        { userId: 'u-exec', role: 'EXECUTANT' },
+        { userId: 'u-sup2', role: 'SUPERVISEUR' },
+      ]);
+      expect(database.instruction.updateMany).not.toHaveBeenCalled();
+      expect(database.statusHistory.create).not.toHaveBeenCalled();
+    });
+
+    it('keeps the executants when only the validateur changes', async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        id: 'i-1',
+        dossierId: 'd-1',
+        status: InstructionStatus.AFFECTEE,
+        assignees: [{ role: 'EXECUTANT', user: { id: 'u-exec', name: 'Awa' } }],
+      });
+      database.instruction.update.mockResolvedValue({ id: 'i-1' });
+
+      await service.assign('i-1', { validateurId: 'u-val' }, 'u-chef');
+
+      expect(
+        database.instruction.update.mock.calls[0][0].data.assignees.createMany
+          .data,
+      ).toEqual([
+        { userId: 'u-exec', role: 'EXECUTANT' },
+        { userId: 'u-val', role: 'VALIDATEUR' },
+      ]);
+      expect(database.instruction.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('new executants send the task to AFFECTEE through the workflow', async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        id: 'i-1',
+        dossierId: 'd-1',
+        status: InstructionStatus.NON_SOUSCRITE,
+        assignees: [],
+      });
+      database.instruction.update.mockResolvedValue({ id: 'i-1' });
+
+      await service.assign('i-1', { executantIds: ['u-3'] }, 'u-chef');
+
+      expect(database.instruction.updateMany).toHaveBeenCalledWith({
+        where: { id: 'i-1', status: InstructionStatus.NON_SOUSCRITE },
+        data: { status: InstructionStatus.AFFECTEE },
+      });
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          event: 'ASSIGN',
+          toStatus: 'AFFECTEE',
+        }),
+      });
+    });
+
+    it('refuses a settled task (409 INVALID_TRANSITION)', async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        id: 'i-1',
+        status: InstructionStatus.TERMINEE,
+        assignees: [],
+      });
+
+      await expect(
+        service.assign('i-1', { executantIds: ['u-3'] }, 'u-chef'),
+      ).rejects.toBeInstanceOf(ConflictException);
+    });
   });
 
   describe("an effet's supervisor", () => {
@@ -630,9 +737,10 @@ describe('InstructionsService', () => {
         assigned({ status: InstructionStatus.EN_COURS }),
       );
 
+      // 409 INVALID_TRANSITION (the workflow engine), formerly 400.
       await expect(
         service.declineSubscription('i-1', motif, 'u-awa'),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toBeInstanceOf(ConflictException);
       expect(database.userInstructions.delete).not.toHaveBeenCalled();
     });
   });
@@ -660,6 +768,7 @@ describe('InstructionsService', () => {
         ...assigned,
         courrierId: 'c-1',
       });
+      database.courrier.findUnique.mockResolvedValue({ status: 'TRANSMIS' });
 
       await service.subscribe('i-1', 'u-exec');
 
@@ -667,6 +776,29 @@ describe('InstructionsService', () => {
         where: { id: 'c-1', status: 'TRANSMIS' },
         data: { status: 'EN_TRAITEMENT' },
       });
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entity: 'Courrier',
+          entityId: 'c-1',
+          event: 'START_TREATMENT',
+          fromStatus: 'TRANSMIS',
+          toStatus: 'EN_TRAITEMENT',
+        }),
+      });
+    });
+
+    it('leaves an effet already further than TRANSMIS where it is', async () => {
+      database.instruction.findUnique.mockResolvedValue({
+        ...assigned,
+        courrierId: 'c-1',
+      });
+      database.courrier.findUnique.mockResolvedValue({
+        status: 'EN_TRAITEMENT',
+      });
+
+      await service.subscribe('i-1', 'u-exec');
+
+      expect(database.courrier.updateMany).not.toHaveBeenCalled();
     });
 
     it('leaves the effets alone for a task without one', async () => {
@@ -710,7 +842,7 @@ describe('InstructionsService', () => {
       });
 
       await expect(service.subscribe('i-1', 'u-exec')).rejects.toBeInstanceOf(
-        BadRequestException,
+        ConflictException,
       );
     });
 
@@ -1061,6 +1193,64 @@ describe('InstructionsService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
+    // Owner fix 2026-11-15: asking for corrections settles the round like a
+    // rejection — no A_CORRIGER while other livrables are still SOUMIS.
+    it('requesting corrections waits for the other submitted livrables', async () => {
+      database.instruction.findUnique.mockResolvedValue(awaiting(1));
+      database.livrable.findMany.mockResolvedValue(submitted(1));
+      // settleValidationRound: SOUMIS, open rejections, current, validated.
+      database.livrable.count
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(2)
+        .mockResolvedValueOnce(0);
+
+      await service.requestCorrections(
+        'i-1',
+        { livrables: [{ livrableId: 'l-1', motif: 'Incomplet' }] },
+        'u-sup',
+      );
+
+      expect(database.livrable.updateMany).toHaveBeenCalledWith({
+        where: { id: 'l-1', status: LivrableStatus.SOUMIS },
+        data: { status: LivrableStatus.REJETE },
+      });
+      // The motif is kept on the task, its status is not touched.
+      expect(database.instruction.update).toHaveBeenCalledWith({
+        where: { id: 'i-1' },
+        data: expect.objectContaining({ refusalReason: 'Rapport : Incomplet' }),
+      });
+      expect(database.instruction.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('requesting corrections on the last submitted livrable sends the task to A_CORRIGER', async () => {
+      database.instruction.findUnique.mockResolvedValue(awaiting(1));
+      database.livrable.findMany.mockResolvedValue(submitted(1));
+      database.livrable.count
+        .mockResolvedValueOnce(0)
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(0);
+
+      await service.requestCorrections(
+        'i-1',
+        { livrables: [{ livrableId: 'l-1', motif: 'Incomplet' }] },
+        'u-sup',
+      );
+
+      expect(database.instruction.updateMany).toHaveBeenCalledWith({
+        where: { id: 'i-1', status: InstructionStatus.EN_ATTENTE_VALIDATION },
+        data: { status: InstructionStatus.A_CORRIGER },
+      });
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entity: 'Instruction',
+          event: 'REQUEST_CORRECTIONS',
+          toStatus: InstructionStatus.A_CORRIGER,
+        }),
+      });
+    });
+
     it('the validateur never decides', async () => {
       database.instruction.findUnique.mockResolvedValue(awaiting(0));
       database.livrable.findMany.mockResolvedValue(submitted(0));
@@ -1106,7 +1296,7 @@ describe('InstructionsService', () => {
       await service.approveLivrables('i-1', 'u-sup');
 
       expect(database.livrable.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: ['l-1'] }, status: LivrableStatus.SOUMIS },
+        where: { id: 'l-1', status: LivrableStatus.SOUMIS },
         data: { status: LivrableStatus.VALIDE },
       });
     });
@@ -1143,7 +1333,7 @@ describe('InstructionsService', () => {
       await service.approveLivrables('i-1', 'u-sup');
 
       expect(database.livrable.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: ['l-1'] }, status: LivrableStatus.SOUMIS },
+        where: { id: 'l-1', status: LivrableStatus.SOUMIS },
         data: { status: LivrableStatus.VALIDE },
       });
     });
@@ -1201,18 +1391,46 @@ describe('InstructionsService', () => {
     });
 
     it('closes once every livrable is validated', async () => {
+      database.instruction.findUnique
+        .mockResolvedValueOnce({
+          id: 'i-1',
+          status: InstructionStatus.EN_COURS,
+        })
+        .mockResolvedValue({ id: 'i-1', status: InstructionStatus.TERMINEE });
+      database.livrable.count.mockResolvedValue(0);
+
+      const result = await service.close('i-1', 'Fait');
+      expect(result.status).toBe(InstructionStatus.TERMINEE);
+      expect(database.instruction.updateMany).toHaveBeenCalledWith({
+        where: { id: 'i-1', status: InstructionStatus.EN_COURS },
+        data: expect.objectContaining({
+          closingComment: 'Fait',
+          status: InstructionStatus.TERMINEE,
+        }),
+      });
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entity: 'Instruction',
+          event: 'CLOSE',
+          fromStatus: InstructionStatus.EN_COURS,
+          toStatus: InstructionStatus.TERMINEE,
+          actorId: 'u-signed-in',
+        }),
+      });
+    });
+
+    it('refuses without instruction.close (the rule of the table)', async () => {
+      signedIn.permissions = [];
       database.instruction.findUnique.mockResolvedValue({
         id: 'i-1',
         status: InstructionStatus.EN_COURS,
       });
       database.livrable.count.mockResolvedValue(0);
-      database.instruction.update.mockResolvedValue({
-        id: 'i-1',
-        status: InstructionStatus.TERMINEE,
-      });
 
-      const result = await service.close('i-1');
-      expect(result.status).toBe(InstructionStatus.TERMINEE);
+      await expect(service.close('i-1')).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(database.instruction.updateMany).not.toHaveBeenCalled();
     });
   });
 
@@ -1353,9 +1571,8 @@ describe('InstructionsService', () => {
         }),
       );
 
-      expect(database.livrable.update).toHaveBeenCalledTimes(2);
-      expect(database.livrable.update).toHaveBeenCalledWith({
-        where: { id: 'liv-1' },
+      expect(database.livrable.updateMany).toHaveBeenCalledWith({
+        where: { id: 'liv-1', status: LivrableStatus.EN_PREPARATION },
         data: {
           status: LivrableStatus.SOUMIS,
           validationStep: 0,
@@ -1373,7 +1590,7 @@ describe('InstructionsService', () => {
           parentVersionId: 'liv-2',
           title: 'Annexe',
         }),
-        select: { id: true },
+        select: { id: true, status: true },
       });
       // Its new files go to the new version, which is the one submitted.
       expect(database.document.create).toHaveBeenCalledWith(
@@ -1384,8 +1601,8 @@ describe('InstructionsService', () => {
           }),
         }),
       );
-      expect(database.livrable.update).toHaveBeenCalledWith({
-        where: { id: 'liv-2-v2' },
+      expect(database.livrable.updateMany).toHaveBeenCalledWith({
+        where: { id: 'liv-2-v2', status: LivrableStatus.EN_PREPARATION },
         data: {
           status: LivrableStatus.SOUMIS,
           validationStep: 0,
@@ -1393,9 +1610,17 @@ describe('InstructionsService', () => {
         },
       });
 
-      expect(database.instruction.update).toHaveBeenCalledWith({
-        where: { id: 'inst-1' },
+      expect(database.instruction.updateMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({ id: 'inst-1' }),
         data: { status: InstructionStatus.EN_ATTENTE_VALIDATION },
+      });
+      // The new version's creation, then each submission and the task's move.
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entityId: 'liv-2-v2',
+          event: 'NEW_VERSION',
+          fromStatus: null,
+        }),
       });
 
       expect(notifications.create).toHaveBeenCalledTimes(1);
@@ -1444,7 +1669,7 @@ describe('InstructionsService', () => {
 
       await expect(
         service.deposerLivrables('inst-1', dto, [fakeFile('f0')], 'exec-1'),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('refuses when a livrable does not belong to the instruction', async () => {

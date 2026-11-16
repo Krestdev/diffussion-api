@@ -103,7 +103,8 @@ export class InstructionsController {
     @CurrentUser() user: AuthUser,
   ) {
     await this.instructionsService.assertVisible(id, user.sub);
-    return this.instructionsService.findOne(id);
+    // With `actions`: what the signed-in person may do on it (and on each livrable).
+    return this.instructionsService.findOneWithActions(id, user.sub);
   }
 
   // Notifies its executants again — its superviseur, its creator or a

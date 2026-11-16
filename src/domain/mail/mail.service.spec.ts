@@ -17,6 +17,10 @@ import {
 import { StorageService } from '../../storage/storage.service';
 import { ActivityService } from '../../activity/activity.service';
 import { SettingsService } from '../../administration/settings/settings.service';
+import { ClsServiceManager } from 'nestjs-cls';
+import { ALL_PERMISSIONS } from '../../auth/permissions';
+import { WorkflowService } from '../../workflow/workflow.service';
+import type { ActionState } from '../../workflow/action-states';
 
 // Global types, plus a type of company s-2.
 const EFFET_TYPES: Record<string, Record<string, unknown>> = {
@@ -74,6 +78,7 @@ describe('MailService', () => {
     company: Record<string, jest.Mock>;
     user: Record<string, jest.Mock>;
     validation: Record<string, jest.Mock>;
+    statusHistory: Record<string, jest.Mock>;
     effetType: Record<string, jest.Mock>;
     canal: Record<string, jest.Mock>;
     $transaction: jest.Mock;
@@ -82,6 +87,7 @@ describe('MailService', () => {
   let notifications: { create: jest.Mock };
   let access: Record<string, jest.Mock>;
   let storage: { upload: jest.Mock; delete: jest.Mock };
+  let held: readonly string[];
 
   // The company's settings (PA·8), as SettingsService.get gives them.
   let settings: Record<string, unknown> & {
@@ -106,16 +112,28 @@ describe('MailService', () => {
         count: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findUniqueOrThrow: jest.fn(),
+        // Read back after a status change: the courrier as findUnique gives
+        // it, with what the workflow engine's last updateMany wrote.
+        findUniqueOrThrow: jest.fn(async (args: unknown) => {
+          const current = (await database.courrier.findUnique(args)) as
+            Record<string, unknown> | undefined;
+          const last = database.courrier.updateMany.mock.calls.at(-1) as
+            [{ data: Record<string, unknown> }] | undefined;
+          return { ...current, ...last?.[0].data };
+        }),
         delete: jest.fn(),
         groupBy: jest.fn().mockResolvedValue([]),
       },
-      dossier: { findUnique: jest.fn(), updateMany: jest.fn() },
+      dossier: {
+        findUnique: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       project: { findUnique: jest.fn() },
       contract: { findUnique: jest.fn() },
       instruction: {
         count: jest.fn().mockResolvedValue(0),
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
       canal: { findUnique: jest.fn() },
       document: { create: jest.fn() },
@@ -125,6 +143,8 @@ describe('MailService', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       validation: { create: jest.fn() },
+      // The workflow engine's journal (StatusHistory).
+      statusHistory: { create: jest.fn().mockResolvedValue({}) },
       // The global "Courrier" type unless a test says otherwise.
       effetType: {
         findFirst: jest.fn().mockResolvedValue({ id: 't-courrier' }),
@@ -158,6 +178,7 @@ describe('MailService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MailService,
+        WorkflowService,
         { provide: DatabaseService, useValue: database },
         { provide: NotificationsService, useValue: notifications },
         { provide: AccessService, useValue: access },
@@ -174,7 +195,19 @@ describe('MailService', () => {
     }).compile();
 
     service = module.get<MailService>(MailService);
+
+    // The signed-in person's codes, as CoreAuthGuard puts them in the request
+    // context (the workflow engine and `can` read them there): every code
+    // unless a test says otherwise.
+    held = ALL_PERMISSIONS;
+    jest.spyOn(ClsServiceManager, 'getClsService').mockReturnValue({
+      isActive: () => true,
+      get: (key: string) =>
+        key === 'permissions' ? held : key === 'companyId' ? 's-1' : undefined,
+    } as never);
   });
+
+  afterEach(() => jest.restoreAllMocks());
 
   it('is defined', () => {
     expect(service).toBeDefined();
@@ -692,7 +725,7 @@ describe('MailService', () => {
 
       await service.transmit('c-1', 'u-agent');
 
-      expect(database.courrier.update).toHaveBeenCalledWith(
+      expect(database.courrier.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           data: {
             status: CourrierStatus.TRANSMIS,
@@ -760,7 +793,7 @@ describe('MailService', () => {
       );
 
       await expect(service.transmit('c-1', 'u-1')).rejects.toBeInstanceOf(
-        BadRequestException,
+        ConflictException,
       );
     });
 
@@ -788,7 +821,7 @@ describe('MailService', () => {
         expect(
           database.courrier.create.mock.calls[0][0].data,
         ).not.toHaveProperty('transmit');
-        expect(database.courrier.update).toHaveBeenCalledWith(
+        expect(database.courrier.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({
             data: expect.objectContaining({
               status: CourrierStatus.TRANSMIS,
@@ -848,10 +881,14 @@ describe('MailService', () => {
         );
         expect(calls[0]).toMatchObject({ dossierId: 'd-1' });
         expect(calls[0]).not.toHaveProperty('transmit');
-        expect(calls).toContainEqual({
-          status: CourrierStatus.TRANSMIS,
-          transmittedAt: expect.any(Date) as Date,
-          transmittedById: 'u-dispatch',
+        // Then the transmission, through the workflow engine.
+        expect(database.courrier.updateMany).toHaveBeenCalledWith({
+          where: { id: 'c-1', status: CourrierStatus.RECU },
+          data: {
+            status: CourrierStatus.TRANSMIS,
+            transmittedAt: expect.any(Date) as Date,
+            transmittedById: 'u-dispatch',
+          },
         });
       });
 
@@ -1186,7 +1223,7 @@ describe('MailService', () => {
 
         await service.cancel('c-1', 'Le client a retiré sa demande');
 
-        expect(database.courrier.update).toHaveBeenCalledWith(
+        expect(database.courrier.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({
             data: {
               status: CourrierStatus.ANNULE,
@@ -1204,7 +1241,7 @@ describe('MailService', () => {
 
         await service.archive('c-1', 'Dossier soldé');
 
-        expect(database.courrier.update).toHaveBeenCalledWith(
+        expect(database.courrier.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({
             data: {
               status: CourrierStatus.ARCHIVE,
@@ -1222,7 +1259,7 @@ describe('MailService', () => {
         );
 
         await expect(service.archive('c-1')).rejects.toBeInstanceOf(
-          BadRequestException,
+          ConflictException,
         );
       });
 
@@ -1232,7 +1269,7 @@ describe('MailService', () => {
         );
 
         await expect(service.archive('c-1')).rejects.toBeInstanceOf(
-          BadRequestException,
+          ConflictException,
         );
       });
 
@@ -1244,7 +1281,7 @@ describe('MailService', () => {
 
         await service.unarchive('c-1');
 
-        expect(database.courrier.update).toHaveBeenCalledWith(
+        expect(database.courrier.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({
             data: {
               status: CourrierStatus.ANNULE,
@@ -1398,7 +1435,7 @@ describe('MailService', () => {
         );
 
         expect(database.courrier.updateMany).toHaveBeenCalledWith({
-          where: { id: 'c-1', status: { in: expect.any(Array) as unknown } },
+          where: { id: 'c-1', status: CourrierStatus.SIGNE },
           data: {
             status: CourrierStatus.ENVOYE,
             bordereauNumber: `BT-${new Date().getFullYear()}-000007`,
@@ -1458,7 +1495,7 @@ describe('MailService', () => {
             },
             'u-secretary',
           ),
-        ).rejects.toBeInstanceOf(BadRequestException);
+        ).rejects.toBeInstanceOf(ConflictException);
       });
 
       it('discharges a sent sortant with the discharged bordereau', async () => {
@@ -1505,26 +1542,44 @@ describe('MailService', () => {
         database.courrier.findUnique.mockResolvedValue(
           courrier(CourrierStatus.EN_TRAITEMENT, CourrierDirection.ENTRANT),
         );
-        database.instruction.updateMany.mockResolvedValue({ count: 2 });
+        database.instruction.findMany.mockResolvedValue([
+          { id: 'i-1', status: 'EN_COURS' },
+          { id: 'i-2', status: 'AFFECTEE' },
+        ]);
+        database.instruction.updateMany.mockResolvedValue({ count: 1 });
 
         await service.close('c-1', { note: 'Réponse envoyée' });
 
-        expect(database.instruction.updateMany).toHaveBeenCalledWith({
+        expect(database.instruction.findMany).toHaveBeenCalledWith({
           where: {
             courrierId: 'c-1',
             status: { notIn: ['TERMINEE', 'ANNULEE'] },
           },
+          select: { id: true, status: true },
+        });
+        // Each open instruction cancelled through the workflow engine
+        // (CANCEL_BY_COURRIER, a system change).
+        expect(database.instruction.updateMany).toHaveBeenCalledWith({
+          where: { id: 'i-1', status: 'EN_COURS' },
           data: { status: 'ANNULEE', cancellationReason: 'Effet clôturé' },
         });
-        expect(database.courrier.update).toHaveBeenCalledWith(
-          expect.objectContaining({
-            data: {
-              status: CourrierStatus.CLOTURE,
-              closedAt: expect.any(Date) as Date,
-              closingNote: 'Réponse envoyée',
-            },
-          }),
-        );
+        expect(database.instruction.updateMany).toHaveBeenCalledTimes(2);
+        expect(database.statusHistory.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            entity: 'Instruction',
+            entityId: 'i-2',
+            event: 'CANCEL_BY_COURRIER',
+            actorId: null,
+          }) as unknown,
+        });
+        expect(database.courrier.updateMany).toHaveBeenCalledWith({
+          where: { id: 'c-1', status: CourrierStatus.EN_TRAITEMENT },
+          data: {
+            status: CourrierStatus.CLOTURE,
+            closedAt: expect.any(Date) as Date,
+            closingNote: 'Réponse envoyée',
+          },
+        });
       });
 
       describe('who may close it', () => {
@@ -1552,7 +1607,7 @@ describe('MailService', () => {
           await expect(
             service.close('c-1', {}, 'u-executant'),
           ).rejects.toBeInstanceOf(ForbiddenException);
-          expect(database.courrier.update).not.toHaveBeenCalled();
+          expect(database.courrier.updateMany).not.toHaveBeenCalled();
         });
 
         it.each([
@@ -1564,7 +1619,7 @@ describe('MailService', () => {
 
           await service.close('c-1', {}, userId);
 
-          expect(database.courrier.update).toHaveBeenCalled();
+          expect(database.courrier.updateMany).toHaveBeenCalled();
         });
 
         it('lets a holder of incoming.close in its company close it', async () => {
@@ -1583,7 +1638,7 @@ describe('MailService', () => {
             'incoming.close',
             's-1',
           );
-          expect(database.courrier.update).toHaveBeenCalled();
+          expect(database.courrier.updateMany).toHaveBeenCalled();
         });
 
         it('refuses incoming.close held at another company', async () => {
@@ -1614,7 +1669,7 @@ describe('MailService', () => {
 
         await expect(
           service.submitForValidation('c-1', 'u-author'),
-        ).rejects.toBeInstanceOf(BadRequestException);
+        ).rejects.toBeInstanceOf(ConflictException);
         expect(database.courrier.update).not.toHaveBeenCalled();
       });
 
@@ -1625,7 +1680,7 @@ describe('MailService', () => {
 
         await expect(
           service.submitForValidation('c-1', 'u-author'),
-        ).rejects.toBeInstanceOf(BadRequestException);
+        ).rejects.toBeInstanceOf(ConflictException);
       });
 
       it("waits on the dossier's responsible and tells them", async () => {
@@ -1636,7 +1691,7 @@ describe('MailService', () => {
 
         await service.submitForValidation('c-1', 'u-author');
 
-        expect(database.courrier.update).toHaveBeenCalledWith(
+        expect(database.courrier.updateMany).toHaveBeenCalledWith(
           expect.objectContaining({
             data: {
               status: CourrierStatus.EN_ATTENTE_VALIDATION,
@@ -1769,7 +1824,7 @@ describe('MailService', () => {
         );
 
         await expect(service.validate('c-1', 'u-chef')).rejects.toBeInstanceOf(
-          BadRequestException,
+          ConflictException,
         );
       });
 
@@ -1964,7 +2019,7 @@ describe('MailService', () => {
           recipientIds: ['u-ct-resp'],
         }),
       );
-      expect(database.courrier.update).toHaveBeenCalledWith(
+      expect(database.courrier.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             status: CourrierStatus.TRANSMIS,
@@ -2008,7 +2063,7 @@ describe('MailService', () => {
       );
 
       expect(res.status).toBe(CourrierStatus.EN_ATTENTE_TRANSMISSION);
-      expect(database.courrier.update).toHaveBeenCalledWith(
+      expect(database.courrier.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
@@ -2258,7 +2313,7 @@ describe('MailService', () => {
         'incoming.dispatch',
         's-1',
       );
-      expect(database.courrier.update).toHaveBeenCalledWith(
+      expect(database.courrier.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
@@ -2288,7 +2343,7 @@ describe('MailService', () => {
 
       await expect(
         service.validateDispatch('c-1', 'u-validator'),
-      ).rejects.toBeInstanceOf(BadRequestException);
+      ).rejects.toBeInstanceOf(ConflictException);
     });
 
     it('rejects if no proposedProjectId', async () => {
@@ -2407,6 +2462,9 @@ describe('MailService', () => {
       access.hasAtCompany.mockResolvedValue(true);
       database.dossier.findUnique.mockResolvedValue({
         id: 'd-1',
+        // An OPEN dossier: work starts on it (OPEN -> IN_PROGRESS).
+        status: 'OPEN',
+        companyId: 's-1',
         responsibleId: 'u-d-resp',
         contractId: 'ct-1',
         company: { responsibleId: 'u-s-resp' },
@@ -2424,6 +2482,218 @@ describe('MailService', () => {
 
       expect(res.status).toBe(CourrierStatus.TRANSMIS);
       expect(database.dossier.updateMany).toHaveBeenCalled();
+    });
+  });
+
+  describe('rejectDispatch', () => {
+    const proposed = (over: Record<string, unknown> = {}) => ({
+      id: 'c-1',
+      subject: 'Effet à dispatcher',
+      direction: CourrierDirection.ENTRANT,
+      status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+      proposedProjectId: 'p-1',
+      proposedContractId: null,
+      proposedDossierId: 'd-1',
+      proposedById: 'u-agent',
+      proposedAt: new Date('2026-11-14T08:00:00Z'),
+      dossierId: null,
+      createdById: 'u-creator',
+      ...over,
+    });
+    const REASON = 'Le dossier proposé est clôturé';
+
+    beforeEach(() => {
+      // A dispatch validator at the effet's company (its registrant's, s-1).
+      database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
+      access.hasAtCompany.mockResolvedValue(true);
+    });
+
+    it('sends it back to the reception, clears the proposal and tells the proposer', async () => {
+      database.courrier.findUnique.mockResolvedValue(proposed());
+
+      const res = await service.rejectDispatch('c-1', REASON, 'u-validator');
+
+      expect(database.courrier.updateMany).toHaveBeenCalledWith({
+        where: { id: 'c-1', status: CourrierStatus.EN_ATTENTE_TRANSMISSION },
+        data: {
+          status: CourrierStatus.RECU,
+          proposedProjectId: null,
+          proposedContractId: null,
+          proposedDossierId: null,
+          proposedById: null,
+          proposedAt: null,
+          dispatchValidatedById: null,
+          dispatchValidatedAt: null,
+        },
+      });
+      expect(res.status).toBe(CourrierStatus.RECU);
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entity: 'Courrier',
+          entityId: 'c-1',
+          fromStatus: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+          toStatus: CourrierStatus.RECU,
+          event: 'REJECT_DISPATCH',
+          reason: REASON,
+        }) as unknown,
+      });
+      expect(database.validation.create).toHaveBeenCalledWith({
+        data: {
+          courrierId: 'c-1',
+          validatorId: 'u-validator',
+          decision: ValidationDecision.REJETE,
+          motif: REASON,
+        },
+      });
+      expect(notifications.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'COURRIER_DISPATCH_REJECTED',
+          recipientIds: ['u-agent'],
+          courrierId: 'c-1',
+        }),
+      );
+    });
+
+    it('refuses an effet whose dispatching is not waiting (409)', async () => {
+      database.courrier.findUnique.mockResolvedValue(
+        proposed({ status: CourrierStatus.TRANSMIS }),
+      );
+
+      await expect(
+        service.rejectDispatch('c-1', REASON, 'u-validator'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(database.courrier.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses who may not validate a dispatching at its company', async () => {
+      database.courrier.findUnique.mockResolvedValue(proposed());
+      access.hasAtCompany.mockResolvedValue(false);
+
+      await expect(
+        service.rejectDispatch('c-1', REASON, 'u-other'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(database.courrier.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses without the permission on the transition (incoming.dispatch.validate)', async () => {
+      database.courrier.findUnique.mockResolvedValue(proposed());
+      held = ALL_PERMISSIONS.filter(
+        (code) => code !== 'incoming.dispatch.validate',
+      );
+
+      await expect(
+        service.rejectDispatch('c-1', REASON, 'u-validator'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+  });
+
+  describe('actions (effet page)', () => {
+    const effet = (over: Record<string, unknown> = {}) => ({
+      id: 'c-1',
+      subject: 'Effet',
+      direction: CourrierDirection.ENTRANT,
+      status: CourrierStatus.RECU,
+      dossierId: null,
+      contractId: null,
+      projectId: null,
+      createdById: 'u-creator',
+      ownerId: null,
+      supervisorId: null,
+      proposedProjectId: null,
+      instructions: [],
+      ...over,
+    });
+    const byName = (actions: ActionState[]): Record<string, ActionState> =>
+      Object.fromEntries(actions.map((a) => [a.action, a]));
+
+    beforeEach(() => {
+      database.courrier.count.mockResolvedValue(1); // visible
+      database.user.findUnique.mockResolvedValue({
+        companyId: 's-1',
+        company: { responsibleId: 'u-company' },
+      });
+      database.company.findUnique.mockResolvedValue({
+        responsibleId: 'u-company',
+      });
+    });
+
+    it('offers a dispatcher to dispatch a received entrant, and leaves out what they can never do', async () => {
+      database.courrier.findUnique.mockResolvedValue(effet());
+      // Dispatcher at s-1 (incoming.dispatch), nothing else at the company.
+      access.hasAtCompany.mockImplementation((_u: string, code: string) =>
+        Promise.resolve(code === 'incoming.dispatch'),
+      );
+      held = ['incoming.read', 'incoming.dispatch'];
+
+      const { actions } = await service.findOneDetailed('c-1', 'u-disp');
+      const states = byName(actions);
+
+      expect(states.dispatch).toEqual({ action: 'dispatch', enabled: true });
+      expect(states.close).toBeUndefined(); // neither designated nor incoming.close
+      expect(states.sign).toBeUndefined(); // an entrant
+      expect(states.rejectDispatch).toBeUndefined(); // no incoming.dispatch.validate
+      // Validated by the company's responsible, not by them.
+      expect(states.validate).toBeUndefined();
+      expect(states.validateDispatch).toEqual({
+        action: 'validateDispatch',
+        enabled: false,
+        reason: 'WRONG_STATUS',
+        params: { status: 'RECU' },
+      });
+    });
+
+    it('disables the decisions on a proposal for whoever may not validate it, with their reason', async () => {
+      database.courrier.findUnique.mockResolvedValue(
+        effet({
+          status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
+          proposedProjectId: 'p-1',
+          proposedDossierId: 'd-1',
+        }),
+      );
+      access.hasAtCompany.mockResolvedValue(true);
+      held = ['incoming.read', 'incoming.dispatch.validate'];
+
+      const states = byName(
+        (await service.findOneDetailed('c-1', 'u-val')).actions,
+      );
+      expect(states.validateDispatch.enabled).toBe(true);
+      expect(states.rejectDispatch.enabled).toBe(true);
+      // An effet waiting for its dispatching can't be edited any more.
+      expect(states.edit).toMatchObject({
+        enabled: false,
+        reason: 'WRONG_STATUS',
+      });
+    });
+
+    it('lets the validator of a sortant decide, and its author only wait', async () => {
+      const sortant = effet({
+        direction: CourrierDirection.SORTANT,
+        status: CourrierStatus.EN_ATTENTE_VALIDATION,
+      });
+      database.courrier.findUnique.mockResolvedValue(sortant);
+      access.hasAtCompany.mockResolvedValue(false);
+      held = ['outgoing.read', 'outgoing.update', 'outgoing.send'];
+
+      const forValidator = byName(
+        (await service.findOneDetailed('c-1', 'u-company')).actions,
+      );
+      expect(forValidator.validate).toEqual({
+        action: 'validate',
+        enabled: true,
+      });
+      expect(forValidator.sign).toEqual({
+        action: 'sign',
+        enabled: false,
+        reason: 'WRONG_STATUS',
+        params: { status: 'EN_ATTENTE_VALIDATION' },
+      });
+
+      const forAuthor = byName(
+        (await service.findOneDetailed('c-1', 'u-creator')).actions,
+      );
+      expect(forAuthor.validate).toBeUndefined();
+      expect(forAuthor.cancel).toEqual({ action: 'cancel', enabled: true });
+      expect(forAuthor.dispatch).toBeUndefined(); // a sortant
     });
   });
 

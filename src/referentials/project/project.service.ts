@@ -41,6 +41,17 @@ import { overdueWhere } from '../../instructions/instruction-overdue';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { FindProjectsQueryDto } from './dto/find-projects.query.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
+import { can } from '../../auth/access/permission-checks';
+import { ActionStates, needsStatus } from '../../workflow/action-states';
+import {
+  invalidTransition,
+  WorkflowService,
+} from '../../workflow/workflow.service';
+import {
+  PROJECT_STATES,
+  ProjectEvent,
+  projectEventFor,
+} from './project.states';
 
 const projectInclude = {
   company: { select: { id: true, code: true, name: true } },
@@ -52,11 +63,12 @@ const projectInclude = {
 // A contract "ends soon" within this many days (the metrics card).
 const ENDING_SOON_DAYS = 60;
 
-// The status a project may move to from each one: one step forward or back.
-const NEXT_STATUSES: Record<ProjectStatus, ProjectStatus[]> = {
-  [ProjectStatus.ACTIVE]: [ProjectStatus.CLOSED],
-  [ProjectStatus.CLOSED]: [ProjectStatus.ACTIVE, ProjectStatus.ARCHIVED],
-  [ProjectStatus.ARCHIVED]: [ProjectStatus.CLOSED],
+// The event asked for when a target can't be reached from the project's status (the error's
+// params): what moving to it is called.
+const EVENT_TOWARDS: Record<ProjectStatus, ProjectEvent> = {
+  [ProjectStatus.ACTIVE]: 'REOPEN',
+  [ProjectStatus.CLOSED]: 'CLOSE',
+  [ProjectStatus.ARCHIVED]: 'ARCHIVE',
 };
 
 export { COURRIER_DONE };
@@ -74,6 +86,7 @@ export class ProjectService {
     private readonly activity: ActivityService,
     private readonly access: AccessService,
     private readonly notifications: NotificationsService,
+    private readonly workflow: WorkflowService,
   ) {}
 
   @AuditLog({
@@ -102,18 +115,23 @@ export class ProjectService {
     await this.assertLinks(data, undefined, companyId);
     const dates = toDates(startDate, endDate);
     assertDateOrder(dates.startDate, dates.endDate);
-    return this.database.project.create({
-      data: {
-        ...data,
-        ...dates,
+    const maitreOuvrageId = await this.maitreOuvrageId(
+      data,
+      maitreOuvrageName,
+      companyId,
+    );
+    return this.database.$transaction(async (tx) => {
+      const created = await tx.project.create({
+        data: { ...data, ...dates, companyId, maitreOuvrageId },
+        include: projectInclude,
+      });
+      await this.workflow.record(tx, {
+        table: PROJECT_STATES,
+        entityId: created.id,
+        toStatus: created.status,
         companyId,
-        maitreOuvrageId: await this.maitreOuvrageId(
-          data,
-          maitreOuvrageName,
-          companyId,
-        ),
-      },
-      include: projectInclude,
+      });
+      return created;
     });
   }
 
@@ -176,7 +194,34 @@ export class ProjectService {
       this.findOne(id),
       this.projectMetrics(id),
     ]);
-    return { ...project, metrics };
+    return { ...project, metrics, actions: this.actionsOf(project) };
+  }
+
+  /**
+   * Every action on the project the person's permissions allow, disabled with the reason it is
+   * blocked now (owner standard: hidden when the role can never do it).
+   */
+  actionsOf(project: { status: ProjectStatus }) {
+    const { status } = project;
+    const updater = can(Permission.PROJECT_UPDATE);
+    const archiver = can(Permission.PROJECT_ARCHIVE);
+    return new ActionStates<
+      'edit' | 'close' | 'reopen' | 'archive' | 'unarchive' | 'delete'
+    >()
+      .addIf(updater, 'edit')
+      .addIf(updater, 'close', needsStatus(PROJECT_STATES, status, 'CLOSE'))
+      .addIf(updater, 'reopen', needsStatus(PROJECT_STATES, status, 'REOPEN'))
+      .addIf(
+        archiver,
+        'archive',
+        needsStatus(PROJECT_STATES, status, 'ARCHIVE'),
+      )
+      .addIf(
+        archiver,
+        'unarchive',
+        needsStatus(PROJECT_STATES, status, 'UNARCHIVE'),
+      )
+      .addIf(archiver, 'delete').all;
   }
 
   // Closing and archiving go through `status`; closedAt / archivedAt are
@@ -254,14 +299,30 @@ export class ProjectService {
     const save = (db: Prisma.TransactionClient) =>
       db.project.update({
         where: { id },
-        data: { ...data, ...dates, maitreOuvrageId, ...change },
+        data: { ...data, ...dates, maitreOuvrageId },
         include: projectInclude,
       });
     if (!change) return save(this.database);
     // Everything in the project follows its status, or nothing does.
     return this.database.$transaction(
       async (tx) => {
-        await cascadeProjectStatus(tx, project, status!, change);
+        await this.workflow.transition(tx, {
+          table: PROJECT_STATES,
+          delegate: tx.project,
+          entityId: id,
+          event: change.event,
+          from: project.status,
+          reason: reason ?? note ?? null,
+          data: change.data,
+          companyId: project.companyId,
+        });
+        await cascadeProjectStatus(
+          tx,
+          this.workflow,
+          project,
+          status!,
+          change.data,
+        );
         return save(tx);
       },
       { timeout: 60_000 },
@@ -607,22 +668,23 @@ function statusChange(
   to: ProjectStatus,
   reason: string | undefined,
 ) {
-  if (!NEXT_STATUSES[from].includes(to)) {
-    throw new BadRequestException(
-      `A project can't go from ${from} to ${to} (expected one of: ${NEXT_STATUSES[from].join(', ')})`,
-    );
-  }
+  // One step at a time (PROJECT_STATES): anything else is an invalid transition.
+  const event = projectEventFor(from, to);
+  if (!event) throw invalidTransition('Project', from, EVENT_TOWARDS[to]);
   const now = new Date();
   switch (to) {
     case ProjectStatus.ACTIVE:
-      return { status: to, closedAt: null };
+      return { event, data: { closedAt: null } };
     case ProjectStatus.CLOSED:
       // Unarchiving keeps the original closing date.
       return from === ProjectStatus.ARCHIVED
-        ? { status: to, archivedAt: null, archiveReason: null }
-        : { status: to, closedAt: now };
+        ? { event, data: { archivedAt: null, archiveReason: null } }
+        : { event, data: { closedAt: now } };
     case ProjectStatus.ARCHIVED:
-      return { status: to, archivedAt: now, archiveReason: reason ?? null };
+      return {
+        event,
+        data: { archivedAt: now, archiveReason: reason ?? null },
+      };
   }
 }
 

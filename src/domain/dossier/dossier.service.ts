@@ -38,7 +38,16 @@ import {
 import { assertDossierTypeUsable } from '../../referentials/dossier-type/dossier-type.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
+import { can } from '../../auth/access/permission-checks';
+import {
+  ActionBlockReason,
+  ActionStates,
+  blocked,
+  needsStatus,
+} from '../../workflow/action-states';
+import { WorkflowService } from '../../workflow/workflow.service';
 import { CreateDossierDto } from './dto/create-dossier.dto';
+import { DOSSIER_STATES, DossierEvent } from './dossier.states';
 import { FindDossiersQueryDto } from './dto/find-dossiers.query.dto';
 import { UpdateDossierDto } from './dto/update-dossier.dto';
 
@@ -65,6 +74,14 @@ const TERMINAL_INSTRUCTION_STATUSES: InstructionStatus[] = [
 
 // Statuses that turn LATE once the due date has passed (and that a LATE
 // dossier returns from, as IN_PROGRESS, when its due date is pushed back).
+// Still being worked on: editable (RG-DOS-007).
+const ACTIVE_STATUSES: DossierStatus[] = [
+  DossierStatus.OPEN,
+  DossierStatus.IN_PROGRESS,
+  DossierStatus.PENDING,
+  DossierStatus.LATE,
+];
+
 const LATENESS_ELIGIBLE_STATUSES: DossierStatus[] = [
   DossierStatus.OPEN,
   DossierStatus.IN_PROGRESS,
@@ -99,6 +116,7 @@ export class DossierService {
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
     private readonly notifications: NotificationsService,
+    private readonly workflow: WorkflowService,
   ) {}
 
   @AuditLog({
@@ -132,20 +150,29 @@ export class DossierService {
       openedAt,
     );
     const create = (number: string) =>
-      this.database.dossier.create({
-        data: {
-          ...data,
-          projectId,
-          number,
-          openedAt,
-          dueDate,
-          status: statusForDueDate(DossierStatus.OPEN, dueDate),
-          retentionUntil,
-          keywords: keywords ?? [],
-          responsibleId,
-          createdById,
-        },
-        include: dossierInclude,
+      this.database.$transaction(async (tx) => {
+        const created = await tx.dossier.create({
+          data: {
+            ...data,
+            projectId,
+            number,
+            openedAt,
+            dueDate,
+            status: statusForDueDate(DossierStatus.OPEN, dueDate),
+            retentionUntil,
+            keywords: keywords ?? [],
+            responsibleId,
+            createdById,
+          },
+          include: dossierInclude,
+        });
+        await this.workflow.record(tx, {
+          table: DOSSIER_STATES,
+          entityId: created.id,
+          toStatus: created.status,
+          companyId: created.companyId,
+        });
+        return created;
       });
     if (!givenNumber) {
       return createWithUniqueReference('D', create);
@@ -318,18 +345,33 @@ export class DossierService {
     const dueDateChanged = 'dueDate' in dto;
     const dueDate = rawDueDate ? new Date(rawDueDate) : null;
 
-    return this.database.dossier.update({
-      where: { id },
-      data: {
-        ...data,
-        projectId,
-        keywords,
-        retentionUntil,
-        ...(dueDateChanged
-          ? { dueDate, status: statusForDueDate(dossier.status, dueDate) }
-          : {}),
-      },
-      include: dossierInclude,
+    // A due date moved past (or back before) today changes the status (DUE_DATE_CHANGED).
+    const status = dueDateChanged
+      ? statusForDueDate(dossier.status, dueDate)
+      : dossier.status;
+    return this.database.$transaction(async (tx) => {
+      if (status !== dossier.status) {
+        await this.workflow.transition(tx, {
+          table: DOSSIER_STATES,
+          delegate: tx.dossier,
+          entityId: id,
+          event: 'DUE_DATE_CHANGED',
+          from: dossier.status,
+          to: status,
+          companyId: dossier.companyId,
+        });
+      }
+      return tx.dossier.update({
+        where: { id },
+        data: {
+          ...data,
+          projectId,
+          keywords,
+          retentionUntil,
+          ...(dueDateChanged ? { dueDate } : {}),
+        },
+        include: dossierInclude,
+      });
     });
   }
 
@@ -342,22 +384,10 @@ export class DossierService {
     operation: 'UPDATE',
   })
   async close(id: string) {
-    await this.ensureMutable(id);
+    const dossier = await this.findOne(id);
+    this.workflow.assertAllowed(DOSSIER_STATES, dossier.status, 'CLOSE');
 
-    const [pending, awaitingValidation] = await Promise.all([
-      this.database.instruction.count({
-        where: {
-          dossierId: id,
-          status: { notIn: TERMINAL_INSTRUCTION_STATUSES },
-        },
-      }),
-      this.database.courrier.count({
-        where: {
-          dossierId: id,
-          status: CourrierStatus.EN_ATTENTE_VALIDATION,
-        },
-      }),
-    ]);
+    const { pending, awaitingValidation } = await this.openWork(id);
     if (pending > 0) {
       throw new BadRequestException(
         `${pending} instruction(s) are still open — a dossier can only be closed once every instruction is terminated or cancelled`,
@@ -369,11 +399,7 @@ export class DossierService {
       );
     }
 
-    return this.database.dossier.update({
-      where: { id },
-      data: { status: DossierStatus.CLOSED, closedAt: new Date() },
-      include: dossierInclude,
-    });
+    return this.move(dossier, 'CLOSE', { closedAt: new Date() });
   }
 
   // RG-DOS-008: reopening is described as an exceptional procedure decided
@@ -386,18 +412,13 @@ export class DossierService {
   })
   async reopen(id: string) {
     const dossier = await this.findOne(id);
-    if (dossier.status !== DossierStatus.CLOSED) {
-      throw new BadRequestException('Only a closed dossier can be reopened');
-    }
-    return this.database.dossier.update({
-      where: { id },
-      data: {
-        status: statusForDueDate(DossierStatus.IN_PROGRESS, dossier.dueDate),
-        closedAt: null,
-        archivedAt: null,
-      },
-      include: dossierInclude,
-    });
+    this.workflow.assertAllowed(DOSSIER_STATES, dossier.status, 'REOPEN');
+    return this.move(
+      dossier,
+      'REOPEN',
+      { closedAt: null, archivedAt: null },
+      statusForDueDate(DossierStatus.IN_PROGRESS, dossier.dueDate),
+    );
   }
 
   // 10.8.3: a dossier must be closed before it is eligible for archiving.
@@ -408,18 +429,13 @@ export class DossierService {
   })
   async archive(id: string, reason?: string) {
     const dossier = await this.findOne(id);
-    if (dossier.status !== DossierStatus.CLOSED) {
-      throw new BadRequestException('Only a closed dossier can be archived');
-    }
-    return this.database.dossier.update({
-      where: { id },
-      data: {
-        status: DossierStatus.ARCHIVED,
-        archivedAt: new Date(),
-        archiveReason: reason ?? null,
-      },
-      include: dossierInclude,
-    });
+    return this.move(
+      dossier,
+      'ARCHIVE',
+      { archivedAt: new Date(), archiveReason: reason ?? null },
+      undefined,
+      reason,
+    );
   }
 
   // Inverse of archive() — brings a dossier back to CLOSED (not straight to
@@ -434,18 +450,13 @@ export class DossierService {
   async unarchive(id: string, note?: string) {
     void note; // Read by @AuditLog.
     const dossier = await this.findOne(id);
-    if (dossier.status !== DossierStatus.ARCHIVED) {
-      throw new BadRequestException('Only an archived dossier can be restored');
-    }
-    return this.database.dossier.update({
-      where: { id },
-      data: {
-        status: DossierStatus.CLOSED,
-        archivedAt: null,
-        archiveReason: null,
-      },
-      include: dossierInclude,
-    });
+    return this.move(
+      dossier,
+      'UNARCHIVE',
+      { archivedAt: null, archiveReason: null },
+      undefined,
+      note,
+    );
   }
 
   async getCourriers(id: string, query: PaginationQueryDto, userId?: string) {
@@ -710,6 +721,109 @@ export class DossierService {
     const until = new Date(openedAt);
     until.setMonth(until.getMonth() + category.retentionMonths);
     return until;
+  }
+
+  /** A dossier with the actions the signed-in person may take on it (GET /dossiers/:id). */
+  async detail(id: string, userId?: string) {
+    const dossier = await this.findOne(id, userId);
+    return { ...dossier, actions: await this.actionsOf(dossier) };
+  }
+
+  /**
+   * Every action on the dossier the person's permissions allow, disabled with the reason it
+   * is blocked now (owner standard: hidden when the role can never do it).
+   */
+  async actionsOf(dossier: { id: string; status: DossierStatus }) {
+    const status = dossier.status;
+    const actions = new ActionStates<
+      'edit' | 'close' | 'reopen' | 'archive' | 'unarchive'
+    >();
+    actions.addIf(
+      can(Permission.DOSSIER_UPDATE),
+      'edit',
+      !ACTIVE_STATUSES.includes(status) &&
+        blocked(ActionBlockReason.WRONG_STATUS, { status }),
+    );
+    if (can(Permission.DOSSIER_CLOSE)) {
+      const wrong = needsStatus(DOSSIER_STATES, status, 'CLOSE');
+      const work = wrong ? null : await this.openWork(dossier.id);
+      actions.add(
+        'close',
+        wrong,
+        !!work?.pending &&
+          blocked(ActionBlockReason.INSTRUCTIONS_OPEN, {
+            count: String(work.pending),
+          }),
+        !!work?.awaitingValidation &&
+          blocked(ActionBlockReason.PREREQUISITE_MISSING, {
+            missing: 'COURRIER_VALIDATION',
+            count: String(work.awaitingValidation),
+          }),
+      );
+    }
+    actions.addIf(
+      can(Permission.DOSSIER_REOPEN),
+      'reopen',
+      needsStatus(DOSSIER_STATES, status, 'REOPEN'),
+    );
+    const archiver = can(Permission.DOSSIER_ARCHIVE);
+    actions.addIf(
+      archiver,
+      'archive',
+      needsStatus(DOSSIER_STATES, status, 'ARCHIVE'),
+    );
+    actions.addIf(
+      archiver,
+      'unarchive',
+      needsStatus(DOSSIER_STATES, status, 'UNARCHIVE'),
+    );
+    return actions.all;
+  }
+
+  // RG-DOS-005: what keeps a dossier from closing.
+  private async openWork(id: string) {
+    const [pending, awaitingValidation] = await Promise.all([
+      this.database.instruction.count({
+        where: {
+          dossierId: id,
+          status: { notIn: TERMINAL_INSTRUCTION_STATUSES },
+        },
+      }),
+      this.database.courrier.count({
+        where: {
+          dossierId: id,
+          status: CourrierStatus.EN_ATTENTE_VALIDATION,
+        },
+      }),
+    ]);
+    return { pending, awaitingValidation };
+  }
+
+  // One status change through the workflow engine (StatusHistory), with its fields.
+  private async move(
+    dossier: { id: string; status: DossierStatus; companyId: string },
+    event: DossierEvent,
+    data: Prisma.DossierUncheckedUpdateInput,
+    to?: DossierStatus,
+    reason?: string,
+  ) {
+    return this.database.$transaction(async (tx) => {
+      await this.workflow.transition(tx, {
+        table: DOSSIER_STATES,
+        delegate: tx.dossier,
+        entityId: dossier.id,
+        event,
+        from: dossier.status,
+        to,
+        reason,
+        data,
+        companyId: dossier.companyId,
+      });
+      return tx.dossier.findUniqueOrThrow({
+        where: { id: dossier.id },
+        include: dossierInclude,
+      });
+    });
   }
 
   private async ensureMutable(id: string) {

@@ -26,6 +26,7 @@ import {
 } from '../common/utils/livrable-history';
 import { createWithUniqueReference } from '../common/utils/generate-reference';
 import {
+  ACTIVE_DOSSIER_STATUSES,
   assertDossierOpenForActivity,
   markDossierInProgress,
   refreshDossierProgress,
@@ -54,6 +55,15 @@ import { ownCompanyFilter } from '../common/utils/company-referentials';
 import { taskOfCompany } from '../common/utils/company-where';
 import { StorageService } from '../storage/storage.service';
 import { DeposerLivrablesDto } from './dto/deposer-livrables.dto';
+import { WorkflowService } from '../workflow/workflow.service';
+import { INSTRUCTION_STATES, InstructionEvent } from './instruction.states';
+import { LIVRABLE_STATES } from '../domain/deliverable/livrable.states';
+import { COURRIER_ENTRANT_STATES } from '../domain/mail/courrier.states';
+import {
+  instructionActions,
+  REMIND_INTERVAL_MS,
+  REMINDABLE_STATUSES,
+} from './instruction-actions';
 
 const dependencyRefSelect = { id: true, number: true, title: true } as const;
 
@@ -217,16 +227,6 @@ const ACTIVE_INSTRUCTION_STATUSES: InstructionStatus[] = [
   InstructionStatus.A_CORRIGER,
 ];
 
-// The executants owe something: not subscribed yet, at work, or correcting.
-const REMINDABLE_STATUSES: InstructionStatus[] = [
-  InstructionStatus.AFFECTEE,
-  InstructionStatus.EN_COURS,
-  InstructionStatus.A_CORRIGER,
-];
-
-// At most one reminder per task in this window.
-const REMIND_INTERVAL_MS = 60 * 60 * 1000;
-
 @Injectable()
 export class InstructionsService {
   constructor(
@@ -236,14 +236,43 @@ export class InstructionsService {
     private readonly storage: StorageService,
     private readonly access: AccessService,
     private readonly settings: SettingsService,
+    private readonly workflow: WorkflowService,
   ) {}
+
+  /** One status change of an instruction, through the workflow engine (StatusHistory). */
+  private moveInstruction(
+    tx: Prisma.TransactionClient,
+    id: string,
+    event: InstructionEvent,
+    options: {
+      from?: InstructionStatus;
+      to?: InstructionStatus;
+      reason?: string | null;
+      data?: Record<string, unknown>;
+    } = {},
+  ) {
+    return this.workflow.transition(tx, {
+      table: INSTRUCTION_STATES,
+      delegate: tx.instruction,
+      entityId: id,
+      event,
+      ...options,
+    });
+  }
+
+  /** The instruction; 409 INVALID_TRANSITION unless the event is allowed from its status. */
+  private async requireEvent(id: string, event: InstructionEvent) {
+    const instruction = await this.findOne(id);
+    this.workflow.assertAllowed(INSTRUCTION_STATES, instruction.status, event);
+    return instruction;
+  }
 
   /**
    * Reminds the executants of a task: by its superviseur, else its creator,
    * or a platform administrator. Once an hour at most.
    */
   async remind(id: string, userId: string) {
-    const instruction = await this.requireStatus(id, REMINDABLE_STATUSES);
+    const instruction = await this.requireStatus(id, [...REMINDABLE_STATUSES]);
     const superviseurs = instruction.assignees
       .filter((assignee) => assignee.role === UserInstructionRole.SUPERVISEUR)
       .map((assignee) => assignee.user.id);
@@ -704,6 +733,20 @@ export class InstructionsService {
     });
     this.notifyAssignment(instruction, assigneeIds, createdById);
 
+    await this.database.$transaction(async (tx) => {
+      await this.workflow.record(tx, {
+        table: INSTRUCTION_STATES,
+        entityId: instruction.id,
+        toStatus: instruction.status,
+      });
+      for (const livrable of instruction.livrables ?? []) {
+        await this.workflow.record(tx, {
+          table: LIVRABLE_STATES,
+          entityId: livrable.id,
+          toStatus: livrable.status,
+        });
+      }
+    });
     if (instruction.dossierId) {
       await markDossierInProgress(this.database, instruction.dossierId);
       await refreshDossierProgress(this.database, instruction.dossierId);
@@ -942,6 +985,52 @@ export class InstructionsService {
     return withOverdue(instruction);
   }
 
+  /**
+   * GET /instructions/:id: the task with `actions` (what the signed-in person may do on it, or
+   * why not now) and `actions` on each of its livrables.
+   */
+  async findOneWithActions(id: string, userId: string) {
+    const instruction = await this.findOne(id);
+    const [effet, dossier, contract] = await Promise.all([
+      instruction.courrierId
+        ? this.database.courrier.findUnique({
+            where: { id: instruction.courrierId },
+            select: { supervisorId: true },
+          })
+        : null,
+      instruction.dossierId
+        ? this.database.dossier.findUnique({
+            where: { id: instruction.dossierId },
+            select: { status: true },
+          })
+        : null,
+      instruction.contractId
+        ? this.database.contract.findUnique({
+            where: { id: instruction.contractId },
+            select: { status: true },
+          })
+        : null,
+    ]);
+    const workspaceOpen = dossier
+      ? ACTIVE_DOSSIER_STATUSES.includes(dossier.status)
+      : contract
+        ? contract.status !== ContractStatus.ARCHIVED
+        : true;
+    const { actions, livrables } = instructionActions(instruction, {
+      userId,
+      courrierSupervisorId: effet?.supervisorId ?? null,
+      workspaceOpen,
+    });
+    return {
+      ...instruction,
+      livrables: instruction.livrables.map((livrable) => ({
+        ...livrable,
+        actions: livrables.get(livrable.id) ?? [],
+      })),
+      actions,
+    };
+  }
+
   // Its company's users, whoever it is assigned to or was created by, and the
   // platform's administrators. Anyone else: as if it didn't exist.
   async assertVisible(id: string, userId: string) {
@@ -1093,7 +1182,7 @@ export class InstructionsService {
       },
       { entity: 'instruction', id },
     );
-    const instruction = await this.ensureNotTerminal(id);
+    const instruction = await this.requireEvent(id, 'ASSIGN');
     if (!dto.executantIds?.length && !dto.superviseurId && !dto.validateurId) {
       throw new BadRequestException(
         'Provide at least one executant, a superviseur or a validateur',
@@ -1102,12 +1191,20 @@ export class InstructionsService {
 
     // Merge: keep existing roles not explicitly mentioned in this call.
     // Sending only executantIds keeps the validateur and the superviseur,
-    // and vice-versa.
+    // and vice-versa: changing only the superviseur or the validateur keeps
+    // the executants and the status (owner fix 2026-11-15).
     const current = (role: UserInstructionRole) =>
       (instruction.assignees ?? []).find((assignee) => assignee.role === role)
         ?.user.id;
+    const executantsChange = dto.executantIds !== undefined;
     const mergedDto = {
-      executantIds: dto.executantIds,
+      executantIds: executantsChange
+        ? dto.executantIds
+        : (instruction.assignees ?? [])
+            .filter(
+              (assignee) => assignee.role === UserInstructionRole.EXECUTANT,
+            )
+            .map((assignee) => assignee.user.id),
       validateurId: dto.validateurId ?? current(UserInstructionRole.VALIDATEUR),
       superviseurId:
         dto.superviseurId ?? current(UserInstructionRole.SUPERVISEUR),
@@ -1121,10 +1218,15 @@ export class InstructionsService {
         where: { instructionId: instruction.id, status: LivrableStatus.SOUMIS },
         data: { validationStep: 0 },
       });
+      if (executantsChange) {
+        await this.moveInstruction(tx, instruction.id, 'ASSIGN', {
+          from: instruction.status,
+          to: statusOnAssignment(mergedDto.executantIds),
+        });
+      }
       return tx.instruction.update({
         where: { id: instruction.id },
         data: {
-          status: statusOnAssignment(mergedDto.executantIds),
           assignedAt: instruction.assignedAt ?? new Date(),
           assignNote: dto.note ?? undefined,
           assignees: {
@@ -1165,9 +1267,7 @@ export class InstructionsService {
     dto: DeclineSubscriptionDto,
     userId: string,
   ) {
-    const instruction = await this.requireStatus(id, [
-      InstructionStatus.AFFECTEE,
-    ]);
+    const instruction = await this.requireEvent(id, 'DECLINE');
     const executants = instruction.assignees.filter(
       (assignee) => assignee.role === UserInstructionRole.EXECUTANT,
     );
@@ -1199,16 +1299,12 @@ export class InstructionsService {
       });
       if (othersLeft === 0) {
         // Guarded on the status read above: someone subscribing meanwhile
-        // keeps the task where it is.
-        const { count } = await tx.instruction.updateMany({
-          where: { id, status: InstructionStatus.AFFECTEE },
-          data: { status: InstructionStatus.NON_SOUSCRITE },
+        // keeps the task where it is (409 CONCURRENT_UPDATE).
+        await this.moveInstruction(tx, id, 'DECLINE', {
+          from: instruction.status,
+          to: InstructionStatus.NON_SOUSCRITE,
+          reason: dto.motif,
         });
-        if (count === 0) {
-          throw new ConflictException(
-            'This task changed meanwhile — refresh and try again',
-          );
-        }
       }
     });
 
@@ -1236,9 +1332,7 @@ export class InstructionsService {
   // AFFECTEE -> EN_COURS: an executant of the task subscribes to it. By
   // designation — being one of its executants is what allows it.
   async subscribe(id: string, userId: string) {
-    const instruction = await this.requireStatus(id, [
-      InstructionStatus.AFFECTEE,
-    ]);
+    const instruction = await this.requireEvent(id, 'SUBSCRIBE');
     const isExecutant = instruction.assignees.some(
       (assignee) =>
         assignee.user.id === userId &&
@@ -1252,15 +1346,9 @@ export class InstructionsService {
     // Guarded on the status read above: two executants subscribing at once
     // move it only once.
     await this.database.$transaction(async (tx) => {
-      const { count } = await tx.instruction.updateMany({
-        where: { id, status: InstructionStatus.AFFECTEE },
-        data: { status: InstructionStatus.EN_COURS },
+      await this.moveInstruction(tx, id, 'SUBSCRIBE', {
+        from: instruction.status,
       });
-      if (count === 0) {
-        throw new ConflictException(
-          'Someone subscribed to this task meanwhile — refresh and try again',
-        );
-      }
       await tx.instructionSubscription.create({
         data: {
           instructionId: id,
@@ -1271,14 +1359,18 @@ export class InstructionsService {
       // The first executant at work on a task of an effet puts that effet
       // "En traitement" (only from TRANSMIS: once is enough).
       if (instruction.courrierId) {
-        const { count: started } = await tx.courrier.updateMany({
-          where: {
-            id: instruction.courrierId,
-            status: CourrierStatus.TRANSMIS,
-          },
-          data: { status: CourrierStatus.EN_TRAITEMENT },
+        const effet = await tx.courrier.findUnique({
+          where: { id: instruction.courrierId },
+          select: { status: true },
         });
-        if (started) {
+        if (effet?.status === CourrierStatus.TRANSMIS) {
+          await this.workflow.transition(tx, {
+            table: COURRIER_ENTRANT_STATES,
+            delegate: tx.courrier,
+            entityId: instruction.courrierId,
+            event: 'START_TREATMENT',
+            from: effet.status,
+          });
           await this.activity.tryRecord({
             action: 'COURRIER_EN_TRAITEMENT',
             entityType: 'Courrier',
@@ -1316,11 +1408,7 @@ export class InstructionsService {
   // already be VALIDE (RG-LIV-005 — validation is pronounced on the
   // instruction as a whole, so this is the gate for that pronouncement).
   async close(id: string, comment?: string) {
-    const instruction = await this.requireStatus(id, [
-      InstructionStatus.EN_COURS,
-      InstructionStatus.A_CORRIGER,
-      InstructionStatus.EN_ATTENTE_VALIDATION,
-    ]);
+    const instruction = await this.requireEvent(id, 'CLOSE');
 
     // Current versions only: a rejected version replaced by a validated
     // one is history, not an outstanding livrable.
@@ -1337,14 +1425,16 @@ export class InstructionsService {
       );
     }
 
-    const closed = await this.database.instruction.update({
-      where: { id: instruction.id },
-      data: {
-        status: InstructionStatus.TERMINEE,
-        closedAt: new Date(),
-        closingComment: comment ?? undefined,
-      },
-      include: instructionInclude,
+    const closed = await this.database.$transaction(async (tx) => {
+      await this.moveInstruction(tx, instruction.id, 'CLOSE', {
+        from: instruction.status,
+        reason: comment ?? null,
+        data: { closedAt: new Date(), closingComment: comment ?? undefined },
+      });
+      return tx.instruction.findUniqueOrThrow({
+        where: { id: instruction.id },
+        include: instructionInclude,
+      });
     });
     if (closed.dossierId) {
       await refreshDossierProgress(this.database, closed.dossierId);
@@ -1354,14 +1444,17 @@ export class InstructionsService {
   }
 
   async cancel(id: string, reason?: string) {
-    const instruction = await this.ensureNotTerminal(id);
-    const cancelled = await this.database.instruction.update({
-      where: { id: instruction.id },
-      data: {
-        status: InstructionStatus.ANNULEE,
-        cancellationReason: reason ?? undefined,
-      },
-      include: instructionInclude,
+    const instruction = await this.requireEvent(id, 'CANCEL');
+    const cancelled = await this.database.$transaction(async (tx) => {
+      await this.moveInstruction(tx, instruction.id, 'CANCEL', {
+        from: instruction.status,
+        reason: reason ?? null,
+        data: { cancellationReason: reason ?? undefined },
+      });
+      return tx.instruction.findUniqueOrThrow({
+        where: { id: instruction.id },
+        include: instructionInclude,
+      });
     });
     if (cancelled.dossierId) {
       await refreshDossierProgress(this.database, cancelled.dossierId);
@@ -1408,7 +1501,7 @@ export class InstructionsService {
     dto: RequestCorrectionsDto,
     validatorId: string,
   ) {
-    const instruction = await this.requireStatus(id, DECIDING_STATUSES);
+    const instruction = await this.requireEvent(id, 'REQUEST_CORRECTIONS');
     const livrables = await this.requireSubmitted(
       instruction.id,
       dto.livrables.map((entry) => entry.livrableId),
@@ -1432,10 +1525,9 @@ export class InstructionsService {
           })),
         },
       );
-      return tx.instruction.update({
+      await tx.instruction.update({
         where: { id: instruction.id },
         data: {
-          status: InstructionStatus.A_CORRIGER,
           refusalReason:
             dto.comment ??
             livrables
@@ -1447,6 +1539,16 @@ export class InstructionsService {
             ? { agentDueDate: new Date(dto.agentDueDate) }
             : {}),
         },
+      });
+      // Settled like a rejection (owner fix 2026-11-15): A_CORRIGER once no
+      // other livrable is still SOUMIS.
+      await this.settleValidationRound(
+        tx,
+        instruction.id,
+        'REQUEST_CORRECTIONS',
+      );
+      return tx.instruction.findUniqueOrThrow({
+        where: { id: instruction.id },
         include: instructionInclude,
       });
     });
@@ -1483,9 +1585,9 @@ export class InstructionsService {
     if (!livrable) {
       throw new NotFoundException(`Livrable ${livrableId} not found`);
     }
-    const instruction = await this.requireStatus(
+    const instruction = await this.requireEvent(
       livrable.instructionId,
-      DECIDING_STATUSES,
+      'REJECT_LIVRABLE',
     );
     const [rejected] = await this.requireSubmitted(instruction.id, [
       livrableId,
@@ -1503,7 +1605,7 @@ export class InstructionsService {
           livrables: [{ id: rejected.id, motif }],
         },
       );
-      return this.settleValidationRound(tx, instruction.id);
+      return this.settleValidationRound(tx, instruction.id, 'REJECT_LIVRABLE');
     });
 
     this.notifyInstruction(
@@ -1534,7 +1636,7 @@ export class InstructionsService {
     livrableIds: string[] | undefined,
     validatorId: string,
   ) {
-    const instruction = await this.requireStatus(id, DECIDING_STATUSES);
+    const instruction = await this.requireEvent(id, 'APPROVE_LIVRABLES');
     const chain = validationChain(instruction);
     const livrables = livrableIds
       ? await this.requireSubmitted(instruction.id, livrableIds)
@@ -1561,7 +1663,11 @@ export class InstructionsService {
           livrables: livrables.map((livrable) => ({ id: livrable.id })),
         },
       );
-      return this.settleValidationRound(tx, instruction.id);
+      return this.settleValidationRound(
+        tx,
+        instruction.id,
+        'APPROVE_LIVRABLES',
+      );
     });
     if (settled === InstructionStatus.TERMINEE) {
       this.notifyInstruction(
@@ -1705,20 +1811,17 @@ export class InstructionsService {
       livrables: { id: string; motif?: string }[];
     },
   ) {
-    const ids = round.livrables.map((livrable) => livrable.id);
-    const { count } = await tx.livrable.updateMany({
-      where: { id: { in: ids }, status: LivrableStatus.SOUMIS },
-      data: {
-        status:
-          round.decision === ValidationDecision.VALIDE
-            ? LivrableStatus.VALIDE
-            : LivrableStatus.REJETE,
-      },
-    });
-    if (count !== ids.length) {
-      throw new ConflictException(
-        'A livrable was decided meanwhile — reload and try again',
-      );
+    // One transition per livrable, guarded on SOUMIS (409 CONCURRENT_UPDATE).
+    for (const livrable of round.livrables) {
+      await this.workflow.transition(tx, {
+        table: LIVRABLE_STATES,
+        delegate: tx.livrable,
+        entityId: livrable.id,
+        event:
+          round.decision === ValidationDecision.VALIDE ? 'APPROVE' : 'REJECT',
+        from: LivrableStatus.SOUMIS,
+        reason: livrable.motif ?? null,
+      });
     }
     await tx.validation.createMany({
       data: round.livrables.map((livrable) => ({
@@ -1740,7 +1843,12 @@ export class InstructionsService {
   private async settleValidationRound(
     tx: Prisma.TransactionClient,
     instructionId: string,
+    event: 'APPROVE_LIVRABLES' | 'REJECT_LIVRABLE' | 'REQUEST_CORRECTIONS',
   ) {
+    const instruction = await tx.instruction.findUniqueOrThrow({
+      where: { id: instructionId },
+      select: { status: true, dossierId: true },
+    });
     const [submitted, openRejections, current, validated] = await Promise.all([
       tx.livrable.count({
         where: { instructionId, status: LivrableStatus.SOUMIS },
@@ -1759,20 +1867,22 @@ export class InstructionsService {
     ]);
     if (submitted > 0) return null;
     if (openRejections > 0) {
-      await tx.instruction.update({
-        where: { id: instructionId },
-        data: { status: InstructionStatus.A_CORRIGER },
-      });
+      if (instruction.status !== InstructionStatus.A_CORRIGER) {
+        await this.moveInstruction(tx, instructionId, event, {
+          from: instruction.status,
+          to: InstructionStatus.A_CORRIGER,
+        });
+      }
       return InstructionStatus.A_CORRIGER;
     }
     if (current > 0 && validated === current) {
-      const { dossierId } = await tx.instruction.update({
-        where: { id: instructionId },
-        data: { status: InstructionStatus.TERMINEE, closedAt: new Date() },
-        select: { dossierId: true },
+      await this.moveInstruction(tx, instructionId, event, {
+        from: instruction.status,
+        to: InstructionStatus.TERMINEE,
+        data: { closedAt: new Date() },
       });
-      if (dossierId) {
-        await refreshDossierProgress(tx, dossierId);
+      if (instruction.dossierId) {
+        await refreshDossierProgress(tx, instruction.dossierId);
       }
       return InstructionStatus.TERMINEE;
     }
@@ -1787,14 +1897,6 @@ export class InstructionsService {
       );
     }
     return instruction;
-  }
-
-  private setStatus(id: string, status: InstructionStatus) {
-    return this.database.instruction.update({
-      where: { id },
-      data: { status },
-      include: instructionInclude,
-    });
   }
 
   // RG-INS-002 + access grants: assigning someone a task they couldn't
@@ -1930,16 +2032,12 @@ export class InstructionsService {
       throw new NotFoundException(`Instruction ${instructionId} not found`);
     }
 
-    const ALLOWED_STATUSES: InstructionStatus[] = [
-      InstructionStatus.EN_COURS,
-      InstructionStatus.A_CORRIGER,
-      InstructionStatus.EN_ATTENTE_VALIDATION,
-    ];
-    if (!ALLOWED_STATUSES.includes(instruction.status)) {
-      throw new BadRequestException(
-        `Instruction is ${instruction.status} — livrables can only be deposited while it is ${ALLOWED_STATUSES.join(', ')}`,
-      );
-    }
+    // EN_COURS, A_CORRIGER or EN_ATTENTE_VALIDATION (409 INVALID_TRANSITION otherwise).
+    this.workflow.assertAllowed(
+      INSTRUCTION_STATES,
+      instruction.status,
+      'DEPOSIT',
+    );
 
     await this.assertSubscriber(instructionId, userId);
 
@@ -2047,7 +2145,13 @@ export class InstructionsService {
               parentVersionId: livrable.id,
               createdById: userId,
             },
-            select: { id: true },
+            select: { id: true, status: true },
+          });
+          await this.workflow.record(tx, {
+            table: LIVRABLE_STATES,
+            entityId: next.id,
+            toStatus: next.status,
+            event: 'NEW_VERSION',
           });
           target.set(livrable.id, next.id);
         }
@@ -2069,10 +2173,14 @@ export class InstructionsService {
 
         // Passer chaque livrable à SOUMIS et enregistrer agentComment si fourni
         for (const item of livrablesList) {
-          await tx.livrable.update({
-            where: { id: target.get(item.livrableId)! },
+          await this.workflow.transition(tx, {
+            table: LIVRABLE_STATES,
+            delegate: tx.livrable,
+            entityId: target.get(item.livrableId)!,
+            event: 'SUBMIT',
+            // A new version starts EN_PREPARATION.
+            from: LivrableStatus.EN_PREPARATION,
             data: {
-              status: LivrableStatus.SOUMIS,
               validationStep: 0,
               ...(dto.agentComment !== undefined
                 ? { agentComment: dto.agentComment }
@@ -2082,9 +2190,8 @@ export class InstructionsService {
         }
 
         // Mettre à jour le statut de l'instruction (EN_ATTENTE_VALIDATION)
-        await tx.instruction.update({
-          where: { id: instruction.id },
-          data: { status: InstructionStatus.EN_ATTENTE_VALIDATION },
+        await this.moveInstruction(tx, instruction.id, 'DEPOSIT', {
+          from: instruction.status,
         });
       });
     } catch (error) {

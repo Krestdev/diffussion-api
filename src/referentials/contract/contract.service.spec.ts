@@ -4,8 +4,19 @@ import { ActivityService } from '../../activity/activity.service';
 import { AccessService } from '../../auth/access/access.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
+import { ClsServiceManager } from 'nestjs-cls';
+import { WorkflowService } from '../../workflow/workflow.service';
 import { ContractService } from './contract.service';
 import { accessMock } from '../access-mock.testing-spec';
+
+// Runs as a signed-in person holding `permissions` (the workflow engine checks them).
+const asPerson = <T>(permissions: string[], fn: () => Promise<T>) => {
+  const cls = ClsServiceManager.getClsService();
+  return cls.run(() => {
+    cls.set('permissions', permissions);
+    return fn();
+  });
+};
 
 describe('ContractService', () => {
   let service: ContractService;
@@ -15,6 +26,7 @@ describe('ContractService', () => {
     dossier: Record<string, jest.Mock>;
     document: Record<string, jest.Mock>;
     courrier: Record<string, jest.Mock>;
+    statusHistory: { create: jest.Mock };
     $transaction: jest.Mock;
   };
 
@@ -27,6 +39,7 @@ describe('ContractService', () => {
         }),
         findUnique: jest.fn(),
         update: jest.fn().mockResolvedValue({ id: 'c-1' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         count: jest.fn().mockResolvedValue(1),
         delete: jest.fn(),
       },
@@ -41,12 +54,14 @@ describe('ContractService', () => {
       },
       document: { count: jest.fn().mockResolvedValue(0) },
       courrier: { findMany: jest.fn().mockResolvedValue([]) },
+      statusHistory: { create: jest.fn() },
       $transaction: jest.fn((fn: (tx: unknown) => unknown) => fn(database)),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ContractService,
+        WorkflowService,
         { provide: DatabaseService, useValue: database },
         {
           provide: ActivityService,
@@ -177,15 +192,60 @@ describe('ContractService', () => {
   it('keeps the reason when archiving', async () => {
     database.contract.findUnique.mockResolvedValue(existing());
 
-    await service.archive('c-1', 'u-admin', 'Marché soldé');
+    await asPerson(['contract.archive'], () =>
+      service.archive('c-1', 'u-admin', 'Marché soldé'),
+    );
 
-    expect(database.contract.update).toHaveBeenCalledWith({
-      where: { id: 'c-1' },
+    // Through the workflow engine, conditional on the status read, and recorded.
+    expect(database.contract.updateMany).toHaveBeenCalledWith({
+      where: { id: 'c-1', status: 'ACTIVE' },
       data: expect.objectContaining({
         status: 'ARCHIVED',
         archiveReason: 'Marché soldé',
       }),
     });
+    expect(database.statusHistory.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        entity: 'Contract',
+        event: 'ARCHIVE',
+        companyId: 's-1',
+        reason: 'Marché soldé',
+      }),
+    });
+  });
+
+  it('refuses to archive an archived contract (409 INVALID_TRANSITION)', async () => {
+    database.contract.findUnique.mockResolvedValue(
+      existing({ status: 'ARCHIVED' }),
+    );
+    await expect(
+      asPerson(['contract.archive'], () => service.archive('c-1', 'u-admin')),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(database.contract.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('lists its actions: delete blocked while it holds dossiers', async () => {
+    database.contract.findUnique.mockResolvedValue(
+      existing({ _count: { dossiers: 2, accesses: 0 } }),
+    );
+    const contract = await asPerson(['contract.archive'], () =>
+      service.findOneFor('c-1', 'u-admin'),
+    );
+    expect(contract.actions).toEqual([
+      { action: 'archive', enabled: true },
+      {
+        action: 'unarchive',
+        enabled: false,
+        reason: 'WRONG_STATUS',
+        params: { status: 'ACTIVE' },
+      },
+      {
+        action: 'delete',
+        enabled: false,
+        reason: 'PREREQUISITE_MISSING',
+        params: { missing: 'NO_DOSSIERS', count: '2' },
+      },
+    ]);
   });
 
   it('counts the courriers dispatched to it or in its dossiers', async () => {

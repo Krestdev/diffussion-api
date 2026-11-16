@@ -9,8 +9,22 @@ import { ActivityService } from '../../activity/activity.service';
 import { AccessService } from '../../auth/access/access.service';
 import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
+import { ClsServiceManager } from 'nestjs-cls';
+import { WorkflowService } from '../../workflow/workflow.service';
 import { ProjectService } from './project.service';
 import { accessMock, AccessMock } from '../access-mock.testing-spec';
+
+// Runs as a signed-in person holding `permissions` (the workflow engine checks them).
+const asPerson = <T>(
+  fn: () => Promise<T>,
+  permissions = ['project.update', 'project.archive'],
+) => {
+  const cls = ClsServiceManager.getClsService();
+  return cls.run(() => {
+    cls.set('permissions', permissions);
+    return fn();
+  });
+};
 
 describe('ProjectService', () => {
   let service: ProjectService;
@@ -24,6 +38,7 @@ describe('ProjectService', () => {
     analysisSheet: Record<string, jest.Mock>;
     courrier: Record<string, jest.Mock>;
     instruction: Record<string, jest.Mock>;
+    statusHistory: { create: jest.Mock };
     $transaction: jest.Mock;
   };
   let access: AccessMock;
@@ -51,6 +66,7 @@ describe('ProjectService', () => {
         create: jest.fn().mockResolvedValue({ id: 'p-new' }),
         findUnique: jest.fn().mockResolvedValue(project()),
         update: jest.fn().mockResolvedValue({ id: 'p-1' }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         count: jest.fn().mockResolvedValue(1),
       },
       correspondent: {
@@ -69,29 +85,31 @@ describe('ProjectService', () => {
       },
       contract: {
         count: jest.fn().mockResolvedValue(0),
-        updateMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       dossier: {
         count: jest.fn().mockResolvedValue(0),
         findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn(),
-        updateMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       courrier: {
         count: jest.fn().mockResolvedValue(0),
         findMany: jest.fn().mockResolvedValue([]),
-        updateMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       instruction: {
         count: jest.fn().mockResolvedValue(0),
         findFirst: jest.fn().mockResolvedValue(null),
         findMany: jest.fn().mockResolvedValue([]),
-        updateMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       analysisSheet: {
         findMany: jest.fn().mockResolvedValue([]),
-        updateMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      statusHistory: { create: jest.fn() },
       $transaction: jest.fn((work: unknown) =>
         typeof work === 'function'
           ? (work as (tx: unknown) => unknown)(database)
@@ -104,6 +122,7 @@ describe('ProjectService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ProjectService,
+        WorkflowService,
         { provide: DatabaseService, useValue: database },
         { provide: AccessService, useValue: access },
         {
@@ -204,16 +223,30 @@ describe('ProjectService', () => {
         project({ status: 'CLOSED' }),
       );
 
-      await service.update(
-        'p-1',
-        { status: 'ARCHIVED', reason: 'Terminé' },
-        'u-admin',
+      await asPerson(() =>
+        service.update(
+          'p-1',
+          { status: 'ARCHIVED', reason: 'Terminé' },
+          'u-admin',
+        ),
       );
 
-      expect(updatedData()).toMatchObject({
-        status: 'ARCHIVED',
-        archiveReason: 'Terminé',
+      // Through the workflow engine, conditional on the status read.
+      expect(database.project.updateMany).toHaveBeenCalledWith({
+        where: { id: 'p-1', status: 'CLOSED' },
+        data: expect.objectContaining({
+          status: 'ARCHIVED',
+          archiveReason: 'Terminé',
+        }),
       });
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entity: 'Project',
+          event: 'ARCHIVE',
+          reason: 'Terminé',
+        }),
+      });
+      expect(updatedData()).not.toHaveProperty('status');
     });
 
     it('clears the reason when unarchiving', async () => {
@@ -221,12 +254,13 @@ describe('ProjectService', () => {
         project({ status: 'ARCHIVED' }),
       );
 
-      await service.update('p-1', { status: 'CLOSED' }, 'u-admin');
+      await asPerson(() =>
+        service.update('p-1', { status: 'CLOSED' }, 'u-admin'),
+      );
 
-      expect(updatedData()).toMatchObject({
-        status: 'CLOSED',
-        archivedAt: null,
-        archiveReason: null,
+      expect(database.project.updateMany).toHaveBeenCalledWith({
+        where: { id: 'p-1', status: 'ARCHIVED' },
+        data: { status: 'CLOSED', archivedAt: null, archiveReason: null },
       });
     });
 
@@ -234,11 +268,16 @@ describe('ProjectService', () => {
       database.instruction.findMany.mockResolvedValue([
         { id: 'i-1', status: 'EN_COURS' },
       ]);
+      database.dossier.findMany.mockResolvedValue([
+        { id: 'd-1', status: 'IN_PROGRESS' },
+      ]);
 
-      await service.update('p-1', { status: 'CLOSED' }, 'u-admin');
+      await asPerson(() =>
+        service.update('p-1', { status: 'CLOSED' }, 'u-admin'),
+      );
 
       expect(database.instruction.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: ['i-1'] } },
+        where: { id: 'i-1', status: 'EN_COURS' },
         data: expect.objectContaining({
           status: 'ANNULEE',
           statusBeforeProjectClosure: 'EN_COURS',
@@ -246,9 +285,19 @@ describe('ProjectService', () => {
       });
       expect(database.dossier.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
+          where: { id: 'd-1', status: 'IN_PROGRESS' },
           data: expect.objectContaining({ status: 'CLOSED' }),
         }),
       );
+      // Each cascaded row is a system change in StatusHistory.
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entity: 'Instruction',
+          event: 'CANCEL_BY_PROJECT',
+          actorId: null,
+          companyId: 's-1',
+        }),
+      });
     });
 
     it('gives a task back its status on reopening', async () => {
@@ -263,10 +312,12 @@ describe('ProjectService', () => {
         },
       ]);
 
-      await service.update('p-1', { status: 'ACTIVE' }, 'u-admin');
+      await asPerson(() =>
+        service.update('p-1', { status: 'ACTIVE' }, 'u-admin'),
+      );
 
       expect(database.instruction.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: ['i-1'] } },
+        where: { id: 'i-1', status: 'ANNULEE' },
         data: {
           status: 'EN_COURS',
           cancellationReason: null,
@@ -282,16 +333,22 @@ describe('ProjectService', () => {
       database.analysisSheet.findMany.mockResolvedValue([
         { id: 'a-1', status: 'SIGNEE' },
       ]);
+      database.contract.findMany.mockResolvedValue([
+        { id: 'k-1', status: 'ACTIVE' },
+      ]);
 
-      await service.update('p-1', { status: 'ARCHIVED' }, 'u-admin');
+      await asPerson(() =>
+        service.update('p-1', { status: 'ARCHIVED' }, 'u-admin'),
+      );
 
       expect(database.contract.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
+          where: { id: 'k-1', status: 'ACTIVE' },
           data: expect.objectContaining({ status: 'ARCHIVED' }),
         }),
       );
       expect(database.analysisSheet.updateMany).toHaveBeenCalledWith({
-        where: { id: { in: ['a-1'] } },
+        where: { id: 'a-1', status: 'SIGNEE' },
         data: expect.objectContaining({
           status: 'ARCHIVEE',
           archivedFromStatus: 'SIGNEE',
@@ -305,10 +362,44 @@ describe('ProjectService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
-    it('refuses to skip a step', async () => {
+    it('refuses to skip a step (409 INVALID_TRANSITION)', async () => {
       await expect(
-        service.update('p-1', { status: 'ARCHIVED' }, 'u-admin'),
-      ).rejects.toBeInstanceOf(BadRequestException);
+        asPerson(() =>
+          service.update('p-1', { status: 'ARCHIVED' }, 'u-admin'),
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'INVALID_TRANSITION',
+          params: { entity: 'Project', from: 'ACTIVE', event: 'ARCHIVE' },
+        },
+      });
+      expect(database.project.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('refuses closing to someone without project.update', async () => {
+      await expect(
+        asPerson(
+          () => service.update('p-1', { status: 'CLOSED' }, 'u-admin'),
+          ['project.archive'],
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('lists the actions the role allows on the page', async () => {
+      const actions = await asPerson(
+        () => service.findOneFor('p-1', 'u-1'),
+        ['project.update'],
+      );
+      expect(actions.actions).toEqual([
+        { action: 'edit', enabled: true },
+        { action: 'close', enabled: true },
+        {
+          action: 'reopen',
+          enabled: false,
+          reason: 'WRONG_STATUS',
+          params: { status: 'ACTIVE' },
+        },
+      ]);
     });
   });
 

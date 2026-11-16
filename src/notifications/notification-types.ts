@@ -35,6 +35,7 @@ export const NOTIFICATION_TYPES = {
   COURRIER_DISPATCH_PROPOSED: 'Un dispatching est proposé',
   COURRIER_DISPATCH_VALIDATED:
     'Le validateur a donné son avis sur un dispatching',
+  COURRIER_DISPATCH_REJECTED: 'Un dispatching que vous avez proposé est rejeté',
   ACCESS_CHANGED:
     "Un rôle est attribué ou retiré, ou un ajout à une liste d'autorisés",
   ACCESS_REQUESTED: "Une demande d'accès est reçue",
@@ -79,6 +80,7 @@ export const NOTIFICATION_DESCRIPTIONS: Record<NotificationType, string> = {
   COURRIER_DISPATCH_PROPOSED:
     "Les personnes pouvant dispatcher ou valider un dispatching dans la société de l'effet.",
   COURRIER_DISPATCH_VALIDATED: 'La personne qui a proposé le dispatching.',
+  COURRIER_DISPATCH_REJECTED: 'La personne qui a proposé le dispatching.',
   ACCESS_CHANGED: "L'utilisateur concerné.",
   ACCESS_REQUESTED: 'Les administrateurs de la société.',
 };

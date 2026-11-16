@@ -1,10 +1,19 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   DossierStatus,
   InstructionStatus,
   Prisma,
 } from '../../../generated/prisma/client';
+import { DOSSIER_STATES } from '../../domain/dossier/dossier.states';
+import { WorkflowService } from '../../workflow/workflow.service';
 import { assertCompanyActive } from './referential-guards';
+
+// Stateless: the helpers below run outside Nest's injection.
+const workflow = new WorkflowService();
 
 type Db = Prisma.TransactionClient;
 
@@ -40,12 +49,27 @@ export async function assertDossierOpenForActivity(db: Db, dossierId: string) {
 }
 
 // Work has started on the dossier (first courrier or instruction attached):
-// OPEN -> IN_PROGRESS. No-op in any other status.
+// OPEN -> IN_PROGRESS (MARK_IN_PROGRESS, recorded in StatusHistory). No-op in
+// any other status.
 export async function markDossierInProgress(db: Db, dossierId: string) {
-  await db.dossier.updateMany({
-    where: { id: dossierId, status: DossierStatus.OPEN },
-    data: { status: DossierStatus.IN_PROGRESS },
+  const dossier = await db.dossier.findUnique({
+    where: { id: dossierId },
+    select: { status: true, companyId: true },
   });
+  if (dossier?.status !== DossierStatus.OPEN) return;
+  try {
+    await workflow.transition(db, {
+      table: DOSSIER_STATES,
+      delegate: db.dossier,
+      entityId: dossierId,
+      event: 'MARK_IN_PROGRESS',
+      from: dossier.status,
+      companyId: dossier.companyId,
+    });
+  } catch (error) {
+    // Another request moved it first: nothing left to do.
+    if (!(error instanceof ConflictException)) throw error;
+  }
 }
 
 // 10.1.8: share of the dossier's instructions that are terminated.

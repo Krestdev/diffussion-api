@@ -47,6 +47,11 @@ import {
   UpdateAnalysisItemDto,
   UpdateAnalysisSheetDto,
 } from './dto/analysis.dto';
+import { WorkflowService } from '../workflow/workflow.service';
+import { ANALYSIS_SHEET_STATES } from './analysis-sheet.states';
+import { LIVRABLE_STATES } from '../domain/deliverable/livrable.states';
+import { INSTRUCTION_STATES } from '../instructions/instruction.states';
+import { analysisSheetActions } from './analysis-sheet-actions';
 
 // A fiche linked to an instruction is editable only while its livrable is
 // still being prepared. Once submitted it is read-only, and a decision
@@ -171,6 +176,7 @@ export class AnalysisSheetService {
     private readonly storage: StorageService,
     private readonly criteria: CriterionTemplateService,
     private readonly identity: DocumentIdentityService,
+    private readonly workflow: WorkflowService,
   ) {}
 
   /**
@@ -260,8 +266,15 @@ export class AnalysisSheetService {
             },
           })
         : null;
+      if (livrable) {
+        await this.workflow.record(tx, {
+          table: LIVRABLE_STATES,
+          entityId: livrable.id,
+          toStatus: livrable.status,
+        });
+      }
 
-      return createWithUniqueReference('FA', (reference) =>
+      const created = await createWithUniqueReference('FA', (reference) =>
         tx.analysisSheet.create({
           data: {
             ...rest,
@@ -294,6 +307,12 @@ export class AnalysisSheetService {
           },
         }),
       );
+      await this.workflow.record(tx, {
+        table: ANALYSIS_SHEET_STATES,
+        entityId: created.id,
+        toStatus: created.status,
+      });
+      return created;
     });
     return this.refresh(sheet.id);
   }
@@ -375,6 +394,19 @@ export class AnalysisSheetService {
   async findOne(id: string) {
     const sheet = await this.findSheet(id);
     return { ...sheet, versions: await this.versionsOf(sheet) };
+  }
+
+  /** GET /analysis-sheets/:id: the fiche with `actions` for the signed-in person. */
+  async findOneWithActions(id: string, userId: string) {
+    const sheet = await this.findOne(id);
+    const effet = await this.effetOf(sheet.courrierId);
+    return {
+      ...sheet,
+      actions: analysisSheetActions(sheet, {
+        userId,
+        effetStatus: effet.status,
+      }),
+    };
   }
 
   /**
@@ -582,20 +614,28 @@ export class AnalysisSheetService {
     }
     this.assertEveryItemJudged(sheet, 'submitting');
 
-    await this.database.$transaction([
-      this.database.livrable.update({
-        where: { id: livrable.id },
-        data: { status: LivrableStatus.SOUMIS },
-      }),
-      this.database.instruction.update({
-        where: { id: livrable.instructionId },
-        data: { status: InstructionStatus.EN_ATTENTE_VALIDATION },
-      }),
-      this.database.analysisSheet.update({
-        where: { id },
-        data: { status: AnalysisSheetStatus.ENREGISTREE },
-      }),
-    ]);
+    await this.database.$transaction(async (tx) => {
+      await this.workflow.transition(tx, {
+        table: LIVRABLE_STATES,
+        delegate: tx.livrable,
+        entityId: livrable.id,
+        event: 'SUBMIT',
+        from: livrable.status,
+      });
+      await this.workflow.transition(tx, {
+        table: INSTRUCTION_STATES,
+        delegate: tx.instruction,
+        entityId: livrable.instructionId,
+        event: 'SUBMIT_ANALYSIS',
+      });
+      await this.workflow.transition(tx, {
+        table: ANALYSIS_SHEET_STATES,
+        delegate: tx.analysisSheet,
+        entityId: id,
+        event: 'SUBMIT',
+        from: sheet.status,
+      });
+    });
     return this.findOne(id);
   }
 
@@ -653,11 +693,17 @@ export class AnalysisSheetService {
           motif: dto.motif,
         },
       });
-      await tx.livrable.update({
-        where: { id: livrable.id },
-        data: {
-          status: accepted ? LivrableStatus.VALIDE : LivrableStatus.REJETE,
-        },
+      await this.workflow.transition(tx, {
+        table: LIVRABLE_STATES,
+        delegate: tx.livrable,
+        entityId: livrable.id,
+        event: accepted ? 'APPROVE' : 'REJECT',
+        from: livrable.status,
+        reason: dto.motif ?? null,
+      });
+      const task = await tx.instruction.findUniqueOrThrow({
+        where: { id: instructionId },
+        select: { status: true },
       });
 
       if (accepted) {
@@ -672,27 +718,40 @@ export class AnalysisSheetService {
             },
           },
         });
-        if (outstanding === 0) {
-          await tx.instruction.update({
-            where: { id: instructionId },
-            data: {
-              status: InstructionStatus.TERMINEE,
-              closedAt: new Date(),
-            },
+        if (outstanding === 0 && task.status !== InstructionStatus.TERMINEE) {
+          await this.workflow.transition(tx, {
+            table: INSTRUCTION_STATES,
+            delegate: tx.instruction,
+            entityId: instructionId,
+            event: 'DECIDE_ANALYSIS',
+            from: task.status,
+            to: InstructionStatus.TERMINEE,
+            data: { closedAt: new Date() },
           });
         }
       } else {
-        await tx.instruction.update({
-          where: { id: instructionId },
-          data: {
-            status: InstructionStatus.A_CORRIGER,
-            // Always leave a reason on the task, even when the avis followed
-            // the grid and needed no motif of its own.
-            refusalReason:
-              dto.motif ??
-              `Fiche ${sheet.reference} rejetée (avis ${dto.overallOpinion})`,
-          },
-        });
+        // Always leave a reason on the task, even when the avis followed
+        // the grid and needed no motif of its own.
+        const refusalReason =
+          dto.motif ??
+          `Fiche ${sheet.reference} rejetée (avis ${dto.overallOpinion})`;
+        if (task.status === InstructionStatus.A_CORRIGER) {
+          await tx.instruction.update({
+            where: { id: instructionId },
+            data: { refusalReason },
+          });
+        } else {
+          await this.workflow.transition(tx, {
+            table: INSTRUCTION_STATES,
+            delegate: tx.instruction,
+            entityId: instructionId,
+            event: 'DECIDE_ANALYSIS',
+            from: task.status,
+            to: InstructionStatus.A_CORRIGER,
+            reason: refusalReason,
+            data: { refusalReason },
+          });
+        }
       }
     });
 
@@ -756,20 +815,19 @@ export class AnalysisSheetService {
             uploadedById: userId,
           },
         });
-        const { count } = await tx.analysisSheet.updateMany({
-          where: { id, status: { in: EDITABLE_STATUSES } },
+        // Guarded on the status read above (409 CONCURRENT_UPDATE).
+        await this.workflow.transition(tx, {
+          table: ANALYSIS_SHEET_STATES,
+          delegate: tx.analysisSheet,
+          entityId: id,
+          event: 'SIGN',
+          from: sheet.status,
           data: {
-            status: AnalysisSheetStatus.SIGNEE,
             signedAt: new Date(dto.signedAt),
             signatoryName: dto.signatoryName,
             signedDocumentId: document.id,
           },
         });
-        if (count === 0) {
-          throw new ConflictException(
-            'This fiche changed meanwhile — refresh and try again',
-          );
-        }
       });
     } catch (error) {
       await this.storage.delete(key).catch(() => undefined);
@@ -814,20 +872,22 @@ export class AnalysisSheetService {
   })
   async archive(id: string, reason?: string) {
     const sheet = await this.findSheet(id);
-    if (sheet.status === AnalysisSheetStatus.ARCHIVEE) {
-      throw new BadRequestException(
-        `Fiche ${sheet.reference} is already archived`,
-      );
-    }
-    await this.database.analysisSheet.update({
-      where: { id },
-      data: {
-        status: AnalysisSheetStatus.ARCHIVEE,
-        archivedAt: new Date(),
-        archiveReason: reason ?? null,
-        archivedFromStatus: sheet.status,
-      },
-    });
+    // Already archived: 409 INVALID_TRANSITION.
+    await this.database.$transaction((tx) =>
+      this.workflow.transition(tx, {
+        table: ANALYSIS_SHEET_STATES,
+        delegate: tx.analysisSheet,
+        entityId: id,
+        event: 'ARCHIVE',
+        from: sheet.status,
+        reason: reason ?? null,
+        data: {
+          archivedAt: new Date(),
+          archiveReason: reason ?? null,
+          archivedFromStatus: sheet.status,
+        },
+      }),
+    );
     return this.findOne(id);
   }
 
@@ -838,18 +898,22 @@ export class AnalysisSheetService {
   })
   async unarchive(id: string) {
     const sheet = await this.findSheet(id);
-    if (sheet.status !== AnalysisSheetStatus.ARCHIVEE) {
-      throw new BadRequestException(`Fiche ${sheet.reference} is not archived`);
-    }
-    await this.database.analysisSheet.update({
-      where: { id },
-      data: {
-        status: sheet.archivedFromStatus ?? AnalysisSheetStatus.ENREGISTREE,
-        archivedAt: null,
-        archiveReason: null,
-        archivedFromStatus: null,
-      },
-    });
+    // Not archived: 409 INVALID_TRANSITION.
+    await this.database.$transaction((tx) =>
+      this.workflow.transition(tx, {
+        table: ANALYSIS_SHEET_STATES,
+        delegate: tx.analysisSheet,
+        entityId: id,
+        event: 'UNARCHIVE',
+        from: sheet.status,
+        to: sheet.archivedFromStatus ?? AnalysisSheetStatus.ENREGISTREE,
+        data: {
+          archivedAt: null,
+          archiveReason: null,
+          archivedFromStatus: null,
+        },
+      }),
+    );
     return this.findOne(id);
   }
 
@@ -975,6 +1039,14 @@ export class AnalysisSheetService {
   ) {
     const keep = options.keepJudgements;
     return this.database.$transaction(async (tx) => {
+      // The previous livrable is history from now on (owner fix 2026-11-15:
+      // as the deliverable and instruction new-version paths do).
+      if (previous.livrable) {
+        await tx.livrable.updateMany({
+          where: { id: previous.livrable.id, isLatest: true },
+          data: { isLatest: false },
+        });
+      }
       const livrable = previous.livrable
         ? await tx.livrable.create({
             data: {
@@ -987,8 +1059,16 @@ export class AnalysisSheetService {
             },
           })
         : null;
+      if (livrable) {
+        await this.workflow.record(tx, {
+          table: LIVRABLE_STATES,
+          entityId: livrable.id,
+          toStatus: livrable.status,
+          event: 'NEW_VERSION',
+        });
+      }
 
-      return createWithUniqueReference('FA', (reference) =>
+      const next = await createWithUniqueReference('FA', (reference) =>
         tx.analysisSheet.create({
           data: {
             reference,
@@ -1051,6 +1131,14 @@ export class AnalysisSheetService {
           include: sheetInclude,
         }),
       );
+      await this.workflow.record(tx, {
+        table: ANALYSIS_SHEET_STATES,
+        entityId: next.id,
+        toStatus: next.status,
+        event: 'NEW_VERSION',
+        reason: options.motif,
+      });
+      return next;
     });
   }
 

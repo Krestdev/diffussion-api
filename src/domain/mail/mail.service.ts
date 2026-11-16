@@ -66,6 +66,20 @@ import { UpdateMailDto } from './dto/update-mail.dto';
 import { AssignSupervisorDto } from './dto/assign-supervisor.dto';
 import { DispatchMailDto } from './dto/dispatch-mail.dto';
 import { ActivityService } from '../../activity/activity.service';
+import { can } from '../../auth/access/permission-checks';
+import { WorkflowService } from '../../workflow/workflow.service';
+import {
+  ActionBlock,
+  ActionBlockReason,
+  ActionState,
+  ActionStates,
+  blocked,
+  needsPermission,
+  needsStatus,
+  needsStatusIn,
+} from '../../workflow/action-states';
+import { INSTRUCTION_STATES } from '../../instructions/instruction.states';
+import { CourrierEvent, courrierStates } from './courrier.states';
 
 const mailInclude = {
   correspondent: true,
@@ -252,29 +266,8 @@ const EDITABLE_STATUSES: CourrierStatus[] = [
   CourrierStatus.A_CORRIGER,
 ];
 
-// Entrant workflow: statuses before the courrier has been fully treated —
-// cancellable, and the only ones `close()` can be called from.
-const ENTRANT_OPEN_STATUSES: CourrierStatus[] = [
-  CourrierStatus.RECU,
-  CourrierStatus.ENREGISTRE,
-  CourrierStatus.AFFECTE,
-  CourrierStatus.TRANSMIS,
-  CourrierStatus.EN_TRAITEMENT,
-];
-
-// Entrant statuses it can be marked fully treated from: still open, or
-// validated.
-const ENTRANT_CLOSABLE_STATUSES: CourrierStatus[] = [
-  ...ENTRANT_OPEN_STATUSES,
-  CourrierStatus.VALIDE,
-];
-
-// Sortant workflow: statuses before it's been sent — cancellable.
-const SORTANT_OPEN_STATUSES: CourrierStatus[] = [
-  CourrierStatus.BROUILLON,
-  CourrierStatus.EN_ATTENTE_VALIDATION,
-  CourrierStatus.A_CORRIGER,
-];
+// The transitions (who goes from which status to which) are the tables of
+// courrier.states.ts, applied by the workflow engine (owner 2026-11-15).
 
 // A sortant authorized to go out, and the steps after: it has its SOR
 // reference and its PDF. VALIDE -> SIGNE -> ENVOYE -> DECHARGE -> ARCHIVE
@@ -287,39 +280,11 @@ const SORTANT_AUTHORIZED_STATUSES: CourrierStatus[] = [
   CourrierStatus.DECHARGE,
 ];
 
-// What archive() accepts, per direction: an entrant once treated, a
-// sortant once discharged or cancelled.
-const ARCHIVABLE_STATUSES: Record<CourrierDirection, CourrierStatus[]> = {
-  [CourrierDirection.ENTRANT]: [CourrierStatus.CLOTURE],
-  [CourrierDirection.SORTANT]: [CourrierStatus.DECHARGE, CourrierStatus.ANNULE],
-};
-
-// A sortant can be sent once signed.
-const SENDABLE_STATUSES: CourrierStatus[] = [
-  CourrierStatus.SIGNE,
-  CourrierStatus.PRET_A_ENVOYER,
-];
-
 // An instruction still to be done: cancelled when its effet is closed.
 const INSTRUCTION_DONE_STATUSES: InstructionStatus[] = [
   InstructionStatus.TERMINEE,
   InstructionStatus.ANNULEE,
 ];
-
-// Statuses submitForValidation() accepts, per direction: a sortant once
-// drafted, an entrant once handed over for treatment — or either one sent
-// back for corrections.
-const SUBMITTABLE_STATUSES: Record<CourrierDirection, CourrierStatus[]> = {
-  [CourrierDirection.SORTANT]: [
-    CourrierStatus.BROUILLON,
-    CourrierStatus.A_CORRIGER,
-  ],
-  [CourrierDirection.ENTRANT]: [
-    CourrierStatus.TRANSMIS,
-    CourrierStatus.EN_TRAITEMENT,
-    CourrierStatus.A_CORRIGER,
-  ],
-};
 
 // The next bordereau de transmission number: BT-AAAA-NNNNNN, numbered per
 // year by bordereau_sequence, like the outgoing references.
@@ -347,6 +312,28 @@ function toCsv(headers: string[], rows: CsvCell[][]): Buffer {
   return Buffer.from('\uFEFF' + lines.join('\r\n'), 'utf-8');
 }
 
+/** The actions of an effet page (GET /courriers/:id `actions`). */
+export type CourrierAction =
+  | 'edit'
+  | 'delete'
+  | 'transmit'
+  | 'dispatch'
+  | 'validateDispatch'
+  | 'rejectDispatch'
+  | 'assignSupervisor'
+  | 'setOwner'
+  | 'submitForValidation'
+  | 'validate'
+  | 'requestCorrections'
+  | 'sign'
+  | 'send'
+  | 'discharge'
+  | 'close'
+  | 'cancel'
+  | 'archive'
+  | 'unarchive'
+  | 'markReturned';
+
 @Injectable()
 export class MailService {
   constructor(
@@ -356,6 +343,7 @@ export class MailService {
     private readonly storage: StorageService,
     private readonly activity: ActivityService,
     private readonly settings: SettingsService,
+    private readonly workflow: WorkflowService,
   ) {}
 
   /**
@@ -439,25 +427,34 @@ export class MailService {
             'outgoingReplyDays',
           );
     const courrier = await createWithUniqueReference('M', (number) =>
-      this.database.courrier.create({
-        data: {
-          ...data,
-          // A sortant's reference is given by its type's model, never typed.
-          ...(dto.direction === CourrierDirection.SORTANT
-            ? { reference: undefined }
-            : {}),
-          typeId,
-          number,
-          receivedAt: received,
-          dueDate: deadline,
-          ...dossierLinks,
-          status:
-            dto.direction === CourrierDirection.ENTRANT
-              ? CourrierStatus.RECU
-              : CourrierStatus.BROUILLON,
-          createdById,
-        },
-        include: mailInclude,
+      this.database.$transaction(async (tx) => {
+        const created = await tx.courrier.create({
+          data: {
+            ...data,
+            // A sortant's reference is given by its type's model, never typed.
+            ...(dto.direction === CourrierDirection.SORTANT
+              ? { reference: undefined }
+              : {}),
+            typeId,
+            number,
+            receivedAt: received,
+            dueDate: deadline,
+            ...dossierLinks,
+            status:
+              dto.direction === CourrierDirection.ENTRANT
+                ? CourrierStatus.RECU
+                : CourrierStatus.BROUILLON,
+            createdById,
+          },
+          include: mailInclude,
+        });
+        await this.workflow.record(tx, {
+          table: courrierStates(created.direction),
+          entityId: created.id,
+          toStatus: created.status,
+          companyId,
+        });
+        return created;
       }),
     );
 
@@ -533,6 +530,12 @@ export class MailService {
             dueDate,
           },
           select: { id: true },
+        });
+        await this.workflow.record(tx, {
+          table: courrierStates(CourrierDirection.SORTANT),
+          entityId: id,
+          toStatus: CourrierStatus.BROUILLON,
+          companyId,
         });
         // Its reference at once, to be written on the document. A model
         // needing a project or a dossier waits for them: it is given at
@@ -858,10 +861,177 @@ export class MailService {
   // The effet page: only an effet the caller would see in their lists
   // (their companies', a dossier open to them, or entrusted to them) — else
   // 404, as if it didn't exist.
-  async findOneDetailed(id: string, userId?: string) {
-    if (userId) await this.assertVisible(id, userId);
+  // With what the caller may do on it (its actions).
+  async findOneDetailed(id: string, userId: string) {
+    await this.assertVisible(id, userId);
     const [courrier] = await this.withApprovers([await this.findOne(id)]);
-    return courrier;
+    return { ...courrier, actions: await this.actionsFor(courrier, userId) };
+  }
+
+  /**
+   * What the person may do on the effet page (EXPENZO ActionStates): every action their
+   * permissions or designations could ever open, enabled, or disabled with the first reason
+   * it is blocked now; an action they can never take is left out (owner standard). The
+   * checks are the routes' own (canDispatch, validatorOf, assertMayEdit, assertMayConclude…).
+   */
+  async actionsFor(
+    courrier: Awaited<ReturnType<MailService['findOne']>>,
+    userId: string,
+  ): Promise<ActionState<CourrierAction>[]> {
+    const table = courrierStates(courrier.direction);
+    const { status } = courrier;
+    const sortant = courrier.direction === CourrierDirection.SORTANT;
+    const actions = new ActionStates<CourrierAction>();
+    const onStatus = (event: CourrierEvent) =>
+      needsStatus(table, status, event);
+
+    const companyResponsible = await this.companyResponsibleOf(courrier);
+    const isCompanyAdmin = await this.hasPermissionAtCourrierCompany(
+      userId,
+      Permission.ROLE_ASSIGN,
+      courrier,
+    );
+    const mayEdit = await this.mayEdit(courrier, userId);
+    const editable = needsStatusIn(status, EDITABLE_STATUSES);
+    actions.addIf(mayEdit, 'edit', editable);
+    actions.addIf(mayEdit, 'delete', editable);
+
+    if (!sortant) {
+      actions.addIf(
+        can(Permission.INCOMING_READ) || can(Permission.OUTGOING_READ),
+        'transmit',
+        onStatus('TRANSMIT'),
+        !(courrier.dossierId ?? courrier.contractId) &&
+          blocked(ActionBlockReason.PREREQUISITE_MISSING, {
+            missing: 'DISPATCH',
+          }),
+      );
+      const dispatcher = await this.canDispatch(userId, courrier);
+      const reassignable = (
+        [
+          CourrierStatus.EN_ATTENTE_TRANSMISSION,
+          CourrierStatus.AFFECTE,
+          CourrierStatus.TRANSMIS,
+        ] as CourrierStatus[]
+      ).includes(status);
+      actions.addIf(
+        can(Permission.INCOMING_READ),
+        'dispatch',
+        ...(reassignable
+          ? [
+              !dispatcher &&
+                blocked(ActionBlockReason.NO_PERMISSION, {
+                  permission: Permission.INCOMING_DISPATCH,
+                }),
+              courrier.instructionsProgress.total > 0 &&
+                blocked(ActionBlockReason.INSTRUCTIONS_OPEN),
+            ]
+          : [onStatus(dispatcher ? 'DISPATCH' : 'PROPOSE_DISPATCH')]),
+      );
+      const dispatchValidator = await this.canValidateDispatch(
+        userId,
+        courrier,
+      );
+      const noProposal: ActionBlock | false =
+        !courrier.proposedProjectId &&
+        blocked(ActionBlockReason.NOTHING_TO_DECIDE);
+      actions.addIf(
+        dispatchValidator || can(Permission.INCOMING_DISPATCH_VALIDATE),
+        'validateDispatch',
+        onStatus('VALIDATE_DISPATCH'),
+        noProposal,
+        !dispatchValidator &&
+          blocked(ActionBlockReason.NO_PERMISSION, {
+            permission: Permission.INCOMING_DISPATCH_VALIDATE,
+          }),
+      );
+      actions.addIf(
+        can(Permission.INCOMING_DISPATCH_VALIDATE),
+        'rejectDispatch',
+        onStatus('REJECT_DISPATCH'),
+        noProposal,
+        !dispatchValidator &&
+          blocked(ActionBlockReason.NO_PERMISSION, {
+            permission: Permission.INCOMING_DISPATCH_VALIDATE,
+          }),
+      );
+    }
+
+    // Supervisor and person in charge: no status condition today.
+    actions.addIf(
+      courrier.ownerId === userId ||
+        companyResponsible === userId ||
+        isCompanyAdmin,
+      'assignSupervisor',
+    );
+    actions.addIf(
+      courrier.createdById === userId ||
+        (!!courrier.dossierId && companyResponsible === userId) ||
+        isCompanyAdmin,
+      'setOwner',
+    );
+
+    // Validation: submitted by holders of outgoing.update, decided by its validator alone.
+    const validatorId = await this.validatorOf(courrier);
+    actions.addIf(
+      can(Permission.OUTGOING_UPDATE),
+      'submitForValidation',
+      onStatus('SUBMIT_FOR_VALIDATION'),
+      !validatorId &&
+        blocked(ActionBlockReason.PREREQUISITE_MISSING, {
+          missing: 'VALIDATOR',
+        }),
+    );
+    const isValidator = validatorId === userId;
+    actions.addIf(isValidator, 'validate', onStatus('VALIDATE'));
+    actions.addIf(
+      isValidator,
+      'requestCorrections',
+      onStatus('REQUEST_CORRECTIONS'),
+    );
+
+    if (sortant) {
+      actions.addIf(can(Permission.OUTGOING_SEND), 'sign', onStatus('SIGN'));
+      actions.addIf(can(Permission.OUTGOING_SEND), 'send', onStatus('SEND'));
+      // Whoever sees it (assertVisible only).
+      actions.add('discharge', onStatus('DISCHARGE'));
+    } else {
+      // The décharge handed at reception: once registered, no status change.
+      actions.add(
+        'discharge',
+        status === CourrierStatus.RECU &&
+          blocked(ActionBlockReason.WRONG_STATUS, { status }),
+      );
+      const mayClose = await this.mayConclude(
+        courrier,
+        userId,
+        Permission.INCOMING_CLOSE,
+      );
+      actions.addIf(
+        mayClose,
+        'close',
+        needsPermission(Permission.INCOMING_READ),
+        onStatus('CLOSE'),
+      );
+    }
+    actions.addIf(mayEdit, 'cancel', onStatus('CANCEL'));
+    const mayArchive = await this.mayConclude(
+      courrier,
+      userId,
+      sortant ? Permission.OUTGOING_ARCHIVE : Permission.INCOMING_ARCHIVE,
+    );
+    actions.addIf(mayArchive, 'archive', onStatus('ARCHIVE'));
+    actions.addIf(mayArchive, 'unarchive', onStatus('UNARCHIVE'));
+    if (!sortant) {
+      // A physical effet expected back, until its return is recorded (once).
+      actions.addIf(
+        can(Permission.INCOMING_CREATE) &&
+          !!courrier.returnExpected &&
+          !courrier.returnedAt,
+        'markReturned',
+      );
+    }
+    return actions.all;
   }
 
   async findOne(id: string) {
@@ -898,8 +1068,8 @@ export class MailService {
       assertTransmittable(
         courrier.direction,
         dto.dossierId ?? courrier.dossierId,
-        courrier.status,
       );
+      this.assertAllowed(courrier, 'TRANSMIT');
     }
     const dossierChanged =
       dto.dossierId !== undefined && dto.dossierId !== courrier.dossierId;
@@ -1007,12 +1177,13 @@ export class MailService {
   // dossier or contract must be known by then. Its dispatching can't be
   // changed any more. The responsible is told, so nothing waits unnoticed.
   async transmit(id: string, actingUserId: string) {
-    const courrier = await this.requireStatus(id, TRANSMITTABLE_STATUSES);
+    const courrier = await this.findOne(id);
     assertTransmittable(
       courrier.direction,
       courrier.dossierId ?? courrier.contractId,
     );
-    const updated = await this.setStatus(courrier.id, CourrierStatus.TRANSMIS, {
+    this.assertAllowed(courrier, 'TRANSMIT');
+    const updated = await this.setStatus(courrier, 'TRANSMIT', {
       data: { transmittedAt: new Date(), transmittedById: actingUserId },
     });
     await this.notifyTransmitted(courrier, actingUserId);
@@ -1023,13 +1194,7 @@ export class MailService {
   // the designated validator (see validatorOf) settles it: VALIDE, or
   // A_CORRIGER with a motif.
   async submitForValidation(id: string, userId: string) {
-    const courrier = await this.findOne(id);
-    const allowed = SUBMITTABLE_STATUSES[courrier.direction];
-    if (!allowed.includes(courrier.status)) {
-      throw new BadRequestException(
-        `Courrier is ${courrier.status}, expected one of: ${allowed.join(', ')}`,
-      );
-    }
+    const courrier = await this.requireEvent(id, 'SUBMIT_FOR_VALIDATION');
     const validatorId = await this.validatorOf(courrier);
     if (!validatorId) {
       throw new BadRequestException(
@@ -1041,13 +1206,11 @@ export class MailService {
     const now = new Date();
     const updated = await this.database.$transaction(async (tx) => {
       const reference = await newOutgoingReference(tx, id, now);
-      return tx.courrier.update({
+      await this.move(tx, courrier, 'SUBMIT_FOR_VALIDATION', {
+        data: { submittedAt: now, ...(reference ? { reference } : {}) },
+      });
+      return tx.courrier.findUniqueOrThrow({
         where: { id },
-        data: {
-          status: CourrierStatus.EN_ATTENTE_VALIDATION,
-          submittedAt: now,
-          ...(reference ? { reference } : {}),
-        },
         include: mailInclude,
       });
     });
@@ -1155,16 +1318,14 @@ export class MailService {
     }
 
     // Only to a project of the effet's company.
-    await assertProjectOfCompany(
-      this.database,
-      dto.projectId,
-      await this.companyOfEffet(courrier.dossierId, courrier.createdById),
+    const companyId = await this.companyOfEffet(
+      courrier.dossierId,
+      courrier.createdById,
     );
+    await assertProjectOfCompany(this.database, dto.projectId, companyId);
     const hasPermission = await this.canDispatch(userId, courrier);
     const status = courrier.status;
 
-    const isInitial =
-      status === CourrierStatus.RECU || status === CourrierStatus.ENREGISTRE;
     // A dispatched effet is transmitted at once (no AFFECTE step any more):
     // its dispatching can still be corrected until a first instruction.
     const isReassignable =
@@ -1172,9 +1333,7 @@ export class MailService {
       status === CourrierStatus.AFFECTE ||
       status === CourrierStatus.TRANSMIS;
 
-    if (isInitial) {
-      // Allowed for users with or without permission
-    } else if (isReassignable) {
+    if (isReassignable) {
       if (!hasPermission) {
         throw new ConflictException(
           "Seul un utilisateur avec la permission de dispatch peut changer l'affectation d'un effet en attente de validation ou déjà transmis",
@@ -1185,38 +1344,43 @@ export class MailService {
           "Impossible de changer l'affectation : une ou plusieurs instructions existent déjà pour cet effet",
         );
       }
-    } else {
-      throw new ConflictException(
-        `Impossible de dispatcher l'effet depuis le statut ${status}`,
-      );
     }
+    // Dispatched at once by whoever may (DISPATCH), else proposed (PROPOSE_DISPATCH);
+    // any other status: 409 INVALID_TRANSITION.
+    const event: CourrierEvent = hasPermission
+      ? 'DISPATCH'
+      : 'PROPOSE_DISPATCH';
+    this.assertAllowed(courrier, event);
+    const target = { ...courrier, companyId };
 
     if (hasPermission) {
       const now = new Date();
-      const updated = await this.database.courrier.update({
-        where: { id },
-        data: {
-          status: CourrierStatus.TRANSMIS,
-          transmittedAt: now,
-          transmittedById: userId,
-          ownerId: designatedResponsibleId,
-          projectId: dto.projectId,
-          contractId: resolvedContractId,
-          dossierId: resolvedDossierId,
-          proposedProjectId: null,
-          proposedContractId: null,
-          proposedDossierId: null,
-          proposedById: userId,
-          proposedAt: now,
-          dispatchValidatedById: userId,
-          dispatchValidatedAt: now,
-        },
-        include: mailInclude,
+      const updated = await this.database.$transaction(async (tx) => {
+        await this.move(tx, target, 'DISPATCH', {
+          data: {
+            transmittedAt: now,
+            transmittedById: userId,
+            ownerId: designatedResponsibleId,
+            projectId: dto.projectId,
+            contractId: resolvedContractId,
+            dossierId: resolvedDossierId,
+            proposedProjectId: null,
+            proposedContractId: null,
+            proposedDossierId: null,
+            proposedById: userId,
+            proposedAt: now,
+            dispatchValidatedById: userId,
+            dispatchValidatedAt: now,
+          },
+        });
+        if (resolvedDossierId) {
+          await markDossierInProgress(tx, resolvedDossierId);
+        }
+        return tx.courrier.findUniqueOrThrow({
+          where: { id },
+          include: mailInclude,
+        });
       });
-
-      if (resolvedDossierId) {
-        await markDossierInProgress(this.database, resolvedDossierId);
-      }
 
       this.recordCourrierEvent(id, 'COURRIER_DISPATCHE', {
         projectId: dto.projectId,
@@ -1224,19 +1388,22 @@ export class MailService {
       await this.notifyTransmitted(updated, userId);
       return formatCourrier(updated);
     } else {
-      const updated = await this.database.courrier.update({
-        where: { id },
-        data: {
-          status: CourrierStatus.EN_ATTENTE_TRANSMISSION,
-          proposedProjectId: dto.projectId,
-          proposedContractId: dto.contractId ?? null,
-          proposedDossierId: dto.dossierId ?? null,
-          proposedById: userId,
-          proposedAt: new Date(),
-          dispatchValidatedById: null,
-          dispatchValidatedAt: null,
-        },
-        include: mailInclude,
+      const updated = await this.database.$transaction(async (tx) => {
+        await this.move(tx, target, 'PROPOSE_DISPATCH', {
+          data: {
+            proposedProjectId: dto.projectId,
+            proposedContractId: dto.contractId ?? null,
+            proposedDossierId: dto.dossierId ?? null,
+            proposedById: userId,
+            proposedAt: new Date(),
+            dispatchValidatedById: null,
+            dispatchValidatedAt: null,
+          },
+        });
+        return tx.courrier.findUniqueOrThrow({
+          where: { id },
+          include: mailInclude,
+        });
       });
 
       this.notify(courrier, await this.dispatchValidatorsOf(courrier), userId, {
@@ -1323,9 +1490,7 @@ export class MailService {
    * Reserved to users authorized to validate dispatching. Sets ownerId to the designated responsible of the target.
    */
   async validateDispatch(id: string, userId: string) {
-    const courrier = await this.requireStatus(id, [
-      CourrierStatus.EN_ATTENTE_TRANSMISSION,
-    ]);
+    const courrier = await this.requireEvent(id, 'VALIDATE_DISPATCH');
 
     if (!courrier.proposedProjectId) {
       throw new BadRequestException(
@@ -1373,10 +1538,9 @@ export class MailService {
       }
 
       const now = new Date();
-      const { count } = await tx.courrier.updateMany({
-        where: { id, status: CourrierStatus.EN_ATTENTE_TRANSMISSION },
+      // Conditional on EN_ATTENTE_TRANSMISSION: two decisions can't both land.
+      await this.move(tx, courrier, 'VALIDATE_DISPATCH', {
         data: {
-          status: CourrierStatus.TRANSMIS,
           transmittedAt: now,
           transmittedById: userId,
           projectId,
@@ -1390,11 +1554,6 @@ export class MailService {
           dispatchValidatedAt: now,
         },
       });
-      if (count === 0) {
-        throw new ConflictException(
-          'This courrier was decided on meanwhile — refresh and try again',
-        );
-      }
 
       if (dossierId) {
         await markDossierInProgress(tx, dossierId);
@@ -1420,6 +1579,68 @@ export class MailService {
     this.notify(updated, [updated.proposedById], userId, {
       type: 'COURRIER_DISPATCH_VALIDATED',
       message: `Le dispatching proposé pour « ${updated.subject} » est validé.`,
+    });
+    return formatCourrier(updated);
+  }
+
+  /**
+   * « Rejeter le dispatching » (owner 2026-11-15): a proposed dispatching is refused with its
+   * reason, EN_ATTENTE_TRANSMISSION -> RECU. The proposal is cleared (the effet is back at the
+   * reception, to be dispatched again); who proposed what stays in the journal, the
+   * Validation (REJETE) and StatusHistory. The proposer is told why.
+   */
+  async rejectDispatch(id: string, reason: string, userId: string) {
+    const courrier = await this.requireEvent(id, 'REJECT_DISPATCH');
+    if (!courrier.proposedProjectId) {
+      throw new BadRequestException(
+        "Cet effet n'a pas de proposition de dispatching en attente.",
+      );
+    }
+    if (!(await this.canValidateDispatch(userId, courrier))) {
+      throw new ForbiddenException(
+        'Seul un utilisateur habilité à valider le dispatching peut effectuer cette action.',
+      );
+    }
+    const proposal = {
+      proposedById: courrier.proposedById,
+      proposedAt: courrier.proposedAt,
+      proposedProjectId: courrier.proposedProjectId,
+      proposedContractId: courrier.proposedContractId,
+      proposedDossierId: courrier.proposedDossierId,
+    };
+    const updated = await this.database.$transaction(async (tx) => {
+      await this.move(tx, courrier, 'REJECT_DISPATCH', {
+        reason,
+        data: {
+          proposedProjectId: null,
+          proposedContractId: null,
+          proposedDossierId: null,
+          proposedById: null,
+          proposedAt: null,
+          dispatchValidatedById: null,
+          dispatchValidatedAt: null,
+        },
+      });
+      await tx.validation.create({
+        data: {
+          courrierId: id,
+          validatorId: userId,
+          decision: ValidationDecision.REJETE,
+          motif: reason,
+        },
+      });
+      return tx.courrier.findUniqueOrThrow({
+        where: { id },
+        include: mailInclude,
+      });
+    });
+    this.recordCourrierEvent(id, 'COURRIER_DISPATCH_REJETE', {
+      reason,
+      ...proposal,
+    });
+    this.notify(courrier, [proposal.proposedById], userId, {
+      type: 'COURRIER_DISPATCH_REJECTED',
+      message: `Le dispatching proposé pour « ${courrier.subject} » est rejeté : ${reason}`,
     });
     return formatCourrier(updated);
   }
@@ -1484,34 +1705,22 @@ export class MailService {
     decision: ValidationDecision,
     motif?: string,
   ) {
-    const courrier = await this.requireStatus(id, [
-      CourrierStatus.EN_ATTENTE_VALIDATION,
-    ]);
+    const approved = decision === ValidationDecision.VALIDE;
+    const event: CourrierEvent = approved ? 'VALIDATE' : 'REQUEST_CORRECTIONS';
+    const courrier = await this.requireEvent(id, event);
     if ((await this.validatorOf(courrier)) !== userId) {
       throw new ForbiddenException(
         "Only this courrier's validator (its dossier's responsible, or the company's) can decide on it",
       );
     }
-    const approved = decision === ValidationDecision.VALIDE;
     const updated = await this.database.$transaction(async (tx) => {
-      // Guarded on the status read above, so two concurrent decisions
+      // Conditional on the status read above, so two concurrent decisions
       // can't both land.
       const now = new Date();
-      const { count } = await tx.courrier.updateMany({
-        where: { id, status: CourrierStatus.EN_ATTENTE_VALIDATION },
-        data: approved
-          ? {
-              status: CourrierStatus.VALIDE,
-              approvedAt: now,
-              approvedById: userId,
-            }
-          : { status: CourrierStatus.A_CORRIGER },
+      await this.move(tx, courrier, event, {
+        reason: motif ?? null,
+        data: approved ? { approvedAt: now, approvedById: userId } : {},
       });
-      if (count === 0) {
-        throw new ConflictException(
-          'This courrier was decided on meanwhile — refresh and try again',
-        );
-      }
       // A sortant submitted before references were given at submission
       // gets its own now — rolled back with the rest if anything fails.
       const reference = approved
@@ -1616,30 +1825,44 @@ export class MailService {
     userId: string,
     permission: Permission,
   ) {
+    if (await this.mayConclude(courrier, userId, permission)) return;
+    throw new ForbiddenException(
+      `Only its designated responsible, its supervisor, its company's responsible, an administrator or a holder of ${permission} can do this`,
+    );
+  }
+
+  // The rule of assertMayConclude.
+  private async mayConclude(
+    courrier: {
+      direction: CourrierDirection;
+      ownerId?: string | null;
+      supervisorId?: string | null;
+      dossierId?: string | null;
+      createdById?: string | null;
+    },
+    userId: string,
+    permission: Permission,
+  ): Promise<boolean> {
     if (courrier.ownerId === userId || courrier.supervisorId === userId) {
-      return;
+      return true;
     }
     if (
       courrier.direction === CourrierDirection.SORTANT &&
       courrier.createdById === userId
     ) {
-      return;
+      return true;
     }
-    if ((await this.companyResponsibleOf(courrier)) === userId) return;
+    if ((await this.companyResponsibleOf(courrier)) === userId) return true;
     const companyId = await this.companyOfEffet(
       courrier.dossierId ?? null,
       courrier.createdById ?? null,
     );
-    if (await this.access.hasAtCompany(userId, permission, companyId)) return;
+    if (await this.access.hasAtCompany(userId, permission, companyId)) {
+      return true;
+    }
     // An administrator of its company (role.assign, formerly a platform user
     // administrator).
-    if (
-      await this.access.hasAtCompany(userId, Permission.ROLE_ASSIGN, companyId)
-    )
-      return;
-    throw new ForbiddenException(
-      `Only its designated responsible, its supervisor, its company's responsible, an administrator or a holder of ${permission} can do this`,
-    );
+    return this.access.hasAtCompany(userId, Permission.ROLE_ASSIGN, companyId);
   }
 
   private async companyResponsibleOf(courrier: {
@@ -1892,7 +2115,7 @@ export class MailService {
     file: Express.Multer.File | undefined,
     userId: string,
   ) {
-    const courrier = await this.requireSortant(id, [CourrierStatus.VALIDE]);
+    const courrier = await this.requireSortant(id, 'SIGN');
     if (!file) {
       throw new BadRequestException('file (the signed scan) is required');
     }
@@ -1911,10 +2134,8 @@ export class MailService {
       userId,
       'Effet signé',
       (tx, documentId) =>
-        tx.courrier.updateMany({
-          where: { id, status: CourrierStatus.VALIDE },
+        this.move(tx, courrier, 'SIGN', {
           data: {
-            status: CourrierStatus.SIGNE,
             signedAt: new Date(dto.signedAt),
             signedById: dto.signatoryId,
             signedDocumentId: documentId,
@@ -1940,7 +2161,7 @@ export class MailService {
   // Sortant: SIGNE -> ENVOYE, under the year's next bordereau de
   // transmission (BT-AAAA-NNNNNN).
   async send(id: string, dto: SendMailDto, userId: string) {
-    const sortant = await this.requireSortant(id, SENDABLE_STATUSES);
+    const sortant = await this.requireSortant(id, 'SEND');
     const canal = await assertCanalOfCompany(
       this.database,
       dto.canalId,
@@ -1954,10 +2175,8 @@ export class MailService {
       'dischargeExpectedDays',
     );
     const updated = await this.database.$transaction(async (tx) => {
-      const { count } = await tx.courrier.updateMany({
-        where: { id, status: { in: SENDABLE_STATUSES } },
+      await this.move(tx, sortant, 'SEND', {
         data: {
-          status: CourrierStatus.ENVOYE,
           bordereauNumber: await nextBordereauNumber(tx, new Date()),
           canalId: dto.canalId,
           transmissionMode: canal.name,
@@ -1968,11 +2187,6 @@ export class MailService {
           dischargeDueDate,
         },
       });
-      if (count === 0) {
-        throw new ConflictException(
-          'This courrier was sent meanwhile — refresh and try again',
-        );
-      }
       return tx.courrier.findUniqueOrThrow({
         where: { id },
         include: mailInclude,
@@ -2048,19 +2262,15 @@ export class MailService {
   // A sortant is cancelled with its reason (CancelMailDto: 10 characters
   // at least); for an entrant the reason is optional.
   async cancel(id: string, reason?: string) {
-    const courrier = await this.requireStatus(id, [
-      ...SORTANT_OPEN_STATUSES,
-      ...ENTRANT_OPEN_STATUSES,
-      // An entrant whose dispatching awaits validation.
-      CourrierStatus.EN_ATTENTE_TRANSMISSION,
-    ]);
+    const courrier = await this.requireEvent(id, 'CANCEL');
     if (courrier.direction === CourrierDirection.SORTANT && !reason) {
       throw new BadRequestException(
         'reason is required to cancel a sortant (10 characters at least)',
       );
     }
     return formatCourrier(
-      await this.setStatus(courrier.id, CourrierStatus.ANNULE, {
+      await this.setStatus(courrier, 'CANCEL', {
+        reason: reason ?? null,
         data: { cancelledAt: new Date(), cancellationReason: reason ?? null },
         metadata: reason ? { reason } : undefined,
       }),
@@ -2070,36 +2280,51 @@ export class MailService {
   // Entrant: mark a received courrier as fully treated (10.2.4.8), with an
   // optional note. Its instructions still open are cancelled with it.
   async close(id: string, dto: CloseMailDto = {}, userId?: string) {
-    const courrier = await this.requireStatus(id, ENTRANT_CLOSABLE_STATUSES);
+    const courrier = await this.findOne(id);
     if (courrier.direction !== CourrierDirection.ENTRANT) {
       throw new BadRequestException('Only an incoming courrier can be closed');
     }
+    this.assertAllowed(courrier, 'CLOSE');
     if (userId) {
       await this.assertMayConclude(courrier, userId, Permission.INCOMING_CLOSE);
     }
     const note = dto.note || null;
-    const [{ count: cancelledInstructions }, updated] =
-      await this.database.$transaction([
-        this.database.instruction.updateMany({
+    const { cancelledInstructions, updated } = await this.database.$transaction(
+      async (tx) => {
+        // Its open instructions end with it (system change: the closing decided it).
+        const open = await tx.instruction.findMany({
           where: {
             courrierId: id,
             status: { notIn: INSTRUCTION_DONE_STATUSES },
           },
-          data: {
-            status: InstructionStatus.ANNULEE,
-            cancellationReason: 'Effet clôturé',
-          },
-        }),
-        this.database.courrier.update({
-          where: { id },
-          data: {
-            status: CourrierStatus.CLOTURE,
-            closedAt: new Date(),
-            closingNote: note,
-          },
-          include: mailInclude,
-        }),
-      ]);
+          select: { id: true, status: true },
+        });
+        for (const instruction of open) {
+          await this.workflow.transition(tx, {
+            table: INSTRUCTION_STATES,
+            delegate: tx.instruction,
+            entityId: instruction.id,
+            event: 'CANCEL_BY_COURRIER',
+            from: instruction.status,
+            reason: 'Effet clôturé',
+            data: { cancellationReason: 'Effet clôturé' },
+            system: true,
+            companyId: courrier.companyId,
+          });
+        }
+        await this.move(tx, courrier, 'CLOSE', {
+          reason: note,
+          data: { closedAt: new Date(), closingNote: note },
+        });
+        return {
+          cancelledInstructions: open.length,
+          updated: await tx.courrier.findUniqueOrThrow({
+            where: { id },
+            include: mailInclude,
+          }),
+        };
+      },
+    );
     this.recordCourrierEvent(id, 'COURRIER_CLOTURE', {
       ...(note ? { note } : {}),
       cancelledInstructions,
@@ -2121,14 +2346,10 @@ export class MailService {
           : Permission.INCOMING_ARCHIVE,
       );
     }
-    const allowed = ARCHIVABLE_STATUSES[courrier.direction];
-    if (!allowed.includes(courrier.status)) {
-      throw new BadRequestException(
-        `Courrier is ${courrier.status}, expected one of: ${allowed.join(', ')}`,
-      );
-    }
+    this.assertAllowed(courrier, 'ARCHIVE');
     return formatCourrier(
-      await this.setStatus(courrier.id, CourrierStatus.ARCHIVE, {
+      await this.setStatus(courrier, 'ARCHIVE', {
+        reason: reason ?? null,
         data: {
           archivedAt: new Date(),
           archiveReason: reason ?? null,
@@ -2142,7 +2363,7 @@ export class MailService {
   // Inverse of archive(): back to the status it was archived from (an
   // entrant archived before that was recorded: CLOTURE).
   async unarchive(id: string, userId?: string, note?: string) {
-    const courrier = await this.requireStatus(id, [CourrierStatus.ARCHIVE]);
+    const courrier = await this.requireEvent(id, 'UNARCHIVE');
     if (userId) {
       await this.assertMayConclude(
         courrier,
@@ -2158,7 +2379,9 @@ export class MailService {
         ? CourrierStatus.VALIDE
         : CourrierStatus.CLOTURE);
     return formatCourrier(
-      await this.setStatus(courrier.id, status, {
+      await this.setStatus(courrier, 'UNARCHIVE', {
+        to: status,
+        reason: note ?? null,
         data: {
           archivedAt: null,
           archiveReason: null,
@@ -2399,16 +2622,12 @@ export class MailService {
   }
 
   private async dischargeSortant(
-    courrier: { id: string; status: CourrierStatus },
+    courrier: Parameters<MailService['move']>[1],
     userId: string,
     dto: DischargeMailDto,
     file: Express.Multer.File | undefined,
   ) {
-    if (courrier.status !== CourrierStatus.ENVOYE) {
-      throw new BadRequestException(
-        `Courrier is ${courrier.status}, expected one of: ENVOYE`,
-      );
-    }
+    this.assertAllowed(courrier, 'DISCHARGE');
     const { receivedBy, dischargedAt } = dto;
     if (!file || !receivedBy || !dischargedAt) {
       throw new BadRequestException(
@@ -2421,10 +2640,8 @@ export class MailService {
       userId,
       'Bordereau déchargé',
       (tx, documentId) =>
-        tx.courrier.updateMany({
-          where: { id: courrier.id, status: CourrierStatus.ENVOYE },
+        this.move(tx, courrier, 'DISCHARGE', {
           data: {
-            status: CourrierStatus.DECHARGE,
             dischargedAt: new Date(dischargedAt),
             dischargedById: userId,
             dischargedStamp: true,
@@ -2441,9 +2658,9 @@ export class MailService {
   }
 
   // Stores `file` as a document of the courrier, then — in one transaction —
-  // records it and applies `transition` (a guarded updateMany). If the
-  // transition finds the courrier changed meanwhile, nothing is recorded and
-  // the stored file is removed.
+  // records it and applies `transition` (a workflow move, conditional on the
+  // status read). If the transition finds the courrier changed meanwhile
+  // (409), nothing is recorded and the stored file is removed.
   private async withUploadedDocument(
     courrierId: string,
     file: Express.Multer.File,
@@ -2452,7 +2669,7 @@ export class MailService {
     transition: (
       tx: Prisma.TransactionClient,
       documentId: string,
-    ) => Promise<{ count: number }>,
+    ) => Promise<unknown>,
   ) {
     const { key } = await this.storage.upload(file.buffer, {
       originalName: file.originalname,
@@ -2472,12 +2689,7 @@ export class MailService {
             uploadedById: userId,
           },
         });
-        const { count } = await transition(tx, document.id);
-        if (count === 0) {
-          throw new ConflictException(
-            'This courrier changed meanwhile — refresh and try again',
-          );
-        }
+        await transition(tx, document.id);
         return tx.courrier.findUniqueOrThrow({
           where: { id: courrierId },
           include: mailInclude,
@@ -2547,12 +2759,30 @@ export class MailService {
       },
     });
     if (!courrier) throw new NotFoundException(`Courrier ${id} not found`);
+    if (await this.mayEdit(courrier, userId)) return;
+    throw new ForbiddenException(
+      `Missing permission at this company: ${Permission.INCOMING_UPDATE}`,
+    );
+  }
+
+  // The rule of assertMayEdit: its author, its designated responsible or its
+  // supervisor, or the update permission at its company.
+  private async mayEdit(
+    courrier: {
+      direction: CourrierDirection;
+      dossierId: string | null;
+      createdById: string | null;
+      ownerId: string | null;
+      supervisorId: string | null;
+    },
+    userId: string,
+  ): Promise<boolean> {
     if (
       [courrier.createdById, courrier.ownerId, courrier.supervisorId].includes(
         userId,
       )
     ) {
-      return;
+      return true;
     }
     const codes = [
       Permission.INCOMING_UPDATE,
@@ -2563,12 +2793,10 @@ export class MailService {
     ];
     for (const code of codes) {
       if (await this.hasPermissionAtCourrierCompany(userId, code, courrier)) {
-        return;
+        return true;
       }
     }
-    throw new ForbiddenException(
-      `Missing permission at this company: ${Permission.INCOMING_UPDATE}`,
-    );
+    return false;
   }
 
   // An effet the user may not see (visibleMailsWhere) is reported as not
@@ -2644,43 +2872,94 @@ export class MailService {
     }
   }
 
-  private async requireSortant(id: string, allowed: CourrierStatus[]) {
-    const courrier = await this.requireStatus(id, allowed);
+  // A sortant whose table allows `event` from its status (409 INVALID_TRANSITION otherwise).
+  private async requireSortant(id: string, event: CourrierEvent) {
+    const courrier = await this.findOne(id);
     if (courrier.direction !== CourrierDirection.SORTANT) {
       throw new BadRequestException('Only a sortant can go through this step');
     }
+    this.assertAllowed(courrier, event);
     return courrier;
   }
 
-  private async requireStatus(id: string, allowed: CourrierStatus[]) {
+  // The courrier, when its direction's table allows `event` from its status:
+  // 409 INVALID_TRANSITION otherwise.
+  private async requireEvent(id: string, event: CourrierEvent) {
     const courrier = await this.findOne(id);
-    if (!allowed.includes(courrier.status)) {
-      throw new BadRequestException(
-        `Courrier is ${courrier.status}, expected one of: ${allowed.join(', ')}`,
-      );
-    }
+    this.assertAllowed(courrier, event);
     return courrier;
   }
 
-  // `data`: written with the status; `action` and `metadata`: its journal
-  // entry (COURRIER_<status> by default).
+  private assertAllowed(
+    courrier: { direction: CourrierDirection; status: CourrierStatus },
+    event: CourrierEvent,
+  ) {
+    this.workflow.assertAllowed(
+      courrierStates(courrier.direction),
+      courrier.status,
+      event,
+    );
+  }
+
+  /**
+   * One status change of a courrier through the workflow engine (its direction's table),
+   * conditional on the status read, recorded in StatusHistory — inside `tx`.
+   */
+  private move(
+    tx: Prisma.TransactionClient,
+    courrier: {
+      id: string;
+      direction: CourrierDirection;
+      status: CourrierStatus;
+      companyId?: string | null;
+    },
+    event: CourrierEvent,
+    options: {
+      to?: CourrierStatus;
+      reason?: string | null;
+      data?: Prisma.CourrierUncheckedUpdateManyInput;
+      system?: boolean;
+    } = {},
+  ) {
+    return this.workflow.transition(tx, {
+      table: courrierStates(courrier.direction),
+      delegate: tx.courrier,
+      entityId: courrier.id,
+      event,
+      from: courrier.status,
+      to: options.to,
+      reason: options.reason,
+      data: options.data,
+      system: options.system,
+      ...(courrier.companyId !== undefined
+        ? { companyId: courrier.companyId }
+        : {}),
+    });
+  }
+
+  // `move` in its own transaction, then the courrier as it is now. `data`: written with
+  // the status; `action` and `metadata`: its journal entry (COURRIER_<status> by default).
   private async setStatus(
-    id: string,
-    status: CourrierStatus,
+    courrier: Parameters<MailService['move']>[1],
+    event: CourrierEvent,
     extra: {
-      data?: Prisma.CourrierUncheckedUpdateInput;
+      to?: CourrierStatus;
+      reason?: string | null;
+      data?: Prisma.CourrierUncheckedUpdateManyInput;
       action?: string;
       metadata?: Record<string, unknown>;
     } = {},
   ) {
-    const updated = await this.database.courrier.update({
-      where: { id },
-      data: { ...extra.data, status },
-      include: mailInclude,
+    const updated = await this.database.$transaction(async (tx) => {
+      await this.move(tx, courrier, event, extra);
+      return tx.courrier.findUniqueOrThrow({
+        where: { id: courrier.id },
+        include: mailInclude,
+      });
     });
     this.recordCourrierEvent(
-      id,
-      extra.action ?? `COURRIER_${status}`,
+      courrier.id,
+      extra.action ?? `COURRIER_${updated.status}`,
       extra.metadata,
     );
     return updated;
@@ -2872,22 +3151,12 @@ type EffetFields = {
   returnExpected?: boolean | null;
 };
 
-// Statuses an entrant can be transmitted from: dispatched (AFFECTE), or
-// registered with its dossier.
-const TRANSMITTABLE_STATUSES: CourrierStatus[] = [
-  CourrierStatus.RECU,
-  CourrierStatus.ENREGISTRE,
-  CourrierStatus.AFFECTE,
-];
-
 // Transmitting hands an entrant to its designated responsible: only an
-// entrant whose dossier (or contract) is known, not yet transmitted.
-// `status` is omitted when the caller checks it itself (requireStatus) or
-// the courrier is being created.
+// entrant whose dossier (or contract) is known. Its status is the TRANSMIT
+// rule of COURRIER_ENTRANT_STATES, checked by the caller.
 function assertTransmittable(
   direction: CourrierDirection,
   dossierOrContractId: string | null,
-  status?: CourrierStatus,
 ) {
   if (direction !== CourrierDirection.ENTRANT) {
     throw new BadRequestException('Only an entrant can be transmitted');
@@ -2895,11 +3164,6 @@ function assertTransmittable(
   if (!dossierOrContractId) {
     throw new BadRequestException(
       'Attach this courrier to its dossier before transmitting it',
-    );
-  }
-  if (status && !TRANSMITTABLE_STATUSES.includes(status)) {
-    throw new BadRequestException(
-      `Courrier is ${status} and has already been transmitted`,
     );
   }
 }

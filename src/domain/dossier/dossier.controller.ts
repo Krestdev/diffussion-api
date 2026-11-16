@@ -59,7 +59,7 @@ export class DossierController {
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.dossierService.findOne(id, user.sub);
+    return this.dossierService.detail(id, user.sub);
   }
 
   @Patch(':id')

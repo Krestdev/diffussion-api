@@ -33,6 +33,15 @@ import { endingWithin } from '../project/project.service';
 import { CreateContractDto } from './dto/create-contract.dto';
 import { FindContractsQueryDto } from './dto/find-contracts.query.dto';
 import { UpdateContractDto } from './dto/update-contract.dto';
+import { can } from '../../auth/access/permission-checks';
+import {
+  ActionBlockReason,
+  ActionStates,
+  blocked,
+  needsStatus,
+} from '../../workflow/action-states';
+import { WorkflowService } from '../../workflow/workflow.service';
+import { CONTRACT_STATES, ContractEvent } from './contract.states';
 
 const contractInclude = {
   project: {
@@ -60,6 +69,7 @@ export class ContractService {
     private readonly activity: ActivityService,
     private readonly access: AccessService,
     private readonly notifications: NotificationsService,
+    private readonly workflow: WorkflowService,
   ) {}
 
   // The active contract types (PA·7), in their order — the form's choices.
@@ -115,18 +125,28 @@ export class ContractService {
       this.database,
       authorizedUserIds ?? [],
     );
+    const companyId = await this.companyOfProject(dto.projectId ?? null);
     const contract = await createWithUniqueReference('CT', (number) =>
-      this.database.contract.create({
-        data: {
-          ...data,
-          ...dates,
-          signedAt: toDate(signedAt),
-          number,
-          accesses: {
-            create: authorized.map((userId) => ({ userId })),
+      this.database.$transaction(async (tx) => {
+        const created = await tx.contract.create({
+          data: {
+            ...data,
+            ...dates,
+            signedAt: toDate(signedAt),
+            number,
+            accesses: {
+              create: authorized.map((userId) => ({ userId })),
+            },
           },
-        },
-        include: contractInclude,
+          include: contractInclude,
+        });
+        await this.workflow.record(tx, {
+          table: CONTRACT_STATES,
+          entityId: created.id,
+          toStatus: created.status,
+          companyId,
+        });
+        return created;
       }),
     );
     return (await this.withCounts([contract]))[0];
@@ -216,7 +236,46 @@ export class ContractService {
 
   async findOneFor(id: string, userId: string) {
     await this.assertVisible(id, userId);
-    return this.findOne(id);
+    const contract = await this.findOne(id);
+    return { ...contract, actions: this.actionsOf(contract) };
+  }
+
+  /**
+   * Every action on the contract the person's permissions allow, disabled with the reason it
+   * is blocked now (owner standard: hidden when the role can never do it).
+   */
+  actionsOf(contract: {
+    status: ContractStatus;
+    _count: { dossiers: number };
+  }) {
+    const { status } = contract;
+    const archiver = can(Permission.CONTRACT_ARCHIVE);
+    return new ActionStates<'edit' | 'archive' | 'unarchive' | 'delete'>()
+      .addIf(
+        can(Permission.CONTRACT_UPDATE),
+        'edit',
+        status === ContractStatus.ARCHIVED &&
+          blocked(ActionBlockReason.WRONG_STATUS, { status }),
+      )
+      .addIf(
+        archiver,
+        'archive',
+        needsStatus(CONTRACT_STATES, status, 'ARCHIVE'),
+      )
+      .addIf(
+        archiver,
+        'unarchive',
+        needsStatus(CONTRACT_STATES, status, 'UNARCHIVE'),
+      )
+      .addIf(
+        archiver,
+        'delete',
+        contract._count.dossiers > 0 &&
+          blocked(ActionBlockReason.PREREQUISITE_MISSING, {
+            missing: 'NO_DOSSIERS',
+            count: String(contract._count.dossiers),
+          }),
+      ).all;
   }
 
   // Moving a contract to another project moves its dossiers with it: they
@@ -288,17 +347,12 @@ export class ContractService {
       actingUserId,
       Permission.CONTRACT_ARCHIVE,
     );
-    if (contract.status === ContractStatus.ARCHIVED) {
-      throw new BadRequestException('This contract is already archived');
-    }
-    await this.database.contract.update({
-      where: { id },
-      data: {
-        status: ContractStatus.ARCHIVED,
-        archivedAt: new Date(),
-        archiveReason: reason ?? null,
-      },
-    });
+    await this.move(
+      contract,
+      'ARCHIVE',
+      { archivedAt: new Date(), archiveReason: reason ?? null },
+      reason,
+    );
     return this.findOne(id);
   }
 
@@ -316,17 +370,12 @@ export class ContractService {
       actingUserId,
       Permission.CONTRACT_ARCHIVE,
     );
-    if (contract.status !== ContractStatus.ARCHIVED) {
-      throw new BadRequestException('This contract is not archived');
-    }
-    await this.database.contract.update({
-      where: { id },
-      data: {
-        status: ContractStatus.ACTIVE,
-        archivedAt: null,
-        archiveReason: null,
-      },
-    });
+    await this.move(
+      contract,
+      'UNARCHIVE',
+      { archivedAt: null, archiveReason: null },
+      note,
+    );
     return this.findOne(id);
   }
 
@@ -453,6 +502,28 @@ export class ContractService {
 
   // settings.update in the contract's company (a contract without project: a
   // super-administrator holding it).
+  // One status change through the workflow engine (StatusHistory), with its fields.
+  private async move(
+    contract: { id: string; status: ContractStatus; projectId: string | null },
+    event: ContractEvent,
+    data: Prisma.ContractUncheckedUpdateInput,
+    reason?: string,
+  ) {
+    const companyId = await this.companyOfProject(contract.projectId);
+    await this.database.$transaction((tx) =>
+      this.workflow.transition(tx, {
+        table: CONTRACT_STATES,
+        delegate: tx.contract,
+        entityId: contract.id,
+        event,
+        from: contract.status,
+        reason,
+        data,
+        companyId,
+      }),
+    );
+  }
+
   private async isAdmin(userId: string, companyId: string | null) {
     return companyId
       ? this.access.hasAtCompany(userId, Permission.SETTINGS_UPDATE, companyId)

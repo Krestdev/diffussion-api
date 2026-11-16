@@ -733,6 +733,162 @@ describe('Diffusion, end to end', () => {
   });
 
   // ---------------------------------------------------------------------------
+  describe('4c. Moteur de workflow (transitions, historique, actions)', () => {
+    it('records the creation status of an effet in its history', async () => {
+      const project = await db.project.create({
+        data: {
+          name: 'Workflow E2E',
+          companyId: id.companyA,
+          contentType: 'DOSSIERS',
+        },
+      });
+      id.wfProject = project.id;
+      const dossier = await as('chefA')
+        .post('/dossiers', {
+          title: 'Dossier du moteur',
+          companyId: id.companyA,
+          responsibleId: id.chefA,
+          projectId: project.id,
+        })
+        .expect(201);
+      id.wfDossier = dossier.body.id;
+
+      const res = await as('agentA')
+        .post('/courriers', {
+          direction: 'ENTRANT',
+          subject: 'Demande de dispatching',
+        })
+        .expect(201);
+      id.wfEffet = res.body.id;
+      const history = await db.statusHistory.findMany({
+        where: { entity: 'Courrier', entityId: id.wfEffet },
+      });
+      expect(history).toEqual([
+        expect.objectContaining({
+          fromStatus: null,
+          toStatus: 'RECU',
+          event: 'CREATE',
+          actorId: id.agentA,
+          companyId: id.companyA,
+        }),
+      ]);
+    });
+
+    it('lists the actions of an effet: allowed, blocked with a reason, never-allowed left out', async () => {
+      const res = await as('agentA')
+        .get(`/courriers/${id.wfEffet}`)
+        .expect(200);
+      const actions = new Map<string, any>(
+        res.body.actions.map((a: any) => [a.action, a]),
+      );
+      expect(actions.get('dispatch')).toMatchObject({ enabled: true });
+      // agentA lacks incoming.dispatch.validate: never offered.
+      expect(actions.has('rejectDispatch')).toBe(false);
+      // Not transmittable before its dossier is known.
+      expect(actions.get('transmit')).toMatchObject({
+        enabled: false,
+        reason: 'PREREQUISITE_MISSING',
+      });
+    });
+
+    it('a dispatching proposed by an agent waits for its validation, and is recorded', async () => {
+      const res = await as('agentA')
+        .post(`/courriers/${id.wfEffet}/dispatch`, {
+          projectId: id.wfProject,
+          dossierId: id.wfDossier,
+        })
+        .expect(201);
+      expect(res.body.status).toBe('EN_ATTENTE_TRANSMISSION');
+      const last = await db.statusHistory.findFirst({
+        where: { entity: 'Courrier', entityId: id.wfEffet },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(last).toMatchObject({
+        fromStatus: 'RECU',
+        toStatus: 'EN_ATTENTE_TRANSMISSION',
+        event: 'PROPOSE_DISPATCH',
+        actorId: id.agentA,
+      });
+
+      const seen = await as('respA')
+        .get(`/courriers/${id.wfEffet}`)
+        .expect(200);
+      const actions = new Map<string, any>(
+        seen.body.actions.map((a: any) => [a.action, a]),
+      );
+      expect(actions.get('validateDispatch')).toMatchObject({ enabled: true });
+      expect(actions.get('rejectDispatch')).toMatchObject({ enabled: true });
+    });
+
+    it('« Rejeter le dispatching »: back to the reception, with its reason, told to the proposer', async () => {
+      await as('agentA')
+        .post(`/courriers/${id.wfEffet}/dispatch/reject`, {
+          reason: 'Mauvais projet choisi',
+        })
+        .expect(403);
+      await as('respA')
+        .post(`/courriers/${id.wfEffet}/dispatch/reject`, { reason: 'Non' })
+        .expect(400);
+
+      const res = await as('respA')
+        .post(`/courriers/${id.wfEffet}/dispatch/reject`, {
+          reason: 'Mauvais projet choisi',
+        })
+        .expect(201);
+      expect(res.body.status).toBe('RECU');
+      expect(res.body.proposedProjectId ?? null).toBeNull();
+
+      const last = await db.statusHistory.findFirst({
+        where: { entity: 'Courrier', entityId: id.wfEffet },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(last).toMatchObject({
+        fromStatus: 'EN_ATTENTE_TRANSMISSION',
+        toStatus: 'RECU',
+        event: 'REJECT_DISPATCH',
+        actorId: id.respA,
+        reason: 'Mauvais projet choisi',
+      });
+      const validation = await db.validation.findFirst({
+        where: { courrierId: id.wfEffet, decision: 'REJETE' },
+      });
+      expect(validation?.motif).toBe('Mauvais projet choisi');
+
+      const types = await eventually(
+        async () => {
+          const inbox = await as('agentA').get('/notifications/me').expect(200);
+          return inbox.body.map((n: any) => n.notification.type);
+        },
+        (t: string[]) => t.includes('COURRIER_DISPATCH_REJECTED'),
+      );
+      expect(types).toContain('COURRIER_DISPATCH_REJECTED');
+    });
+
+    it('answers 409 INVALID_TRANSITION to a step its status does not allow', async () => {
+      const res = await as('respA')
+        .post(`/courriers/${id.wfEffet}/dispatch/reject`, {
+          reason: 'Encore une fois, non',
+        })
+        .expect(409);
+      expect(res.body).toMatchObject({
+        code: 'INVALID_TRANSITION',
+        params: { entity: 'Courrier', from: 'RECU', event: 'REJECT_DISPATCH' },
+      });
+
+      const seen = await as('respA')
+        .get(`/courriers/${id.wfEffet}`)
+        .expect(200);
+      expect(
+        seen.body.actions.find((a: any) => a.action === 'rejectDispatch'),
+      ).toMatchObject({
+        enabled: false,
+        reason: 'WRONG_STATUS',
+        params: { status: 'RECU' },
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   describe("4b. Parcours d'un effet sortant", () => {
     it('is drafted from its subject, then given its text and its dossier', async () => {
       const draft = await as('chefA')
@@ -1102,7 +1258,7 @@ describe('Diffusion, end to end', () => {
         .patch(`/instructions/${id.task}/ne-pas-souscrire`, {
           motif: 'Finalement non',
         })
-        .expect(400);
+        .expect(409);
     });
 
     it('the executant hands in a livrable: the validateur gives an opinion, the superviseur decides', async () => {

@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   Logger,
   OnApplicationBootstrap,
@@ -11,6 +12,8 @@ import {
 } from '../../generated/prisma/client';
 import { SettingsService } from '../administration/settings/settings.service';
 import { DatabaseService } from '../database/database.service';
+import { WorkflowService } from '../workflow/workflow.service';
+import { courrierStates } from './mail/courrier.states';
 
 // Hourly: the job only archives what is due, so running it often is
 // harmless and a restart never makes it miss a day.
@@ -39,7 +42,9 @@ const ARCHIVABLE: {
  * PA·8 "archivage automatique après clôture": each company's effets closed
  * (an entrant), discharged (a sortant) or cancelled more than
  * autoArchiveAfterMonths months ago are archived — never deleted, and
- * restorable like any archived effet. Companies set to null: never.
+ * restorable like any archived effet. Companies set to null: never. Each
+ * goes through the workflow engine (event AUTO_ARCHIVE, a system change),
+ * so it lands in StatusHistory.
  */
 @Injectable()
 export class AutoArchiveService
@@ -51,6 +56,7 @@ export class AutoArchiveService
   constructor(
     private readonly database: DatabaseService,
     private readonly settings: SettingsService,
+    private readonly workflow: WorkflowService,
   ) {}
 
   onApplicationBootstrap() {
@@ -120,21 +126,38 @@ export class AutoArchiveService
           ...(rule.direction ? { direction: rule.direction } : {}),
           [rule.since]: { lt: cutoff },
         },
-        select: { id: true },
+        select: { id: true, direction: true },
       });
       if (due.length === 0) continue;
-      const ids = due.map((row) => row.id);
-      // Guarded on the status read: an effet reopened meanwhile stays.
-      const { count } = await this.database.courrier.updateMany({
-        where: { id: { in: ids }, status: rule.status },
-        data: {
-          status: CourrierStatus.ARCHIVE,
-          archivedAt: now,
-          archiveReason: reason,
-          archivedFromStatus: rule.status,
-        },
-      });
-      total += count;
+      // One AUTO_ARCHIVE each, conditional on the status read: an effet
+      // reopened meanwhile stays (its 409 is skipped).
+      const ids: string[] = [];
+      for (const effet of due) {
+        try {
+          await this.database.$transaction((tx) =>
+            this.workflow.transition(tx, {
+              table: courrierStates(effet.direction),
+              delegate: tx.courrier,
+              entityId: effet.id,
+              event: 'AUTO_ARCHIVE',
+              from: rule.status,
+              reason,
+              data: {
+                archivedAt: now,
+                archiveReason: reason,
+                archivedFromStatus: rule.status,
+              },
+              system: true,
+              companyId,
+            }),
+          );
+          ids.push(effet.id);
+        } catch (error) {
+          if (!(error instanceof ConflictException)) throw error;
+        }
+      }
+      total += ids.length;
+      if (ids.length === 0) continue;
       // The audit journal, as the system's own action.
       await this.database.activityLog
         .createMany({

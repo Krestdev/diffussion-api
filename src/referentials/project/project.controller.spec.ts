@@ -7,6 +7,7 @@ import { ActivityService } from '../../activity/activity.service';
 import { DatabaseService } from '../../database/database.service';
 import { ProjectController } from './project.controller';
 import { ProjectService } from './project.service';
+import { WorkflowService } from '../../workflow/workflow.service';
 
 describe('ProjectController', () => {
   let controller: ProjectController;
@@ -16,6 +17,7 @@ describe('ProjectController', () => {
       controllers: [ProjectController],
       providers: [
         ProjectService,
+        WorkflowService,
         { provide: NotificationsService, useValue: {} },
         { provide: DatabaseService, useValue: {} },
         { provide: ActivityService, useValue: {} },

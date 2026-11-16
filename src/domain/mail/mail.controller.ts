@@ -54,6 +54,7 @@ import { FindOutgoingMailsQueryDto } from './dto/find-outgoing-mails.query.dto';
 import { RequestCorrectionsDto } from './dto/request-corrections.dto';
 import { UpdateMailDto } from './dto/update-mail.dto';
 import { DispatchMailDto } from './dto/dispatch-mail.dto';
+import { RejectDispatchDto } from './dto/reject-dispatch.dto';
 import { AssignSupervisorDto } from './dto/assign-supervisor.dto';
 import { MailService } from './mail.service';
 
@@ -288,6 +289,18 @@ export class MailController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.mailService.validateDispatch(id, user.sub);
+  }
+
+  // « Rejeter le dispatching »: EN_ATTENTE_TRANSMISSION -> RECU with its
+  // reason (10 characters at least), told to whoever proposed it.
+  @Post(':id/dispatch/reject')
+  @RequirePermissions(Permission.INCOMING_DISPATCH_VALIDATE)
+  rejectDispatch(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RejectDispatchDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.mailService.rejectDispatch(id, dto.reason, user.sub);
   }
 
   @Post(':id/supervisor')

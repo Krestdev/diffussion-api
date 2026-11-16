@@ -1,5 +1,8 @@
+import { WorkflowService } from '../../workflow/workflow.service';
+import { ClsServiceManager } from 'nestjs-cls';
+import { Permission } from '../../auth/permissions';
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { DeliverableService } from './deliverable.service';
 import { DatabaseService } from '../../database/database.service';
 import { AccessService } from '../../auth/access/access.service';
@@ -18,11 +21,29 @@ jest.mock('../../common/utils/dossier-lifecycle', () => ({
   refreshDossierProgress: jest.fn(),
 }));
 
+// The signed-in person, as CoreAuthGuard puts them in the request context: the
+// workflow engine checks its rules' permissions against theirs.
+const signedIn: Record<string, unknown> = {};
+beforeEach(() => {
+  for (const key of Object.keys(signedIn)) delete signedIn[key];
+  Object.assign(signedIn, {
+    userId: 'u-signed-in',
+    companyId: 'company-1',
+    permissions: Object.values(Permission),
+  });
+  jest.spyOn(ClsServiceManager, 'getClsService').mockReturnValue({
+    isActive: () => true,
+    get: (key: string) => signedIn[key],
+  } as never);
+});
+afterEach(() => jest.restoreAllMocks());
+
 describe('DeliverableService', () => {
   let service: DeliverableService;
   let database: {
     livrable: Record<string, jest.Mock>;
     instruction: Record<string, jest.Mock>;
+    statusHistory: Record<string, jest.Mock>;
     $transaction: jest.Mock;
   };
   let access: { companyFilter: jest.Mock };
@@ -38,6 +59,7 @@ describe('DeliverableService', () => {
         count: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue({ id: 'l-1' }),
         delete: jest.fn(),
         // The task already has livrables at positions 0 and 1.
         aggregate: jest.fn().mockResolvedValue({ _max: { position: 1 } }),
@@ -49,6 +71,7 @@ describe('DeliverableService', () => {
           .fn()
           .mockResolvedValue({ status: InstructionStatus.EN_COURS }),
       },
+      statusHistory: { create: jest.fn().mockResolvedValue({}) },
       // Array form (batched writes) or callback form (interactive).
       $transaction: jest.fn((arg: unknown) =>
         typeof arg === 'function'
@@ -60,6 +83,7 @@ describe('DeliverableService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DeliverableService,
+        WorkflowService,
         { provide: DatabaseService, useValue: database },
         { provide: AccessService, useValue: access },
         {
@@ -129,6 +153,11 @@ describe('DeliverableService', () => {
         status: InstructionStatus.EN_COURS,
       });
 
+      database.livrable.create.mockResolvedValue({
+        id: 'l-3',
+        status: LivrableStatus.EN_PREPARATION,
+      });
+
       await service.create({ instructionId: 'i-1', title: 'Annexe' }, 'u-1');
 
       expect(database.livrable.create).toHaveBeenCalledWith(
@@ -136,6 +165,16 @@ describe('DeliverableService', () => {
           data: expect.objectContaining({ position: 2 }),
         }),
       );
+      // Its creation status is recorded (StatusHistory).
+      expect(database.statusHistory.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entity: 'Livrable',
+          entityId: 'l-3',
+          fromStatus: null,
+          toStatus: LivrableStatus.EN_PREPARATION,
+          event: 'CREATE',
+        }),
+      });
     });
 
     it('allows a livrable on a task not accepted yet (AFFECTEE)', async () => {
@@ -227,20 +266,32 @@ describe('DeliverableService', () => {
         instructionId: 'i-1',
         status: LivrableStatus.DEPOSE,
       });
-      database.livrable.update.mockResolvedValue({
-        id: 'l-1',
-        status: LivrableStatus.SOUMIS,
-      });
       database.instruction.updateMany.mockResolvedValue({ count: 1 });
 
       await service.submit('l-1');
 
-      expect(database.instruction.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ id: 'i-1' }),
-          data: { status: 'EN_ATTENTE_VALIDATION' },
-        }),
+      expect(database.livrable.updateMany).toHaveBeenCalledWith({
+        where: { id: 'l-1', status: LivrableStatus.DEPOSE },
+        data: { validationStep: 0, status: LivrableStatus.SOUMIS },
+      });
+      expect(database.instruction.updateMany).toHaveBeenCalledWith({
+        where: { id: 'i-1', status: InstructionStatus.EN_COURS },
+        data: { status: InstructionStatus.EN_ATTENTE_VALIDATION },
+      });
+      expect(database.statusHistory.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('refuses a livrable that is not deposited (409 INVALID_TRANSITION)', async () => {
+      database.livrable.findUnique.mockResolvedValue({
+        id: 'l-1',
+        instructionId: 'i-1',
+        status: LivrableStatus.EN_PREPARATION,
+      });
+
+      await expect(service.submit('l-1')).rejects.toBeInstanceOf(
+        ConflictException,
       );
+      expect(database.livrable.updateMany).not.toHaveBeenCalled();
     });
 
     it('refuses while nobody has subscribed to the task', async () => {
@@ -253,10 +304,11 @@ describe('DeliverableService', () => {
         status: InstructionStatus.AFFECTEE,
       });
 
+      // 409 INVALID_TRANSITION (the workflow engine), formerly 400.
       await expect(service.submit('l-1')).rejects.toBeInstanceOf(
-        BadRequestException,
+        ConflictException,
       );
-      expect(database.livrable.update).not.toHaveBeenCalled();
+      expect(database.livrable.updateMany).not.toHaveBeenCalled();
     });
   });
 });

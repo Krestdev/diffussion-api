@@ -20,6 +20,7 @@ describe('MailController', () => {
       send: jest.fn(),
       cancel: jest.fn(),
       discharge: jest.fn(),
+      rejectDispatch: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -99,5 +100,40 @@ describe('MailController', () => {
     });
     expect(transformed.documents).toHaveLength(1);
     expect(transformed.documents[0].name).toBe('DSF');
+  });
+
+  it('rejectDispatch() forwards the reason and the current user', () => {
+    controller.rejectDispatch(
+      'c-1',
+      { reason: 'Le dossier proposé est clôturé' },
+      {
+        sub: 'u-1',
+        email: 'u@x.com',
+        name: 'U',
+        companyId: 's-1',
+        sid: 'sid-1',
+        impersonator: null,
+        permissions: new Set<string>(),
+        platformAdmin: false,
+      },
+    );
+    expect(service.rejectDispatch).toHaveBeenCalledWith(
+      'c-1',
+      'Le dossier proposé est clôturé',
+      'u-1',
+    );
+  });
+
+  it('RejectDispatchDto wants a reason of 10 characters at least, trimmed', async () => {
+    const { ValidationPipe } = await import('@nestjs/common');
+    const { RejectDispatchDto } = await import('./dto/reject-dispatch.dto');
+    const pipe = new ValidationPipe({ whitelist: true, transform: true });
+    const check = (body: unknown) =>
+      pipe.transform(body, { type: 'body', metatype: RejectDispatchDto });
+    await expect(check({ reason: '   non merci   ' })).rejects.toBeDefined();
+    await expect(check({})).rejects.toBeDefined();
+    await expect(
+      check({ reason: '  Le dossier proposé est clôturé  ' }),
+    ).resolves.toEqual({ reason: 'Le dossier proposé est clôturé' });
   });
 });

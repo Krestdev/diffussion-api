@@ -23,6 +23,8 @@ import {
   UpdateCorrespondentContactDto,
 } from './dto/correspondent-contact.dto';
 import { CreateCorrespondentDto } from './dto/create-correspondent.dto';
+import { WorkflowService } from '../../workflow/workflow.service';
+import { CORRESPONDENT_STATES } from './correspondent.states';
 import { FindCorrespondantsQueryDto } from './dto/find-correspondents.query.dto';
 import { UpdateCorrespondantDto } from './dto/update-correspondent.dto';
 
@@ -53,6 +55,7 @@ export class CorrespondantService {
     private readonly access: AccessService,
     // Read by @AuditLog through `this.activity`.
     private readonly activity: ActivityService,
+    private readonly workflow: WorkflowService,
   ) {}
 
   @AuditLog({
@@ -69,15 +72,24 @@ export class CorrespondantService {
     await assertCompanyExists(this.database, dto.companyId);
     if (dto.typeId) await this.assertTypeUsable(dto.typeId, dto.companyId);
     return createWithUniqueReference('CP', (code) =>
-      this.database.correspondent.create({
-        data: {
-          ...dto,
-          code,
-          contacts: dto.mainContact?.trim()
-            ? { create: { name: dto.mainContact.trim() } }
-            : undefined,
-        },
-        include: includeType,
+      this.database.$transaction(async (tx) => {
+        const created = await tx.correspondent.create({
+          data: {
+            ...dto,
+            code,
+            contacts: dto.mainContact?.trim()
+              ? { create: { name: dto.mainContact.trim() } }
+              : undefined,
+          },
+          include: includeType,
+        });
+        await this.workflow.record(tx, {
+          table: CORRESPONDENT_STATES,
+          entityId: created.id,
+          toStatus: created.status,
+          companyId: created.companyId,
+        });
+        return created;
       }),
     );
   }
@@ -182,13 +194,29 @@ export class CorrespondantService {
       dto.mainContact,
       existing.mainContact,
     );
-    return this.database.correspondent.update({
-      where: { id: uuid },
-      data: {
-        ...dto,
-        contacts: contactToAdd ? { create: { name: contactToAdd } } : undefined,
-      },
-      include: includeType,
+    const { status, ...fields } = dto;
+    return this.database.$transaction(async (tx) => {
+      // Turned off or on: DEACTIVATE / ACTIVATE (StatusHistory).
+      if (statusChanges) {
+        await this.workflow.transition(tx, {
+          table: CORRESPONDENT_STATES,
+          delegate: tx.correspondent,
+          entityId: uuid,
+          event: status === 'INACTIVE' ? 'DEACTIVATE' : 'ACTIVATE',
+          from: existing.status,
+          companyId: existing.companyId,
+        });
+      }
+      return tx.correspondent.update({
+        where: { id: uuid },
+        data: {
+          ...fields,
+          contacts: contactToAdd
+            ? { create: { name: contactToAdd } }
+            : undefined,
+        },
+        include: includeType,
+      });
     });
   }
 

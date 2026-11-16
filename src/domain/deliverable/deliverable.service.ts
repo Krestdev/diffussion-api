@@ -24,6 +24,12 @@ import { DatabaseService } from '../../database/database.service';
 import { CreateDeliverableDto } from './dto/create-deliverable.dto';
 import { FindDeliverableQueryDto } from './dto/find-deliverable-query.dto';
 import { UpdateDeliverableDto } from './dto/update-deliverable.dto';
+import {
+  invalidTransition,
+  WorkflowService,
+} from '../../workflow/workflow.service';
+import { INSTRUCTION_STATES } from '../../instructions/instruction.states';
+import { LIVRABLE_STATES, LivrableEvent } from './livrable.states';
 
 const deliverableInclude = {
   documents: true,
@@ -43,18 +49,13 @@ const TERMINAL_INSTRUCTION_STATUSES: InstructionStatus[] = [
   InstructionStatus.ANNULEE,
 ];
 
-const SUBMITTABLE_INSTRUCTION_STATUSES: InstructionStatus[] = [
-  InstructionStatus.EN_COURS,
-  InstructionStatus.A_CORRIGER,
-  InstructionStatus.EN_ATTENTE_VALIDATION,
-];
-
 @Injectable()
 export class DeliverableService {
   constructor(
     private readonly database: DatabaseService,
     private readonly access: AccessService,
     private readonly activity: ActivityService,
+    private readonly workflow: WorkflowService,
   ) {}
 
   private recordInstructionEvent(
@@ -74,13 +75,21 @@ export class DeliverableService {
 
   async create(dto: CreateDeliverableDto, createdById: string) {
     await this.assertInstructionDossierOpen(dto.instructionId);
-    return this.database.livrable.create({
-      data: {
-        ...dto,
-        position: await nextLivrablePosition(this.database, dto.instructionId),
-        createdById,
-      },
-      include: deliverableInclude,
+    const position = await nextLivrablePosition(
+      this.database,
+      dto.instructionId,
+    );
+    return this.database.$transaction(async (tx) => {
+      const created = await tx.livrable.create({
+        data: { ...dto, position, createdById },
+        include: deliverableInclude,
+      });
+      await this.workflow.record(tx, {
+        table: LIVRABLE_STATES,
+        entityId: created.id,
+        toStatus: created.status,
+      });
+      return created;
     });
   }
 
@@ -210,7 +219,7 @@ export class DeliverableService {
           'A new version of this livrable was just created — reload it',
         );
       }
-      return tx.livrable.create({
+      const created = await tx.livrable.create({
         data: {
           instructionId: parent.instructionId,
           title: dto.title ?? parent.title,
@@ -223,6 +232,13 @@ export class DeliverableService {
         },
         include: deliverableInclude,
       });
+      await this.workflow.record(tx, {
+        table: LIVRABLE_STATES,
+        entityId: created.id,
+        toStatus: created.status,
+        event: 'NEW_VERSION',
+      });
+      return created;
     });
   }
 
@@ -237,16 +253,20 @@ export class DeliverableService {
   }
 
   async deposit(id: string, agentComment?: string) {
-    const livrable = await this.requireStatus(id, [
-      LivrableStatus.EN_PREPARATION,
-    ]);
-    const updated = await this.database.livrable.update({
-      where: { id: livrable.id },
-      data: {
-        status: LivrableStatus.DEPOSE,
-        agentComment: agentComment ?? undefined,
-      },
-      include: deliverableInclude,
+    const livrable = await this.requireEvent(id, 'DEPOSIT');
+    const updated = await this.database.$transaction(async (tx) => {
+      await this.workflow.transition(tx, {
+        table: LIVRABLE_STATES,
+        delegate: tx.livrable,
+        entityId: livrable.id,
+        event: 'DEPOSIT',
+        from: livrable.status,
+        data: { agentComment: agentComment ?? undefined },
+      });
+      return tx.livrable.findUniqueOrThrow({
+        where: { id: livrable.id },
+        include: deliverableInclude,
+      });
     });
     this.recordInstructionEvent(
       updated.instructionId,
@@ -263,34 +283,44 @@ export class DeliverableService {
   // livrable submitted on an instruction in any other state (AFFECTEE,
   // TERMINEE, ANNULEE...) would sit SOUMIS with nobody able to decide it.
   async submit(id: string) {
-    const livrable = await this.requireStatus(id, [LivrableStatus.DEPOSE]);
+    const livrable = await this.findOne(id);
+    // This route submits a DEPOSE livrable only (the deposer route submits from
+    // EN_PREPARATION): 409 INVALID_TRANSITION otherwise.
+    if (livrable.status !== LivrableStatus.DEPOSE) {
+      throw invalidTransition('Livrable', livrable.status, 'SUBMIT');
+    }
     const instruction = await this.database.instruction.findUniqueOrThrow({
       where: { id: livrable.instructionId },
       select: { status: true },
     });
-    if (!SUBMITTABLE_INSTRUCTION_STATUSES.includes(instruction.status)) {
-      throw new BadRequestException(
-        `Instruction is ${instruction.status} — livrables can only be submitted while it is ${SUBMITTABLE_INSTRUCTION_STATUSES.join(', ')}`,
-      );
-    }
-    const [updated] = await this.database.$transaction([
-      this.database.livrable.update({
-        where: { id: livrable.id },
+    // EN_COURS, A_CORRIGER or EN_ATTENTE_VALIDATION (409 INVALID_TRANSITION otherwise).
+    this.workflow.assertAllowed(
+      INSTRUCTION_STATES,
+      instruction.status,
+      'DEPOSIT',
+    );
+    return this.database.$transaction(async (tx) => {
+      await this.workflow.transition(tx, {
+        table: LIVRABLE_STATES,
+        delegate: tx.livrable,
+        entityId: livrable.id,
+        event: 'SUBMIT',
+        from: livrable.status,
         // Each submission goes through the validation chain from its start.
-        data: { status: LivrableStatus.SOUMIS, validationStep: 0 },
+        data: { validationStep: 0 },
+      });
+      await this.workflow.transition(tx, {
+        table: INSTRUCTION_STATES,
+        delegate: tx.instruction,
+        entityId: livrable.instructionId,
+        event: 'DEPOSIT',
+        from: instruction.status,
+      });
+      return tx.livrable.findUniqueOrThrow({
+        where: { id: livrable.id },
         include: deliverableInclude,
-      }),
-      this.database.instruction.updateMany({
-        where: {
-          id: livrable.instructionId,
-          status: {
-            in: [InstructionStatus.EN_COURS, InstructionStatus.A_CORRIGER],
-          },
-        },
-        data: { status: InstructionStatus.EN_ATTENTE_VALIDATION },
-      }),
-    ]);
-    return updated;
+      });
+    });
   }
 
   // Follows the version chain down from `id` to its current version.
@@ -307,22 +337,11 @@ export class DeliverableService {
     }
   }
 
-  private async requireStatus(id: string, allowed: LivrableStatus[]) {
+  /** The livrable; 409 INVALID_TRANSITION unless the event is allowed from its status. */
+  private async requireEvent(id: string, event: LivrableEvent) {
     const livrable = await this.findOne(id);
-    if (!allowed.includes(livrable.status)) {
-      throw new BadRequestException(
-        `Livrable is ${livrable.status}, expected one of: ${allowed.join(', ')}`,
-      );
-    }
+    this.workflow.assertAllowed(LIVRABLE_STATES, livrable.status, event);
     return livrable;
-  }
-
-  private setStatus(id: string, status: LivrableStatus) {
-    return this.database.livrable.update({
-      where: { id },
-      data: { status },
-      include: deliverableInclude,
-    });
   }
 
   // RG-DOS-007: no new livrable (or version) on a closed/archived dossier.

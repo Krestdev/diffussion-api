@@ -1488,6 +1488,33 @@ model ActivityLog {
   @@map("activity_log")
 }
 
+/// Every status change of a workflow entity (src/workflow, as EXPENZO's): written by
+/// WorkflowService in the same transaction as the change. Append-only; `entity` is the
+/// table's name (Courrier, Instruction, Livrable, Dossier, AnalysisSheet, Project,
+/// Contract, Correspondent), `event` the table's event (DISPATCH, VALIDATE, …, CREATE).
+model StatusHistory {
+  id         String   @id @default(uuid())
+  /// The entity's company (null: none could be told, e.g. a platform action).
+  companyId  String?
+  entity     String   @db.VarChar(50)
+  entityId   String
+  field      String   @db.VarChar(50)
+  /// Empty for the status a record is created with.
+  fromStatus String?  @db.VarChar(50)
+  toStatus   String   @db.VarChar(50)
+  event      String   @db.VarChar(50)
+  /// Null: a scheduled job or a cascade without a signed-in person.
+  actorId    String?
+  reason     String?  @db.Text
+  createdAt  DateTime @default(now())
+  /// The author's IP address (as ActivityLog.ip).
+  ip         String?  @db.VarChar(64)
+
+  @@index([entity, entityId])
+  @@index([companyId, createdAt])
+  @@map("status_history")
+}
+
 /// A batch of audit journal entries past their company's retention (PA·8),
 /// exported as CSV to the file storage before being deleted — the trace
 /// that stays. No foreign key: it outlives the company it mentions.
