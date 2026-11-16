@@ -133,10 +133,12 @@ describe('permission catalogue', () => {
 
   it('maps every 1.x code to current ones', () => {
     const replaces = UPGRADES.find((u) => u.version === '2.0.0')!.replaces;
+    // Withdrawn in 2.1.0 (projects come from the CREAPP core): nothing replaces them.
+    const withdrawn = new Set(['PROJECT_CREATE', 'PROJECT_ARCHIVE']);
     for (const code of OLD_CODES) {
       expect({ code, mapped: (replaces[code] ?? []).length > 0 }).toEqual({
         code,
-        mapped: true,
+        mapped: !withdrawn.has(code),
       });
       for (const next of replaces[code]) expect(known.has(next)).toBe(true);
     }
@@ -167,6 +169,13 @@ describe('permission catalogue', () => {
     expect(
       normalizePermissions(['INSTRUCTION_CLOSE'], { from: '1.0.0' }),
     ).toEqual([Permission.INSTRUCTION_READ, Permission.INSTRUCTION_CLOSE]);
+    // 2.1.0 withdraws project.create and project.archive; project.update stays.
+    expect(
+      normalizePermissions(
+        ['project.create', 'project.update', 'project.archive'],
+        { from: '2.0.0' },
+      ),
+    ).toEqual([Permission.PROJECT_READ, Permission.PROJECT_UPDATE]);
     // Current codes are taken as they are; unknown ones are dropped; a read stays alone.
     expect(normalizePermissions(['COURRIER_READ'])).toEqual([]);
     expect(normalizePermissions([Permission.AUDIT_READ])).toEqual([

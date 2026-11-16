@@ -10,6 +10,7 @@ import {
 } from '../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { dayParam } from '../notifications/notification-texts';
 import { agentOverdueWhere, taskOverdueWhere } from './instruction-overdue';
 
 const SWEEP_INTERVAL_MS = 10 * 60 * 1000;
@@ -67,6 +68,7 @@ export class InstructionLatenessService
         this.send(task, () => true, {
           type: 'TASK_OVERDUE_AGENT',
           message: `La date limite d'exécution de la tâche « ${task.title} » est dépassée (${formatDate(task.agentDueDate)}).`,
+          params: { date: dayParam(task.agentDueDate) },
         });
       }
 
@@ -82,6 +84,7 @@ export class InstructionLatenessService
           {
             type: 'TASK_OVERDUE',
             message: `La date limite de la tâche « ${task.title} » est dépassée (${formatDate(task.dueDate)}) et elle n'est pas validée.`,
+            params: { date: dayParam(task.dueDate) },
           },
           [task.createdById],
         );
@@ -114,7 +117,11 @@ export class InstructionLatenessService
       assignees: { userId: string; role: UserInstructionRole }[];
     },
     roleFilter: (role: UserInstructionRole) => boolean,
-    content: { type: string; message: string },
+    content: {
+      type: string;
+      message: string;
+      params?: Record<string, string>;
+    },
     extra: (string | null)[] = [],
   ) {
     const recipientIds = [

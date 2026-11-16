@@ -96,7 +96,7 @@ describe('RoleService', () => {
 
   it('serves the catalogue grouped, labelled, with the implied reads', () => {
     const catalog = service.catalog();
-    expect(catalog.version).toBe('2.0.0');
+    expect(catalog.version).toBe('2.1.0');
     const incoming = catalog.groups.find((g) => g.key === 'incoming');
     expect(incoming?.labels.fr).toBe('Effets entrants');
     expect(incoming?.permissions.map((p) => p.action)).toContain(

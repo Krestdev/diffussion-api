@@ -31,6 +31,12 @@ export interface AppConfig {
    * endpoint is switched off.
    */
   MCP_TOOL_LEVELS: McpToolLevelSetting[];
+  /**
+   * Stalled validations (an outgoing effet, a dispatching, a deliverable awaiting a decision)
+   * are reminded to whoever decides once they waited this many days, then again every this many
+   * days (as EXPENZO's REMINDER_AFTER_DAYS). Default 3.
+   */
+  REMINDER_AFTER_DAYS: number;
 }
 
 export const MCP_TOOL_LEVEL_VALUES = [
@@ -86,6 +92,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ACCESS_CACHE_SECONDS: Math.max(0, number(env.ACCESS_CACHE_SECONDS, 10)),
     CORE_COMPANY_LINKS: links(env.CORE_COMPANY_LINKS),
     MCP_TOOL_LEVELS: toolLevels(env.MCP_TOOL_LEVELS),
+    REMINDER_AFTER_DAYS: Math.max(
+      1,
+      Math.floor(number(env.REMINDER_AFTER_DAYS, 3)),
+    ),
   };
   if (config.NODE_ENV !== 'test') {
     const missing = (['CORE_URL', 'CORE_ISSUER'] as const).filter(

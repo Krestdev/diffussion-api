@@ -20,6 +20,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "manifest:sync": "ts-node scripts/sync-manifest.ts",
+    "projects:to-core": "ts-node src/cli/projects-to-core.ts",
     "permissions:labels": "ts-node scripts/sync-permission-labels.ts && prettier --write src/auth/permission-labels.ts"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/platform-socket.io": "^11.2.6",
+    "@nestjs/schedule": "^12.0.2",
     "@nestjs/swagger": "^11.4.6",
     "@nestjs/throttler": "^6.7.0",
     "@nestjs/websockets": "^11.2.6",

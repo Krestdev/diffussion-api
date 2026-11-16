@@ -5,6 +5,7 @@ import {
   Injectable,
   type NestInterceptor,
   OnModuleInit,
+  Optional,
   type Type,
 } from '@nestjs/common';
 import { INTERCEPTORS_METADATA } from '@nestjs/common/constants';
@@ -33,6 +34,8 @@ import {
   validationFailed,
 } from './mcp-tool';
 import { routeArgs } from './route-args';
+import { changeOf } from '../realtime/changes';
+import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { domainOf } from './tool-domains';
 
 /** The tools the endpoint offers (MCP_TOOLS in the app; a test list in unit tests). */
@@ -72,6 +75,8 @@ export class McpToolRegistry implements OnModuleInit {
     private readonly config: AppConfigService,
     private readonly access: AccessService,
     @Inject(MCP_TOOL_LIST) private readonly tools: readonly McpTool[],
+    // A change made by the assistant shows live in the company's tabs (optional in unit tests).
+    @Optional() private readonly realtime?: RealtimeGateway,
   ) {}
 
   /** Fails at boot when a tool is misnamed or points at a handler that no longer exists. */
@@ -129,6 +134,7 @@ export class McpToolRegistry implements OnModuleInit {
         await this.authorize(user, type, method, args);
         const controller = this.moduleRef.get(type, { strict: false });
         const result = (await handler.apply(controller, args)) as unknown;
+        this.announce(user, type, method, handler, args);
         return (await this.intercept(
           type,
           method,
@@ -140,6 +146,31 @@ export class McpToolRegistry implements OnModuleInit {
       dto: async (type, plain) => toDto(type, plain),
       can: (permission: Permission) => user.permissions.has(permission),
     };
+  }
+
+  /**
+   * A change made by the assistant shows live in the company's tabs, like one made in the UI
+   * (ChangesInterceptor), marked as the assistant's (as EXPENZO's registry).
+   */
+  private announce(
+    user: AuthUser,
+    type: Type<unknown>,
+    method: string,
+    handler: (...args: unknown[]) => unknown,
+    args: unknown[],
+  ): void {
+    if (!this.realtime) return;
+    const params: Record<string, unknown> = {};
+    for (const arg of routeArgs(type, method)) {
+      if (arg.kind === 'param') params[arg.name] = args[arg.index];
+    }
+    const found = changeOf(type, handler, params, {
+      by: user.sub,
+      viaAssistant: true,
+    });
+    if (found) {
+      this.realtime.publish(user.companyId, found.change, found.personal);
+    }
   }
 
   /** PermissionsGuard's checks, on the arguments the handler is about to get. */

@@ -19,6 +19,7 @@ import type {
 import { DatabaseService } from '../database/database.service';
 import { taskOverdueWhere } from '../instructions/instruction-overdue';
 import { NotificationsService } from '../notifications/notifications.service';
+import { dayParam } from '../notifications/notification-texts';
 import { AccessService } from '../auth/access/access.service';
 
 const SWEEP_INTERVAL_MS = 10 * 60 * 1000;
@@ -172,6 +173,7 @@ export class DeadlineReminderService
       this.send(courrierRecipients(row, false), {
         type: 'COURRIER_DUE_SOON',
         message: `L'échéance de l'effet ${row.number} « ${row.subject} » arrive le ${day(deadline)}.`,
+        params: { date: dayParam(deadline) },
         courrierId: row.id,
         dossierId: row.dossierId,
       });
@@ -200,6 +202,10 @@ export class DeadlineReminderService
       this.send(courrierRecipients(row, settings.remindDesignatedResponsible), {
         type: 'COURRIER_OVERDUE',
         message: `${row.overdueRemindedAt ? 'Relance : l' : 'L'}'échéance de l'effet ${row.number} « ${row.subject} » est dépassée (${day(deadline)}).`,
+        params: {
+          date: dayParam(deadline),
+          again: row.overdueRemindedAt ? '1' : '0',
+        },
         courrierId: row.id,
         dossierId: row.dossierId,
       });
@@ -233,6 +239,10 @@ export class DeadlineReminderService
         {
           type: 'COURRIER_DISCHARGE_OVERDUE',
           message: `${row.dischargeRemindedAt ? 'Relance : l' : 'L'}a décharge de l'effet sortant ${row.number} « ${row.subject} » était attendue le ${day(row.dischargeDueDate)}.`,
+          params: {
+            date: dayParam(row.dischargeDueDate),
+            again: row.dischargeRemindedAt ? '1' : '0',
+          },
           courrierId: row.id,
           dossierId: row.dossierId,
         },
@@ -284,6 +294,7 @@ export class DeadlineReminderService
         {
           type: 'TASK_DUE_SOON',
           message: `L'échéance de la tâche « ${row.title} » arrive le ${day(row.dueDate)}.`,
+          params: { date: dayParam(row.dueDate) },
           instructionId: row.id,
           courrierId: row.courrierId,
           dossierId: row.dossierId,
@@ -330,6 +341,7 @@ export class DeadlineReminderService
         {
           type: 'TASK_OVERDUE',
           message: `Relance : la date limite de la tâche « ${row.title} » est dépassée (${day(row.dueDate)}).`,
+          params: { date: dayParam(row.dueDate), again: '1' },
           instructionId: row.id,
           courrierId: row.courrierId,
           dossierId: row.dossierId,
@@ -349,6 +361,7 @@ export class DeadlineReminderService
     content: {
       type: string;
       message: string;
+      params?: Record<string, string>;
       courrierId: string | null;
       dossierId: string | null;
       instructionId?: string;
@@ -363,6 +376,7 @@ export class DeadlineReminderService
         recipientIds,
         type: content.type,
         message: content.message,
+        params: content.params,
         canal: NotificationCanal.IN_APP,
         courrierId: content.courrierId ?? undefined,
         dossierId: content.dossierId ?? undefined,

@@ -4,6 +4,7 @@ import {
   ArrayUnique,
   IsArray,
   IsEnum,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -50,4 +51,17 @@ export class CreateNotificationDto {
   @IsOptional()
   @IsUUID()
   instructionId?: string;
+
+  /**
+   * What the sentence is made of ({reason}, {date}, {actor}…), so each reader sees it in their
+   * language (notification-texts.ts). The effet's {number} and {subject} and the task's {title}
+   * are added from courrierId / instructionId.
+   */
+  @ApiPropertyOptional({
+    type: 'object',
+    additionalProperties: { type: 'string' },
+  })
+  @IsOptional()
+  @IsObject()
+  params?: Record<string, string>;
 }

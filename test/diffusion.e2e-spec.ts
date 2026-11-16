@@ -1432,31 +1432,31 @@ describe('Diffusion, end to end', () => {
 
   // ---------------------------------------------------------------------------
   describe('7b. Projets', () => {
-    it('belong to a company: managed by its responsible, seen by its users only', async () => {
-      const own = await as('respA')
-        .post('/projects', {
+    // Projects come from the CREAPP core (copies written by the directory sync): no route creates,
+    // deletes or changes the status of one any more.
+    it('are copies of the core: seen by their company only, never created or deleted here', async () => {
+      const own = await db.project.create({
+        data: {
           name: 'Digue de Bonabéri',
+          reference: 'PRJ-2026-901',
+          companyId: id.companyA,
           contentType: 'DOSSIERS',
-        })
-        .expect(201);
-      expect(own.body.company).toMatchObject({ id: id.companyA });
-      // Not on another company.
+          coreSyncedAt: new Date(),
+        },
+      });
       await as('respA')
         .post('/projects', {
           name: 'Pont de Mbalmayo',
-          companyId: id.companyB,
           contentType: 'DOSSIERS',
         })
-        .expect(403);
-      await as('chefA')
-        .post('/projects', { name: 'Hors droits', contentType: 'DOSSIERS' })
-        .expect(403);
+        .expect(404);
+      await as('respA').delete(`/projects/${own.id}`).expect(404);
 
       const seenA = await as('chefA').get('/projects?take=100').expect(200);
-      expect(seenA.body.data.map((p: any) => p.id)).toContain(own.body.id);
+      expect(seenA.body.data.map((p: any) => p.id)).toContain(own.id);
       const seenB = await as('respB').get('/projects?take=100').expect(200);
-      expect(seenB.body.data.map((p: any) => p.id)).not.toContain(own.body.id);
-      await as('respB').get(`/projects/${own.body.id}`).expect(404);
+      expect(seenB.body.data.map((p: any) => p.id)).not.toContain(own.id);
+      await as('respB').get(`/projects/${own.id}`).expect(404);
 
       // A dossier of another company cannot belong to it.
       await as('respB')
@@ -1464,21 +1464,25 @@ describe('Diffusion, end to end', () => {
           title: 'Hors company',
           companyId: id.companyB,
           responsibleId: id.respB,
-          projectId: own.body.id,
+          projectId: own.id,
         })
         .expect(400);
-      await as('respA').delete(`/projects/${own.body.id}`).expect(204);
+      await db.project.delete({ where: { id: own.id } });
     });
 
-    it('lists projects with their responsible, counts and metrics', async () => {
+    it("sets Diffusion's own settings only, and lists projects with their counts and metrics", async () => {
+      // The core's fields are refused (whitelist).
+      await as('super')
+        .patch(`/projects/${id.otherProject}`, { name: 'Renamed' })
+        .expect(400);
       const updated = await as('super')
-        .patch(`/projects/${id.otherProject}`, {
-          responsibleId: id.chefA,
-          startDate: '2026-01-01',
-          endDate: '2027-12-31',
-        })
+        .patch(`/projects/${id.otherProject}`, { mode: 'Marché public' })
         .expect(200);
-      expect(updated.body.responsible.id).toBe(id.chefA);
+      expect(updated.body.mode).toBe('Marché public');
+      await db.project.update({
+        where: { id: id.otherProject },
+        data: { responsibleId: id.chefA },
+      });
 
       const res = await as('chefA').get('/projects').expect(200);
       const project = res.body.data.find((p: any) => p.id === id.otherProject);
@@ -1486,21 +1490,18 @@ describe('Diffusion, end to end', () => {
       expect(project._count).toEqual({ contracts: 1, dossiers: 1 });
       expect(res.body.metrics.byStatus).toEqual({
         ACTIVE: 2,
+        SUSPENDED: 0,
         CLOSED: 0,
         ARCHIVED: 0,
       });
       expect(res.body.metrics.withoutResponsible).toBe(1);
     });
 
-    it('closes, then archives, one step at a time', async () => {
-      await as('super')
-        .patch(`/projects/${id.project}`, { status: 'ARCHIVED' })
-        .expect(400);
-      const closed = await as('super')
-        .patch(`/projects/${id.project}`, { status: 'CLOSED' })
-        .expect(200);
-      expect(closed.body.closedAt).not.toBeNull();
-
+    it('lists the closed ones on their tab (closed at the core)', async () => {
+      await db.project.update({
+        where: { id: id.project },
+        data: { status: 'CLOSED', closedAt: new Date() },
+      });
       const tab = await as('chefA').get('/projects?status=CLOSED').expect(200);
       expect(tab.body.data.map((p: any) => p.id)).toEqual([id.project]);
       expect(tab.body.metrics.byStatus.ACTIVE).toBe(1);

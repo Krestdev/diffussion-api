@@ -6,6 +6,7 @@ import { DossierController } from './dossier/dossier.controller';
 import { DossierService } from './dossier/dossier.service';
 import { DossierLatenessService } from './dossier/dossier-lateness.service';
 import { DeadlineReminderService } from './deadline-reminder.service';
+import { ApprovalReminderService } from './approval-reminder.service';
 import { AutoArchiveService } from './auto-archive.service';
 import { AuditRetentionService } from './audit-retention.service';
 import { MailController } from './mail/mail.controller';
@@ -19,6 +20,8 @@ import { DeliverableService } from './deliverable/deliverable.service';
     DossierService,
     DossierLatenessService,
     DeadlineReminderService,
+    // Stalled validations, reminded hourly (as EXPENZO's RemindersService).
+    ApprovalReminderService,
     AutoArchiveService,
     AuditRetentionService,
     MailService,

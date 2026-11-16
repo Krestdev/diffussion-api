@@ -1,6 +1,7 @@
 import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { randomUUID } from 'crypto';
 import { ClsModule, ClsMiddleware } from 'nestjs-cls';
@@ -39,6 +40,8 @@ import { SupportModule } from './support/support.module';
       global: true,
     }),
     ConfigModule.forRoot({ isGlobal: true }),
+    // Timed jobs (@Cron): reminders of stalled validations, the 08:00 digest (as EXPENZO).
+    ScheduleModule.forRoot(),
     // Global rate limiting: 100 requests per minute per IP by default.
     // Sensitive routes (auth) override this with a tighter @Throttle({...}).
     ThrottlerModule.forRoot([

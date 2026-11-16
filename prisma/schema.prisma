@@ -645,11 +645,27 @@ model Dossier {
 
 /// A wider project/programme a dossier can optionally be tagged under —
 /// purely organisational, carries no workflow of its own.
+///
+/// Since 2026-11-23 the CREAPP core owns the projects (as for EXPENZO): Diffusion keeps read-only
+/// copies under the same ids (DirectorySyncService, project-sync.ts). The core's fields (name,
+/// reference, description, status, leader = responsible, dates, budget) are written by the sync
+/// only; Diffusion's own (contentType, mode, maître d'ouvrage, who may open it) stay Diffusion's.
 model Project {
   id              String        @id @default(uuid())
-  name            String        @unique
-  /// "Réf Projet" on an analysis sheet.
+  /// Unique per company at the core (by reference), no longer here: two companies may share one.
+  name            String
+  /// "Réf Projet" on an analysis sheet (the core's reference, e.g. PRJ-2026-014).
   reference       String?       @db.VarChar(50)
+  /// The core's description.
+  description     String?
+  /// The core's budget (optional).
+  budget          Decimal?      @db.Decimal(20, 6)
+  /// Why the core last suspended, resumed or closed it (not sent by the core yet).
+  statusReason    String?
+  /// When the core's directory last wrote it; null: a project made in Diffusion before the core
+  /// owned projects (never deleted by the sync; matched by reference or imported with
+  /// `npm run projects:to-core`).
+  coreSyncedAt    DateTime?
   /// "Mode" (ex. marché public, gré à gré...).
   mode            String?       @db.VarChar(100)
   /// Maître d'ouvrage: the party the project is carried out for (ex. Port
@@ -661,10 +677,12 @@ model Project {
   /// platform administrator), seen by that company's users only. Its dossiers
   /// and effets are on that company; its contracts follow it.
   companyId          String
-  /// What it holds, chosen at its creation: dossiers directly, or contracts
-  /// (with their dossiers under them).
-  contentType     ProjectContentType
-  /// ACTIVE -> CLOSED -> ARCHIVED; closedAt / archivedAt record when.
+  /// What it holds: dossiers directly, or contracts (with their dossiers under them). A copy
+  /// new from the core starts with DOSSIERS; Diffusion's settings of the project change it.
+  contentType     ProjectContentType @default(DOSSIERS)
+  /// The core's status: ONGOING -> ACTIVE, SUSPENDED -> SUSPENDED, CLOSED -> CLOSED (an ARCHIVED
+  /// project, from before, stays archived while the core keeps it closed); closedAt /
+  /// archivedAt record when.
   status          ProjectStatus @default(ACTIVE)
   startDate       DateTime?
   endDate         DateTime?
@@ -688,11 +706,14 @@ model Project {
   @@index([status])
   @@index([responsibleId])
   @@index([companyId])
+  @@index([companyId, reference])
   @@map("project")
 }
 
 enum ProjectStatus {
   ACTIVE
+  /// Suspended at the core: still offered, marked « Suspendu » in the pickers.
+  SUSPENDED
   CLOSED
   ARCHIVED
 }
@@ -1395,6 +1416,12 @@ model Notification {
   instructionId String?
   type       String            @db.VarChar(50)
   message    String?
+  /// What the texts are made of (subject, number, reason, date…): each reader sees the
+  /// notification in their own language (UI notifications.bodies.<TYPE>, as EXPENZO's params).
+  params     Json?
+  /// Where it comes from (reminder:<item>:<period>, digest:<day>…): created once per source,
+  /// so a repeated run of a reminder job sends nothing twice (as EXPENZO's sourceKey).
+  sourceKey  String?           @unique @db.VarChar(200)
   canal      NotificationCanal
   createdAt  DateTime          @default(now())
 
@@ -1475,6 +1502,10 @@ model ActivityLog {
   companyId      String?
   /// The author's IP address.
   ip          String?        @db.VarChar(64)
+  /// The author's browser (User-Agent), shown as « Appareil » (« Chrome · Windows »).
+  userAgent   String?        @db.VarChar(500)
+  /// « Douala, CM », from the proxy's geolocation headers when it sends them.
+  location    String?        @db.VarChar(120)
 
   parent   ActivityLog?  @relation("ActivityLogTree", fields: [parentLogId], references: [id])
   children ActivityLog[] @relation("ActivityLogTree")

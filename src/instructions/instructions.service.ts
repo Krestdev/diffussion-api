@@ -33,6 +33,7 @@ import {
 } from '../common/utils/dossier-lifecycle';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { dayParam } from '../notifications/notification-texts';
 import { SettingsService } from '../administration/settings/settings.service';
 import { FindWorkloadQueryDto } from './dto/find-workload.query.dto';
 import { ActivityService } from '../activity/activity.service';
@@ -532,7 +533,7 @@ export class InstructionsService {
       courrierId: string | null;
     },
     userIds: (string | null | undefined)[],
-    event: { type: string; message: string },
+    event: { type: string; message: string; params?: Record<string, string> },
     excludeUserId?: string,
   ) {
     const recipientIds = [
@@ -550,6 +551,7 @@ export class InstructionsService {
         recipientIds,
         type: event.type,
         message: event.message,
+        params: event.params,
         canal: NotificationCanal.IN_APP,
         dossierId: instruction.dossierId ?? undefined,
         courrierId: instruction.courrierId ?? undefined,
@@ -1161,6 +1163,7 @@ export class InstructionsService {
       {
         type: 'TASK_AGENT_DUE_DATE_SET',
         message: `Date limite d'exécution de la tâche « ${updated.title} » : ${date.toLocaleDateString('fr-FR')}.`,
+        params: { date: dayParam(date) },
       },
       userId,
     );
@@ -1322,6 +1325,7 @@ export class InstructionsService {
           (othersLeft === 0
             ? ' Plus aucun exécutant : elle vous revient pour réaffectation.'
             : ''),
+        params: { actor: decliner.user.name, reason: dto.motif },
       },
       userId,
     );
@@ -1397,6 +1401,7 @@ export class InstructionsService {
       {
         type: 'TASK_SUBSCRIBED',
         message: `${subscriber ?? 'Un exécutant'} a souscrit à la tâche « ${subscribed.title} ».`,
+        params: { actor: subscriber ?? '' },
       },
       userId,
     );
@@ -1561,6 +1566,11 @@ export class InstructionsService {
         message: `Des corrections sont demandées sur la tâche « ${updated.title} » : ${livrables
           .map((livrable) => `${livrable.title} — ${motifs.get(livrable.id)}`)
           .join(' ; ')}`,
+        params: {
+          reason: livrables
+            .map((livrable) => `${livrable.title} — ${motifs.get(livrable.id)}`)
+            .join(' ; '),
+        },
       },
       validatorId,
     );
@@ -1617,6 +1627,13 @@ export class InstructionsService {
             ? 'TASK_CORRECTIONS_REQUESTED'
             : 'TASK_LIVRABLE_REJECTED',
         message: `Le livrable « ${rejected.title} » de la tâche « ${instruction.title} » est rejeté : ${motif}`,
+        params: {
+          livrable: rejected.title,
+          reason:
+            settled === InstructionStatus.A_CORRIGER
+              ? `${rejected.title} — ${motif}`
+              : motif,
+        },
       },
       validatorId,
     );
@@ -1760,6 +1777,7 @@ export class InstructionsService {
         {
           type: 'TASK_VALIDATION_PENDING',
           message: `Le validateur a donné son avis sur « ${livrable.title} » (tâche « ${instruction.title} ») : à vous de décider.`,
+          params: { livrable: livrable.title },
         },
         userId,
       );
@@ -2222,6 +2240,7 @@ export class InstructionsService {
       {
         type: 'TASK_LIVRABLES_DEPOSITED',
         message: `${actorName} a déposé ${livrablesLabel} pour la tâche « ${instruction.title} ».`,
+        params: { actor: actorName, count: String(n) },
       },
       userId,
     );

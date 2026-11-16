@@ -217,189 +217,49 @@ describe('ProjectService', () => {
     });
   });
 
-  describe('archiving', () => {
-    it('keeps the reason when archiving a closed project', async () => {
-      database.project.findUnique.mockResolvedValue(
-        project({ status: 'CLOSED' }),
-      );
-
-      await asPerson(() =>
-        service.update(
-          'p-1',
-          { status: 'ARCHIVED', reason: 'Terminé' },
-          'u-admin',
-        ),
-      );
-
-      // Through the workflow engine, conditional on the status read.
-      expect(database.project.updateMany).toHaveBeenCalledWith({
-        where: { id: 'p-1', status: 'CLOSED' },
-        data: expect.objectContaining({
-          status: 'ARCHIVED',
-          archiveReason: 'Terminé',
-        }),
-      });
-      expect(database.statusHistory.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          entity: 'Project',
-          event: 'ARCHIVE',
-          reason: 'Terminé',
-        }),
-      });
-      expect(updatedData()).not.toHaveProperty('status');
-    });
-
-    it('clears the reason when unarchiving', async () => {
-      database.project.findUnique.mockResolvedValue(
-        project({ status: 'ARCHIVED' }),
-      );
-
-      await asPerson(() =>
-        service.update('p-1', { status: 'CLOSED' }, 'u-admin'),
-      );
-
-      expect(database.project.updateMany).toHaveBeenCalledWith({
-        where: { id: 'p-1', status: 'ARCHIVED' },
-        data: { status: 'CLOSED', archivedAt: null, archiveReason: null },
-      });
-    });
-
-    it('closes what the project holds, keeping what each task was', async () => {
-      database.instruction.findMany.mockResolvedValue([
-        { id: 'i-1', status: 'EN_COURS' },
-      ]);
-      database.dossier.findMany.mockResolvedValue([
-        { id: 'd-1', status: 'IN_PROGRESS' },
-      ]);
-
-      await asPerson(() =>
-        service.update('p-1', { status: 'CLOSED' }, 'u-admin'),
-      );
-
-      expect(database.instruction.updateMany).toHaveBeenCalledWith({
-        where: { id: 'i-1', status: 'EN_COURS' },
-        data: expect.objectContaining({
-          status: 'ANNULEE',
-          statusBeforeProjectClosure: 'EN_COURS',
-        }),
-      });
-      expect(database.dossier.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 'd-1', status: 'IN_PROGRESS' },
-          data: expect.objectContaining({ status: 'CLOSED' }),
-        }),
-      );
-      // Each cascaded row is a system change in StatusHistory.
-      expect(database.statusHistory.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          entity: 'Instruction',
-          event: 'CANCEL_BY_PROJECT',
-          actorId: null,
-          companyId: 's-1',
-        }),
-      });
-    });
-
-    it('gives a task back its status on reopening', async () => {
-      database.project.findUnique.mockResolvedValue(
-        project({ status: 'CLOSED', closedAt: new Date() }),
-      );
-      database.instruction.findMany.mockResolvedValue([
-        {
-          id: 'i-1',
-          status: 'ANNULEE',
-          statusBeforeProjectClosure: 'EN_COURS',
-        },
-      ]);
-
-      await asPerson(() =>
-        service.update('p-1', { status: 'ACTIVE' }, 'u-admin'),
-      );
-
-      expect(database.instruction.updateMany).toHaveBeenCalledWith({
-        where: { id: 'i-1', status: 'ANNULEE' },
-        data: {
-          status: 'EN_COURS',
-          cancellationReason: null,
-          statusBeforeProjectClosure: null,
-        },
-      });
-    });
-
-    it('archives its contracts and fiches with it', async () => {
-      database.project.findUnique.mockResolvedValue(
-        project({ status: 'CLOSED' }),
-      );
-      database.analysisSheet.findMany.mockResolvedValue([
-        { id: 'a-1', status: 'SIGNEE' },
-      ]);
-      database.contract.findMany.mockResolvedValue([
-        { id: 'k-1', status: 'ACTIVE' },
-      ]);
-
-      await asPerson(() =>
-        service.update('p-1', { status: 'ARCHIVED' }, 'u-admin'),
-      );
-
-      expect(database.contract.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { id: 'k-1', status: 'ACTIVE' },
-          data: expect.objectContaining({ status: 'ARCHIVED' }),
-        }),
-      );
-      expect(database.analysisSheet.updateMany).toHaveBeenCalledWith({
-        where: { id: 'a-1', status: 'SIGNEE' },
-        data: expect.objectContaining({
-          status: 'ARCHIVEE',
-          archivedFromStatus: 'SIGNEE',
-        }),
-      });
-    });
-
-    it('refuses a reason without archiving', async () => {
-      await expect(
-        service.update('p-1', { reason: 'Pourquoi pas' }, 'u-admin'),
-      ).rejects.toBeInstanceOf(BadRequestException);
-    });
-
-    it('refuses to skip a step (409 INVALID_TRANSITION)', async () => {
-      await expect(
-        asPerson(() =>
-          service.update('p-1', { status: 'ARCHIVED' }, 'u-admin'),
-        ),
-      ).rejects.toMatchObject({
-        response: {
-          code: 'INVALID_TRANSITION',
-          params: { entity: 'Project', from: 'ACTIVE', event: 'ARCHIVE' },
-        },
-      });
-      expect(database.project.updateMany).not.toHaveBeenCalled();
-    });
-
-    it('refuses closing to someone without project.update', async () => {
-      await expect(
-        asPerson(
-          () => service.update('p-1', { status: 'CLOSED' }, 'u-admin'),
-          ['project.archive'],
-        ),
-      ).rejects.toBeInstanceOf(ForbiddenException);
-    });
-
-    it('lists the actions the role allows on the page', async () => {
-      const actions = await asPerson(
+  // Projects come from the CREAPP core (2026-11-23): their status changes there, the
+  // consequences on the contents are tested in src/core/project-sync.spec.ts.
+  describe('copies of the core', () => {
+    it("offers only Diffusion's settings of the project on its page", async () => {
+      const page = await asPerson(
         () => service.findOneFor('p-1', 'u-1'),
         ['project.update'],
       );
-      expect(actions.actions).toEqual([
-        { action: 'edit', enabled: true },
-        { action: 'close', enabled: true },
-        {
-          action: 'reopen',
-          enabled: false,
-          reason: 'WRONG_STATUS',
-          params: { status: 'ACTIVE' },
-        },
-      ]);
+      expect(page.actions).toEqual([{ action: 'edit', enabled: true }]);
+    });
+
+    it('offers nothing to someone without project.update', async () => {
+      access.state.permissions = ['project.read'];
+      const page = await asPerson(
+        () => service.findOneFor('p-1', 'u-1'),
+        ['project.read'],
+      );
+      expect(page.actions).toEqual([]);
+    });
+
+    it("writes only Diffusion's own fields", async () => {
+      await service.update('p-1', { mode: 'Marché public' }, 'u-admin');
+
+      expect(updatedData()).toEqual({
+        mode: 'Marché public',
+        maitreOuvrageId: undefined,
+      });
+      expect(database.project.updateMany).not.toHaveBeenCalled();
+      expect(database.statusHistory.create).not.toHaveBeenCalled();
+    });
+
+    it('lists several statuses at once (the pickers: ACTIVE,SUSPENDED)', async () => {
+      database.project.findMany = jest.fn().mockResolvedValue([]);
+      database.project.groupBy = jest.fn().mockResolvedValue([]);
+      await service.findAll({ statuses: 'ACTIVE,SUSPENDED,BOGUS' }, 'u-1');
+
+      expect(database.project.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            status: { in: ['ACTIVE', 'SUSPENDED'] },
+          }),
+        }),
+      );
     });
   });
 

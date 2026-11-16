@@ -1,9 +1,12 @@
 import {
+  Body,
   Controller,
   Get,
   Header,
+  HttpCode,
   Param,
   ParseUUIDPipe,
+  Post,
   Query,
   Res,
   UseGuards,
@@ -11,6 +14,8 @@ import {
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { ActivityService } from './activity.service';
+import { AuditFeedService } from './audit-feed.service';
+import { AuditExportDto, FindAccessFeedQueryDto } from './dto/audit-access.dto';
 import { FindActivityLogsQueryDto } from './dto/find-activity-logs.query.dto';
 import { FindMyActivityQueryDto } from './dto/find-my-activity.query.dto';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -33,6 +38,7 @@ export class ActivityController {
   constructor(
     private readonly activityService: ActivityService,
     private readonly access: AccessService,
+    private readonly feed: AuditFeedService,
   ) {}
 
   @Get()
@@ -61,6 +67,48 @@ export class ActivityController {
       `attachment; filename="journal-audit-${day}.csv"`,
     );
     res.send(csv);
+  }
+
+  // « Sur 7 jours » and each tab's count (EXPENZO's GET /audit/feed/summary).
+  // Declared before ':id'.
+  @Get('summary')
+  async summary(
+    @Query('companyId') companyId: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const scope = await this.auditScope(user);
+    return this.feed.summary(scope, inScope(scope, companyId));
+  }
+
+  // « Accès et sécurité »: the core's sign-ins merged with Diffusion's access
+  // changes (EXPENZO's GET /audit/access). Declared before ':id'.
+  @Get('access')
+  async accessFeed(
+    @Query() query: FindAccessFeedQueryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.feed.access(query, await this.auditScope(user));
+  }
+
+  // « Accès et sécurité » figures, failing streaks and access rules.
+  @Get('access/summary')
+  async accessSummary(
+    @Query('companyId') companyId: string | undefined,
+    @CurrentUser() user: AuthUser,
+  ) {
+    const scope = await this.auditScope(user);
+    return this.feed.accessSummary(scope, inScope(scope, companyId));
+  }
+
+  // « Exporter le journal »: the export (made in the browser) written in the journal.
+  @Post('exports')
+  @HttpCode(204)
+  async recordExport(
+    @Body() dto: AuditExportDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    await this.auditScope(user);
+    await this.feed.recordExport(dto);
   }
 
   // PA·8 — the batches past retention, exported as CSV before being
@@ -119,4 +167,9 @@ export class ActivityController {
     if (scope.length === 0) throw forbidden(Permission.AUDIT_READ);
     return scope;
   }
+}
+
+// A company asked for, kept only when the caller may audit it.
+function inScope(scope: string[], companyId?: string): string | undefined {
+  return companyId && scope.includes(companyId) ? companyId : undefined;
 }

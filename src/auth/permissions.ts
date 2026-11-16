@@ -49,9 +49,9 @@ export const Permission = {
   CORRESPONDENT_ARCHIVE: 'correspondent.archive',
   // Projects (read-only copies of the core's, plus Diffusion's own fields)
   PROJECT_READ: 'project.read',
-  PROJECT_CREATE: 'project.create',
+  // Diffusion's own settings of a project (contents, mode, maître d'ouvrage); since 2.1.0 the
+  // core's console creates, edits, suspends, closes and deletes projects.
   PROJECT_UPDATE: 'project.update',
-  PROJECT_ARCHIVE: 'project.archive',
   // Analysis sheets
   ANALYSIS_READ: 'analysis.read',
   ANALYSIS_CREATE: 'analysis.create',
@@ -130,9 +130,8 @@ const DESCRIPTIONS: Record<Permission, string> = {
   [P.CORRESPONDENT_UPDATE]: 'Edit correspondents',
   [P.CORRESPONDENT_ARCHIVE]: 'Archive and restore correspondents',
   [P.PROJECT_READ]: 'View projects',
-  [P.PROJECT_CREATE]: 'Create projects',
-  [P.PROJECT_UPDATE]: 'Edit projects',
-  [P.PROJECT_ARCHIVE]: 'Close, archive and restore projects',
+  [P.PROJECT_UPDATE]:
+    "Set Diffusion's settings of a project (what it holds, mode, maître d'ouvrage)",
   [P.ANALYSIS_READ]: 'View analysis sheets',
   [P.ANALYSIS_CREATE]: 'Create analysis sheets',
   [P.ANALYSIS_UPDATE]: 'Edit analysis sheets',
@@ -215,9 +214,7 @@ export const IMPLIES: Partial<Record<Permission, readonly Permission[]>> = {
   [P.CORRESPONDENT_CREATE]: [P.CORRESPONDENT_READ],
   [P.CORRESPONDENT_UPDATE]: [P.CORRESPONDENT_READ],
   [P.CORRESPONDENT_ARCHIVE]: [P.CORRESPONDENT_READ],
-  [P.PROJECT_CREATE]: [P.PROJECT_READ],
   [P.PROJECT_UPDATE]: [P.PROJECT_READ],
-  [P.PROJECT_ARCHIVE]: [P.PROJECT_READ],
   [P.ANALYSIS_CREATE]: [P.ANALYSIS_READ],
   [P.ANALYSIS_UPDATE]: [P.ANALYSIS_READ],
   [P.ANALYSIS_APPROVE]: [P.ANALYSIS_READ],
@@ -250,7 +247,7 @@ export const IMPLIES: Partial<Record<Permission, readonly Permission[]>> = {
 export const ACTIONS_WITHOUT_READ: readonly Permission[] = [];
 
 /** This catalogue's version (stored on each company's roles, sent to the core's console). */
-export const CATALOG_VERSION = '2.0.0';
+export const CATALOG_VERSION = '2.1.0';
 
 /** The catalogue a company's roles follow before any upgrade (the UPPER_SNAKE codes). */
 export const FIRST_CATALOG_VERSION = '1.0.0';
@@ -258,7 +255,8 @@ export const FIRST_CATALOG_VERSION = '1.0.0';
 /**
  * How each version changes the codes of the one before, applied once to every company's roles
  * when it moves to that version (Company.permissionsVersion): a withdrawn code becomes the codes
- * that now cover it. The migration 20261121090000_permissions_v2 applied 2.0.0 to the tables.
+ * that now cover it. The migration 20261121090000_permissions_v2 applied 2.0.0 to the tables,
+ * 20261123110000_core_projects removed the codes 2.1.0 withdraws.
  */
 const REPLACES_2_0_0: Readonly<Record<string, readonly Permission[]>> = {
   COURRIER_READ: [P.INCOMING_READ, P.OUTGOING_READ],
@@ -289,9 +287,10 @@ const REPLACES_2_0_0: Readonly<Record<string, readonly Permission[]>> = {
   CORRESPONDENT_UPDATE: [P.CORRESPONDENT_UPDATE],
   CORRESPONDENT_ARCHIVE: [P.CORRESPONDENT_ARCHIVE],
   PROJECT_READ: [P.PROJECT_READ],
-  PROJECT_CREATE: [P.PROJECT_CREATE],
+  // Became project.create and project.archive, withdrawn in 2.1.0.
+  PROJECT_CREATE: [],
   PROJECT_UPDATE: [P.PROJECT_UPDATE],
-  PROJECT_ARCHIVE: [P.PROJECT_ARCHIVE],
+  PROJECT_ARCHIVE: [],
   ANALYSIS_READ: [P.ANALYSIS_READ],
   ANALYSIS_CREATE: [P.ANALYSIS_CREATE],
   ANALYSIS_UPDATE: [P.ANALYSIS_UPDATE],
@@ -330,11 +329,25 @@ const REPLACES_2_0_0: Readonly<Record<string, readonly Permission[]>> = {
   DASHBOARD_GLOBAL_READ: [P.DASHBOARD_READ_ALL],
 };
 
+/**
+ * 2.1.0 (2026-11-23): projects come from the CREAPP core, as EXPENZO's since its 3.2.0: they are
+ * created, suspended, closed and deleted in the core's console, Diffusion keeps read-only copies.
+ * project.create and project.archive are withdrawn with nothing in their place; project.read stays
+ * and project.update now only sets Diffusion's own settings of a project.
+ */
+const REPLACES_2_1_0: Readonly<Record<string, readonly Permission[]>> = {
+  'project.create': [],
+  'project.archive': [],
+};
+
 /** Every version's changes, oldest first. */
 export const UPGRADES: readonly {
   version: string;
   replaces: Readonly<Record<string, readonly Permission[]>>;
-}[] = [{ version: CATALOG_VERSION, replaces: REPLACES_2_0_0 }];
+}[] = [
+  { version: '2.0.0', replaces: REPLACES_2_0_0 },
+  { version: CATALOG_VERSION, replaces: REPLACES_2_1_0 },
+];
 
 /** -1, 0 or 1 as version `a` is before, equal to or after `b` (major.minor.patch). */
 export function compareVersions(a: string, b: string): number {

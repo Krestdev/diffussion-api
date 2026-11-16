@@ -36,6 +36,15 @@ export const NOTIFICATION_TYPES = {
   COURRIER_DISPATCH_VALIDATED:
     'Le validateur a donné son avis sur un dispatching',
   COURRIER_DISPATCH_REJECTED: 'Un dispatching que vous avez proposé est rejeté',
+  // Fiches d'analyse, délégations, relances et résumé (temps réel, comme EXPENZO).
+  ANALYSIS_SUBMITTED: "Une fiche d'analyse attend votre décision",
+  ANALYSIS_ACCEPTED: "Une fiche d'analyse que vous avez rédigée est acceptée",
+  ANALYSIS_REJECTED: "Une fiche d'analyse que vous avez rédigée est renvoyée",
+  DELEGATION_GRANTED: 'Une délégation vous est accordée',
+  DELEGATION_ENDED: 'Une délégation qui vous était accordée prend fin',
+  REMINDER_APPROVAL_STALLED:
+    'Une validation attend votre décision depuis plusieurs jours',
+  DAILY_DIGEST: 'Résumé quotidien de mes éléments en attente (08:00)',
   ACCESS_CHANGED:
     "Un rôle est attribué ou retiré, ou un ajout à une liste d'autorisés",
   ACCESS_REQUESTED: "Une demande d'accès est reçue",
@@ -81,6 +90,16 @@ export const NOTIFICATION_DESCRIPTIONS: Record<NotificationType, string> = {
     "Les personnes pouvant dispatcher ou valider un dispatching dans la société de l'effet.",
   COURRIER_DISPATCH_VALIDATED: 'La personne qui a proposé le dispatching.',
   COURRIER_DISPATCH_REJECTED: 'La personne qui a proposé le dispatching.',
+  ANALYSIS_SUBMITTED:
+    "Les superviseurs de l'instruction de la fiche, sinon son créateur.",
+  ANALYSIS_ACCEPTED: "L'auteur de la fiche et les exécutants de l'instruction.",
+  ANALYSIS_REJECTED: "L'auteur de la fiche et les exécutants de l'instruction.",
+  DELEGATION_GRANTED: 'Le délégataire et le délégant.',
+  DELEGATION_ENDED: 'Le délégataire et le délégant.',
+  REMINDER_APPROVAL_STALLED:
+    "Celui qui doit décider : le validateur d'un effet sortant, les personnes pouvant valider un dispatching, le validateur ou le superviseur d'un livrable — après REMINDER_AFTER_DAYS jours, puis tous les REMINDER_AFTER_DAYS jours.",
+  DAILY_DIGEST:
+    'Chaque utilisateur ayant des éléments « à traiter » non lus, chaque matin à 08:00.',
   ACCESS_CHANGED: "L'utilisateur concerné.",
   ACCESS_REQUESTED: 'Les administrateurs de la société.',
 };
@@ -88,3 +107,21 @@ export const NOTIFICATION_DESCRIPTIONS: Record<NotificationType, string> = {
 export function isNotificationType(type: string): type is NotificationType {
   return Object.keys(NOTIFICATION_TYPES).includes(type);
 }
+
+/**
+ * Types that ask the reader to decide, validate or act ("Un élément attend ma décision"): the
+ * daily digest counts the unread ones (as EXPENZO's TO_DO_KINDS).
+ */
+export const TO_DO_TYPES: readonly NotificationType[] = [
+  'COURRIER_TRANSMITTED',
+  'COURRIER_VALIDATION_PENDING',
+  'COURRIER_DISPATCH_PROPOSED',
+  'COURRIER_SIGNED',
+  'TASK_ASSIGNED',
+  'TASK_LIVRABLES_DEPOSITED',
+  'TASK_VALIDATION_PENDING',
+  'TASK_CORRECTIONS_REQUESTED',
+  'TASK_REMINDER',
+  'ANALYSIS_SUBMITTED',
+  'REMINDER_APPROVAL_STALLED',
+];

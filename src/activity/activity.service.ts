@@ -10,7 +10,14 @@ import { DatabaseService } from '../database/database.service';
 import { AppClsStore } from '../cls.store';
 import { AccessService } from '../auth/access/access.service';
 import { StorageService } from '../storage/storage.service';
-import { categoriesWhere, categoryOf } from './audit-categories';
+import {
+  categoriesWhere,
+  categoryOf,
+  tabOf,
+  tabWhere,
+} from './audit-categories';
+import { maskIp } from './mask-ip';
+import { Permission } from '../auth/permissions';
 import { FindActivityLogsQueryDto } from './dto/find-activity-logs.query.dto';
 import { FindMyActivityQueryDto } from './dto/find-my-activity.query.dto';
 
@@ -46,6 +53,49 @@ const USER_ACTIONS: Prisma.ActivityLogWhereInput = {
 
 // The most rows an export returns.
 const MAX_EXPORT = 10_000;
+
+// At most this many objects match a reference or a name typed in the search.
+const MATCH_LIMIT = 200;
+
+type UserWithRoles = {
+  id: string;
+  name: string;
+  function: string | null;
+  companyId: string | null;
+  userRoles: {
+    role: { name: string; companyId: string; archivedAt: Date | null };
+  }[];
+};
+
+export interface AuditActor {
+  id: string | null;
+  name: string;
+  jobTitle: string | null;
+  /** Their roles in Diffusion now (names). */
+  roles: string[];
+}
+
+/** The author of an entry: the person (with their roles now), else the recorded label. */
+function actorOf(
+  log: { userId: string | null; actorLabel: string | null },
+  user: UserWithRoles | undefined,
+): AuditActor | null {
+  if (user) {
+    return {
+      id: user.id,
+      name: user.name,
+      jobTitle: user.function,
+      roles: user.userRoles
+        .map((ur) => ur.role)
+        .filter((role) => role.companyId === user.companyId && !role.archivedAt)
+        .map((role) => role.name)
+        .sort((a, b) => a.localeCompare(b)),
+    };
+  }
+  return log.actorLabel
+    ? { id: log.userId, name: log.actorLabel, jobTitle: null, roles: [] }
+    : null;
+}
 
 // Objects common to every company: their entries have no company (platform audit
 // only) — never their author's.
@@ -127,6 +177,8 @@ export class ActivityService {
           : undefined,
         companyId,
         ip: this.cls.get('ip') ?? null,
+        userAgent: this.cls.get('userAgent') ?? null,
+        location: this.cls.get('location') ?? null,
       },
     });
 
@@ -194,7 +246,36 @@ export class ActivityService {
       }),
       this.db.activityLog.count({ where }),
     ]);
-    return { data: await this.withNames(data), total, skip, take };
+    const seesIp = this.seesIp();
+    const named = await this.withNames(data);
+    return {
+      data: named.map((log) => ({
+        ...log,
+        // « Adresse IP » masked for people who may not change the settings (as EXPENZO).
+        ip: seesIp ? log.ip : maskIp(log.ip),
+      })),
+      total,
+      skip,
+      take,
+    };
+  }
+
+  /** How many journal entries match `query` (the journal's figures and tabs). */
+  async count(query: FindActivityLogsQueryDto, companyIds: string[]) {
+    return this.db.activityLog.count({
+      where: await this.journalWhere(query, companyIds),
+    });
+  }
+
+  /**
+   * Whether the viewer sees full IP addresses (« masquées pour les
+   * non-administrateurs »): the settings' managers and platform administrators.
+   */
+  seesIp(): boolean {
+    return (
+      !!this.cls.get('platformAdmin') ||
+      (this.cls.get('permissions') ?? []).includes(Permission.SETTINGS_UPDATE)
+    );
   }
 
   /** The same entries as findAll, every page, as CSV (`;`-separated). */
@@ -215,8 +296,11 @@ export class ActivityService {
       'Contexte',
       'Company',
       'IP',
+      'Appareil',
+      'Lieu',
       'Message',
     ];
+    const seesIp = this.seesIp();
     const lines = named.map((log) =>
       [
         log.createdAt.toISOString(),
@@ -227,7 +311,9 @@ export class ActivityService {
         log.entityReference,
         log.contextReference,
         log.company?.name,
-        log.ip,
+        seesIp ? log.ip : maskIp(log.ip),
+        log.userAgent,
+        log.location,
         log.message,
       ]
         .map(csvCell)
@@ -390,9 +476,21 @@ export class ActivityService {
       userIds.length
         ? this.db.user.findMany({
             where: { id: { in: userIds } },
-            select: { id: true, name: true },
+            select: {
+              id: true,
+              name: true,
+              function: true,
+              companyId: true,
+              userRoles: {
+                select: {
+                  role: {
+                    select: { name: true, companyId: true, archivedAt: true },
+                  },
+                },
+              },
+            },
           })
-        : Promise.resolve([] as { id: string; name: string }[]),
+        : Promise.resolve([] as UserWithRoles[]),
       companyIds.length
         ? this.db.company.findMany({
             where: { id: { in: companyIds } },
@@ -409,6 +507,7 @@ export class ActivityService {
       ),
     ]);
     const names = new Map(users.map((user) => [user.id, user.name]));
+    const userById = new Map(users.map((user) => [user.id, user]));
     const companyById = new Map(
       companies.map((company) => [company.id, company]),
     );
@@ -426,6 +525,10 @@ export class ActivityService {
         entityReference: reference?.ref ?? null,
         contextReference: reference?.context ?? null,
         category: categoryOf(log),
+        tab: tabOf(log),
+        // Who did it, with their roles in Diffusion now (the journal keeps no
+        // role per entry), as EXPENZO's journal shows under the name.
+        actor: actorOf(log, log.userId ? userById.get(log.userId) : undefined),
         company: (log.companyId && companyById.get(log.companyId)) || null,
       };
     });
@@ -442,12 +545,20 @@ export class ActivityService {
     const correspondentId =
       query.correspondentId ??
       (query.entityType === 'correspondent' ? query.entityId : undefined);
-    const effets = correspondentId
-      ? await this.db.courrier.findMany({
-          where: { correspondentId },
-          select: { id: true },
-        })
-      : [];
+    const reference = query.reference?.trim();
+    const term = query.search?.trim();
+    const [effets, referenceIds, searchReferenceIds, searchActorIds] =
+      await Promise.all([
+        correspondentId
+          ? this.db.courrier.findMany({
+              where: { correspondentId },
+              select: { id: true },
+            })
+          : Promise.resolve([] as { id: string }[]),
+        reference ? this.idsByReference(reference) : null,
+        term ? this.idsByReference(term) : null,
+        term ? this.idsByName(term, companyIds) : null,
+      ]);
     return {
       AND: [
         USER_ACTIONS,
@@ -466,11 +577,26 @@ export class ActivityService {
         query.companyId ? { companyId: query.companyId } : {},
         query.category?.length ? categoriesWhere(query.category) : {},
         query.action?.length ? { action: { in: query.action } } : {},
-        query.search
+        query.tab ? tabWhere(query.tab) : {},
+        query.actionPrefix
+          ? {
+              action: { startsWith: query.actionPrefix, mode: 'insensitive' },
+            }
+          : {},
+        reference ? { entityId: { in: referenceIds ?? [] } } : {},
+        query.ip ? { ip: { startsWith: query.ip } } : {},
+        term
           ? {
               OR: [
-                { action: { contains: query.search, mode: 'insensitive' } },
-                { message: { contains: query.search, mode: 'insensitive' } },
+                { action: { contains: term, mode: 'insensitive' } },
+                { message: { contains: term, mode: 'insensitive' } },
+                { actorLabel: { contains: term, mode: 'insensitive' } },
+                ...(searchReferenceIds?.length
+                  ? [{ entityId: { in: searchReferenceIds } }]
+                  : []),
+                ...(searchActorIds?.length
+                  ? [{ userId: { in: searchActorIds } }]
+                  : []),
               ],
             }
           : {},
@@ -488,6 +614,53 @@ export class ActivityService {
             }
           : undefined,
     };
+  }
+
+  /**
+   * The ids of the objects whose reference contains `term` (ENT-…, an
+   * instruction's, a dossier's, a contract's, a project's or a fiche's).
+   */
+  private async idsByReference(term: string): Promise<string[]> {
+    const like = { contains: term, mode: 'insensitive' as const };
+    const take = MATCH_LIMIT;
+    const select = { id: true } as const;
+    const found = await Promise.all([
+      this.db.courrier.findMany({ where: { number: like }, select, take }),
+      this.db.instruction.findMany({ where: { number: like }, select, take }),
+      this.db.dossier.findMany({ where: { number: like }, select, take }),
+      this.db.contract.findMany({
+        where: { OR: [{ number: like }, { reference: like }] },
+        select,
+        take,
+      }),
+      this.db.project.findMany({
+        where: { OR: [{ reference: like }, { name: like }] },
+        select,
+        take,
+      }),
+      this.db.analysisSheet.findMany({
+        where: { reference: like },
+        select,
+        take,
+      }),
+    ]);
+    return found.flat().map((row) => row.id);
+  }
+
+  /** The people of the audited companies whose name contains `term`. */
+  private async idsByName(term: string, companyIds: string[]) {
+    const words = term.split(/\s+/).filter(Boolean);
+    const users = await this.db.user.findMany({
+      where: {
+        companyId: { in: companyIds },
+        AND: words.map((word) => ({
+          name: { contains: word, mode: 'insensitive' as const },
+        })),
+      },
+      select: { id: true },
+      take: MATCH_LIMIT,
+    });
+    return users.map((user) => user.id);
   }
 
   // ------------------------------------------------------------------- company

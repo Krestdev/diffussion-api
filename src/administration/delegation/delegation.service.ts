@@ -3,12 +3,17 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   Prisma,
   CompanyStatus,
+  NotificationCanal,
   UserStatus,
 } from '../../generated/prisma/client';
+import { NotificationsService } from '../../notifications/notifications.service';
+import { dayParam } from '../../notifications/notification-texts';
+import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { Permission } from '../../auth/permissions';
@@ -54,6 +59,9 @@ export class DelegationService {
     // Required by @AuditLog, which reads `this.activity`.
     private readonly activity: ActivityService,
     private readonly access: AccessService,
+    // Live: the delegataire's tabs reload their rights, both are notified (optional in unit tests).
+    @Optional() private readonly notifications?: NotificationsService,
+    @Optional() private readonly realtime?: RealtimeGateway,
   ) {}
 
   @AuditLog({
@@ -75,10 +83,13 @@ export class DelegationService {
     };
     await this.assertValid(shape);
 
-    return this.database.delegation.create({
+    const created = await this.database.delegation.create({
       data: { ...data, startDate: shape.startDate, endDate: shape.endDate },
       include,
     });
+    this.realtime?.accessChanged([created.delegataireId]);
+    await this.notify(created, 'DELEGATION_GRANTED', actingUserId);
+    return created;
   }
 
   async findAll(query: PaginationQueryDto, actingUserId: string) {
@@ -156,7 +167,7 @@ export class DelegationService {
     assertInScope(await this.adminScope(actingUserId), shape.companyId);
     await this.assertValid(shape, id);
 
-    return this.database.delegation.update({
+    const updated = await this.database.delegation.update({
       where: { id },
       data: {
         ...data,
@@ -165,6 +176,11 @@ export class DelegationService {
       },
       include,
     });
+    this.realtime?.accessChanged([
+      existing.delegataireId,
+      updated.delegataireId,
+    ]);
+    return updated;
   }
 
   @AuditLog({
@@ -173,8 +189,47 @@ export class DelegationService {
     operation: 'DELETE',
   })
   async remove(id: string, actingUserId: string) {
-    await this.findOne(id, actingUserId);
+    const delegation = await this.findOne(id, actingUserId);
     await this.database.delegation.delete({ where: { id } });
+    this.realtime?.accessChanged([delegation.delegataireId]);
+    await this.notify(delegation, 'DELEGATION_ENDED', actingUserId);
+  }
+
+  /**
+   * The delegataire and the delegant are told (not the administrator who did it). Never fails
+   * the change itself.
+   */
+  private async notify(
+    delegation: Prisma.DelegationGetPayload<{ include: typeof include }>,
+    type: 'DELEGATION_GRANTED' | 'DELEGATION_ENDED',
+    actingUserId: string,
+  ) {
+    if (!this.notifications) return;
+    const recipientIds = [
+      ...new Set([delegation.delegataireId, delegation.delegantId]),
+    ].filter((userId) => userId !== actingUserId);
+    if (recipientIds.length === 0) return;
+    const day = (date: Date) => date.toLocaleDateString('fr-FR');
+    try {
+      await this.notifications.create({
+        recipientIds,
+        type,
+        message:
+          type === 'DELEGATION_GRANTED'
+            ? `Le rôle ${delegation.role.name} de ${delegation.delegant.name} est délégué à ${delegation.delegataire.name} du ${day(delegation.startDate)} au ${day(delegation.endDate)}.`
+            : `La délégation du rôle ${delegation.role.name} de ${delegation.delegant.name} à ${delegation.delegataire.name} a pris fin.`,
+        canal: NotificationCanal.IN_APP,
+        params: {
+          role: delegation.role.name,
+          delegant: delegation.delegant.name,
+          delegataire: delegation.delegataire.name,
+          start: dayParam(delegation.startDate),
+          end: dayParam(delegation.endDate),
+        },
+      });
+    } catch (error) {
+      console.error('Failed to notify a delegation', error);
+    }
   }
 
   // Managing delegations is an administration act over people: same right as

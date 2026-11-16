@@ -23,6 +23,10 @@ import {
   NOTIFICATION_TITLES,
   PortalLanguage,
 } from './notification-titles';
+import {
+  notificationBody,
+  readParams,
+} from '../notifications/notification-texts';
 
 const DAY = 86_400_000;
 /** Waiting longer than this is "late" (À traiter's age pill, as in EXPENZO). */
@@ -521,6 +525,7 @@ export class PortalService {
             id: true,
             type: true,
             message: true,
+            params: true,
             instructionId: true,
             courrierId: true,
             dossierId: true,
@@ -550,7 +555,11 @@ export class PortalService {
         id: n.id,
         kind: n.type,
         title,
-        body: n.message ?? title,
+        // In the reader's language from its params (as the bell), else the text as written.
+        body:
+          notificationBody(n.type, readParams(n.params), language) ??
+          n.message ??
+          title,
         link,
         readAt: status === NotificationStatus.NOT_READ ? null : n.createdAt,
         createdAt: n.createdAt,

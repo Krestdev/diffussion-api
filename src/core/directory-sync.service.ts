@@ -15,7 +15,9 @@ import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../database/database.service';
 import { setUpCompany } from '../referentials/company/company.service';
 import { createDefaultRoles, giveAdminRole } from '../auth/default-roles';
+import { WorkflowService } from '../workflow/workflow.service';
 import { CoreClient, CoreDirectory } from './core-client';
+import { applyProjects, cascadeOf, ProjectCascade } from './project-sync';
 
 /** Serialises syncs across instances (pg advisory lock id). */
 const SYNC_LOCK = 4_000_701;
@@ -50,6 +52,8 @@ export interface SyncResult {
   applied: boolean;
   companies: number;
   users: number;
+  /** Project copies written (companies whose projects the core owns). */
+  projects?: number;
 }
 
 /**
@@ -65,6 +69,10 @@ export interface SyncResult {
  *
  * Roles stay Diffusion's own: a new company gets the default roles; a company administrator with no
  * role yet gets the company's Admin role, and becomes the company's responsible if it has none.
+ *
+ * Projects (owner, 2026-11-23, as EXPENZO): once the core owns a company's projects its directory
+ * sends them and Diffusion keeps read-only copies (project-sync.ts); the consequences of their
+ * changes of status on the contents run after the directory is applied, one project at a time.
  */
 @Injectable()
 export class DirectorySyncService
@@ -82,6 +90,7 @@ export class DirectorySyncService
     private readonly database: DatabaseService,
     private readonly core: CoreClient,
     private readonly config: AppConfigService,
+    private readonly workflow: WorkflowService,
   ) {}
 
   onApplicationBootstrap(): void {
@@ -141,6 +150,8 @@ export class DirectorySyncService
   async apply(directory: CoreDirectory): Promise<SyncResult> {
     const now = new Date();
     const links = this.config.get('CORE_COMPANY_LINKS');
+    const cascades: ProjectCascade[] = [];
+    let projects = 0;
     await this.database.$transaction(
       async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SYNC_LOCK})`;
@@ -166,6 +177,20 @@ export class DirectorySyncService
               .filter((u) => u.tenantAdmin && u.status === 'ACTIVE')
               .map((u) => u.id),
           );
+          // The core owns this company's projects: Diffusion's copies follow them.
+          if (tenant.projects) {
+            cascades.push(
+              ...(await applyProjects(
+                tx,
+                tenant.id,
+                tenant.projects,
+                new Set(tenant.users.map((u) => u.id)),
+                now,
+                this.logger,
+              )),
+            );
+            projects += tenant.projects.length;
+          }
         }
         // Companies the core no longer entitles to Diffusion: deactivated, data kept.
         const gone = await tx.company.updateMany({
@@ -185,11 +210,33 @@ export class DirectorySyncService
       { timeout: 120_000 },
     );
     this.generation += 1;
+    await this.runCascades(cascades);
     return {
       applied: true,
       companies: directory.tenants.length,
       users: directory.tenants.reduce((n, t) => n + t.users.length, 0),
+      projects,
     };
+  }
+
+  /**
+   * What the core's changes of status do to the projects' contents (as Diffusion's own closing and
+   * reopening did), each project in its own transaction: one that fails is logged and doesn't stop
+   * the others nor the directory.
+   */
+  private async runCascades(cascades: ProjectCascade[]): Promise<void> {
+    for (const change of cascades) {
+      try {
+        await this.database.$transaction(
+          (tx) => cascadeOf(tx, this.workflow, change),
+          { timeout: 60_000 },
+        );
+      } catch (error) {
+        this.logger.error(
+          `project ${change.projectId}: the contents didn't follow its change ${change.from} -> ${change.to}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 }
 

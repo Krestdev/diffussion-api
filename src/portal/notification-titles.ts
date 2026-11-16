@@ -137,6 +137,56 @@ export const NOTIFICATION_TITLES: Readonly<
     fr: 'Relance',
     it: 'Sollecito',
   },
+  COURRIER_DISCHARGE_OVERDUE: {
+    en: 'Discharge overdue',
+    fr: 'Décharge en retard',
+    it: 'Ricevuta in ritardo',
+  },
+  COURRIER_DISPATCH_VALIDATED: {
+    en: 'Dispatch validated',
+    fr: 'Dispatching validé',
+    it: 'Smistamento convalidato',
+  },
+  ANALYSIS_SUBMITTED: {
+    en: 'Analysis sheet to decide',
+    fr: 'Fiche d’analyse à décider',
+    it: 'Scheda di analisi da decidere',
+  },
+  ANALYSIS_ACCEPTED: {
+    en: 'Analysis sheet accepted',
+    fr: 'Fiche d’analyse acceptée',
+    it: 'Scheda di analisi accettata',
+  },
+  ANALYSIS_REJECTED: {
+    en: 'Analysis sheet sent back',
+    fr: 'Fiche d’analyse renvoyée',
+    it: 'Scheda di analisi rinviata',
+  },
+  DELEGATION_GRANTED: {
+    en: 'Delegation granted',
+    fr: 'Délégation accordée',
+    it: 'Delega concessa',
+  },
+  DELEGATION_ENDED: {
+    en: 'Delegation ended',
+    fr: 'Délégation terminée',
+    it: 'Delega terminata',
+  },
+  REMINDER_APPROVAL_STALLED: {
+    en: 'Decision awaited',
+    fr: 'Décision en attente',
+    it: 'Decisione in attesa',
+  },
+  DAILY_DIGEST: {
+    en: 'Daily summary',
+    fr: 'Résumé du jour',
+    it: 'Riepilogo del giorno',
+  },
+  ACCESS_CHANGED: {
+    en: 'Access changed',
+    fr: 'Accès modifié',
+    it: 'Accesso modificato',
+  },
 };
 
 /** A type without a title. */

@@ -30,6 +30,8 @@ const COLUMNS = [
   'entityId',
   'message',
   'ip',
+  'userAgent',
+  'location',
   'parentLogId',
   'metadata',
 ] as const;

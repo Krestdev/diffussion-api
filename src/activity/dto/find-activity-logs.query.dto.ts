@@ -10,9 +10,16 @@ import {
   IsOptional,
   IsString,
   IsUUID,
+  Matches,
+  MaxLength,
 } from 'class-validator';
 import { ActivityLevel } from '../../generated/prisma/enums';
-import { AUDIT_CATEGORIES, AuditCategory } from '../audit-categories';
+import {
+  AUDIT_CATEGORIES,
+  AUDIT_TABS,
+  AuditCategory,
+  AuditTab,
+} from '../audit-categories';
 
 // "a,b" -> ['a', 'b'] (also accepts the repeated ?x=a&x=b form).
 const commaList = ({ value }: { value: unknown }) =>
@@ -102,6 +109,39 @@ export class FindActivityLogsQueryDto {
   @ArrayMaxSize(50)
   @IsString({ each: true })
   action?: string[];
+
+  @ApiPropertyOptional({
+    enum: AUDIT_TABS,
+    description:
+      "The journal's tab: DOCUMENT, DECISION, SETTINGS or ACCESS (every entry falls in one)",
+  })
+  @IsOptional()
+  @IsIn(AUDIT_TABS)
+  tab?: AuditTab;
+
+  @ApiPropertyOptional({
+    description:
+      'Actions starting with this, any case (e.g. delegation. for « Délégations »)',
+  })
+  @IsOptional()
+  @Matches(/^[A-Za-z_.-]{2,40}$/)
+  actionPrefix?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "The object's reference, or part of it (ENT-…, an instruction's, a dossier's, a contract's, a project's or a fiche's)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  reference?: string;
+
+  @ApiPropertyOptional({
+    description: "The start of the author's address (« Adresse IP »)",
+  })
+  @IsOptional()
+  @Matches(/^[0-9a-fA-F:.]{1,45}$/)
+  ip?: string;
 
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()

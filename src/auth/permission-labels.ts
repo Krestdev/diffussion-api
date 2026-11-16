@@ -154,20 +154,10 @@ export const PERMISSION_LABELS: Readonly<
     fr: 'Voir les projets',
     it: 'Vedere i progetti',
   },
-  'project.create': {
-    en: 'Create projects',
-    fr: 'Créer des projets',
-    it: 'Creare progetti',
-  },
   'project.update': {
-    en: 'Edit projects',
-    fr: 'Modifier les projets',
-    it: 'Modificare i progetti',
-  },
-  'project.archive': {
-    en: 'Archive and restore projects',
-    fr: 'Archiver et restaurer les projets',
-    it: 'Archiviare e ripristinare i progetti',
+    en: 'Set the Diffusion settings of projects (content, project owner, mode)',
+    fr: 'Régler les projets dans Diffusion (contenu, maître d’ouvrage, mode)',
+    it: 'Impostare i progetti in Diffusion (contenuto, committente, modalità)',
   },
   'analysis.read': {
     en: 'See analysis sheets',
@@ -340,9 +330,9 @@ export const PERMISSION_LABELS: Readonly<
     it: 'Registro di audit globale: consultare ed esportare tutte le azioni di Diffusion',
   },
   'dashboard.read.all': {
-    en: 'Global dashboards: management home and the organisation’s dashboards',
-    fr: 'Tableaux de bord globaux : accueil Direction et tableaux de bord de l’organisation',
-    it: 'Cruscotti globali: home Direzione e cruscotti dell’organizzazione',
+    en: 'Global analytics: management home and the organisation’s analytics',
+    fr: 'Analytique globale : accueil Direction et analytique de l’organisation',
+    it: 'Analisi globali: home Direzione e analisi dell’organizzazione',
   },
 };
 
@@ -431,8 +421,8 @@ export const PERMISSION_GROUP_LABELS: Readonly<
     it: 'Registro di audit',
   },
   dashboard: {
-    en: 'Dashboards',
-    fr: 'Tableaux de bord',
-    it: 'Cruscotti',
+    en: 'Analytics',
+    fr: 'Analytique',
+    it: 'Analisi',
   },
 };

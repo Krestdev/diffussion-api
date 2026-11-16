@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 import { ProjectStatus } from '../../../generated/prisma/client';
 import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 
@@ -9,6 +9,15 @@ export class FindProjectsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsEnum(ProjectStatus)
   status?: ProjectStatus;
+
+  @ApiPropertyOptional({
+    example: 'ACTIVE,SUSPENDED',
+    description:
+      'Comma-separated statuses (a picker: the projects still offered, ACTIVE and SUSPENDED); ignored with `status`',
+  })
+  @IsOptional()
+  @IsString()
+  statuses?: string;
 
   @ApiPropertyOptional({
     description:

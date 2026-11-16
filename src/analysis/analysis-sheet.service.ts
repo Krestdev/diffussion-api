@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { extname } from 'path';
 import {
@@ -13,6 +14,7 @@ import {
   CourrierStatus,
   InstructionStatus,
   LivrableStatus,
+  NotificationCanal,
   Prisma,
   UserInstructionRole,
   UserStatus,
@@ -28,6 +30,7 @@ import {
   refreshDossierProgress,
 } from '../common/utils/dossier-lifecycle';
 import { createWithUniqueReference } from '../common/utils/generate-reference';
+import { assertProjectOfCompany } from '../common/utils/company-referentials';
 import { DatabaseService } from '../database/database.service';
 import { nextLivrablePosition } from '../common/utils/livrable-history';
 import { StorageService } from '../storage/storage.service';
@@ -52,6 +55,8 @@ import { ANALYSIS_SHEET_STATES } from './analysis-sheet.states';
 import { LIVRABLE_STATES } from '../domain/deliverable/livrable.states';
 import { INSTRUCTION_STATES } from '../instructions/instruction.states';
 import { analysisSheetActions } from './analysis-sheet-actions';
+import { NotificationsService } from '../notifications/notifications.service';
+import { validationChain } from '../instructions/instructions.service';
 
 // A fiche linked to an instruction is editable only while its livrable is
 // still being prepared. Once submitted it is read-only, and a decision
@@ -177,6 +182,8 @@ export class AnalysisSheetService {
     private readonly criteria: CriterionTemplateService,
     private readonly identity: DocumentIdentityService,
     private readonly workflow: WorkflowService,
+    // Live notifications of submissions and decisions (optional: unit tests leave it out).
+    @Optional() private readonly notifications?: NotificationsService,
   ) {}
 
   /**
@@ -243,11 +250,14 @@ export class AnalysisSheetService {
             label: document.originalName,
           }))
         : []);
-    const templates = await this.defaultTemplates(
-      await this.companyOfEffet(courrier),
-    );
+    const effetCompany = await this.companyOfEffet(courrier);
+    const templates = await this.defaultTemplates(effetCompany);
 
     const { courrierId, projectId, remise, ...fields } = dto;
+    // A project closed at the CREAPP core takes nothing new (a suspended one still does).
+    if (projectId) {
+      await assertProjectOfCompany(this.database, projectId, effetCompany);
+    }
     const rest = withoutKeys(fields, [
       'items',
       'seedItemsFromCourrier',
@@ -636,6 +646,7 @@ export class AnalysisSheetService {
         from: sheet.status,
       });
     });
+    await this.notifySubmitted(sheet, livrable.instructionId, userId);
     return this.findOne(id);
   }
 
@@ -755,6 +766,13 @@ export class AnalysisSheetService {
       }
     });
 
+    await this.notifyDecided(
+      sheet,
+      instructionId,
+      accepted,
+      dto.overallOpinion,
+      decidedById,
+    );
     if (accepted) {
       if (sheet.dossierId) {
         await refreshDossierProgress(this.database, sheet.dossierId);
@@ -1026,6 +1044,119 @@ export class AnalysisSheetService {
    * instruction, a new livrable version of it too. Same structure —
    * elements and criteria — with the judgements kept or left blank.
    */
+  /**
+   * A submitted fiche: whoever decides on the task's deliverables (its superviseur, else its
+   * creator) is told live. Never fails the submission.
+   */
+  private async notifySubmitted(
+    sheet: {
+      id: string;
+      reference: string;
+      courrierId: string;
+      dossierId: string | null;
+    },
+    instructionId: string,
+    userId: string,
+  ) {
+    if (!this.notifications) return;
+    try {
+      const task = await this.database.instruction.findUnique({
+        where: { id: instructionId },
+        select: {
+          title: true,
+          createdById: true,
+          assignees: { select: { role: true, user: { select: { id: true } } } },
+        },
+      });
+      if (!task) return;
+      const superviseurs = task.assignees
+        .filter((a) => a.role === UserInstructionRole.SUPERVISEUR)
+        .map((a) => a.user.id);
+      const deciders = superviseurs.length
+        ? superviseurs
+        : [validationChain(task).decider];
+      await this.notify(deciders, userId, {
+        type: 'ANALYSIS_SUBMITTED',
+        message: `La fiche d'analyse ${sheet.reference} (tâche « ${task.title} ») attend votre décision.`,
+        params: { reference: sheet.reference },
+        sheet,
+        instructionId,
+      });
+    } catch (error) {
+      console.error('Failed to notify a submitted analysis sheet', error);
+    }
+  }
+
+  /** A decided fiche: its author and the task's executants are told live. */
+  private async notifyDecided(
+    sheet: {
+      id: string;
+      reference: string;
+      authorId: string | null;
+      courrierId: string;
+      dossierId: string | null;
+    },
+    instructionId: string,
+    accepted: boolean,
+    opinion: AnalysisOpinion,
+    decidedById: string,
+  ) {
+    if (!this.notifications) return;
+    try {
+      const executants = await this.database.userInstructions.findMany({
+        where: { instructionId, role: UserInstructionRole.EXECUTANT },
+        select: { userId: true },
+      });
+      await this.notify(
+        [sheet.authorId, ...executants.map((e) => e.userId)],
+        decidedById,
+        {
+          type: accepted ? 'ANALYSIS_ACCEPTED' : 'ANALYSIS_REJECTED',
+          message: accepted
+            ? `La fiche d'analyse ${sheet.reference} est acceptée (avis ${opinion}).`
+            : `La fiche d'analyse ${sheet.reference} est renvoyée (avis ${opinion}) : une nouvelle version est à rédiger.`,
+          params: { reference: sheet.reference, opinion },
+          sheet,
+          instructionId,
+        },
+      );
+    } catch (error) {
+      console.error('Failed to notify a decided analysis sheet', error);
+    }
+  }
+
+  private async notify(
+    userIds: (string | null | undefined)[],
+    actingUserId: string,
+    content: {
+      type: string;
+      message: string;
+      params: Record<string, string>;
+      sheet: { courrierId: string; dossierId: string | null };
+      instructionId: string;
+    },
+  ) {
+    if (!this.notifications) return;
+    const recipientIds = [
+      ...new Set(
+        userIds.filter(
+          (id): id is string => Boolean(id) && id !== actingUserId,
+        ),
+      ),
+    ];
+    if (recipientIds.length === 0) return;
+    await this.notifications.create({
+      recipientIds,
+      type: content.type,
+      message: content.message,
+      params: content.params,
+      canal: NotificationCanal.IN_APP,
+      courrierId: content.sheet.courrierId,
+      dossierId: content.sheet.dossierId ?? undefined,
+      instructionId: content.instructionId,
+    });
+  }
+
   private async effetOf(courrierId: string) {
     return this.database.courrier.findUniqueOrThrow({
       where: { id: courrierId },

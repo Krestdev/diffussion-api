@@ -7,6 +7,10 @@ export interface AppClsStore extends ClsStore {
   parentLogId?: string;
   /** The client's IP address, for the audit journal. */
   ip?: string;
+  /** The client's browser (User-Agent), for the journal's « Appareil ». */
+  userAgent?: string;
+  /** « Douala, CM »: the proxy's geolocation headers, for the journal's « Lieu ». */
+  location?: string;
   /** The signed-in person's permission codes in their company (CoreAuthGuard, AppAdminGuard). */
   permissions?: readonly string[];
   /** Their company. */

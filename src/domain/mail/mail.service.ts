@@ -1641,6 +1641,7 @@ export class MailService {
     this.notify(courrier, [proposal.proposedById], userId, {
       type: 'COURRIER_DISPATCH_REJECTED',
       message: `Le dispatching proposé pour « ${courrier.subject} » est rejeté : ${reason}`,
+      params: { reason },
     });
     return formatCourrier(updated);
   }
@@ -1753,6 +1754,7 @@ export class MailService {
         message: approved
           ? `« ${courrier.subject} » est validé : signature à enregistrer.`
           : `« ${courrier.subject} » doit être corrigé : ${motif}`,
+        ...(approved ? {} : { params: { reason: motif ?? '' } }),
       },
     );
     return formatCourrier(updated);
@@ -1926,7 +1928,8 @@ export class MailService {
   // Who is told a dispatching awaits validation: the active users of the
   // effet's company holding the dispatch (or dispatch-validation) permission
   // through one of its roles.
-  private async dispatchValidatorsOf(courrier: {
+  // Public: ApprovalReminderService reminds them of a stalled dispatching.
+  async dispatchValidatorsOf(courrier: {
     dossierId?: string | null;
     createdById?: string | null;
   }) {
@@ -1965,8 +1968,9 @@ export class MailService {
     return users.map((user) => user.id);
   }
 
-  // The rule of awaitingValidationBy, for one courrier.
-  private async validatorOf(courrier: {
+  // The rule of awaitingValidationBy, for one courrier. Public:
+  // ApprovalReminderService reminds the validator of a stalled validation.
+  async validatorOf(courrier: {
     dossierId: string | null;
     contractId?: string | null;
     projectId?: string | null;
@@ -2053,7 +2057,7 @@ export class MailService {
     courrier: { id: string; dossierId: string | null },
     recipients: (string | null)[],
     actingUserId: string,
-    content: { type: string; message: string },
+    content: { type: string; message: string; params?: Record<string, string> },
   ) {
     const recipientIds = [
       ...new Set(

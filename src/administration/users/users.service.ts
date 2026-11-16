@@ -86,6 +86,31 @@ export class UsersService {
       AND: [
         { companyId },
         query.companyId ? { companyId: query.companyId } : {},
+        query.roleId ? { userRoles: { some: { roleId: query.roleId } } } : {},
+        query.permission
+          ? {
+              userRoles: {
+                some: {
+                  role: {
+                    companyId,
+                    archivedAt: null,
+                    rolePermissions: {
+                      some: { permission: { code: query.permission } },
+                    },
+                  },
+                },
+              },
+            }
+          : {},
+        // « Inactif depuis le » (as EXPENZO): never signed in, or not since.
+        query.inactiveBefore
+          ? {
+              OR: [
+                { lastLogin: null },
+                { lastLogin: { lt: new Date(query.inactiveBefore) } },
+              ],
+            }
+          : {},
       ],
       status: query.status,
       OR: query.search
@@ -288,6 +313,24 @@ export class UsersService {
   }
 
   /** The person's company, when they hold `permission` there (403 otherwise). */
+  /**
+   * Whether `id` is someone of the viewer's company (avatars: any signed-in
+   * person sees their colleagues' photos), or the viewer is a platform
+   * administrator.
+   */
+  async isColleague(id: string, actingUserId: string): Promise<boolean> {
+    const [own, target] = await Promise.all([
+      this.access.companyOf(actingUserId),
+      this.database.user.findUnique({
+        where: { id },
+        select: { companyId: true },
+      }),
+    ]);
+    if (!target) return false;
+    if (own && target.companyId === own) return true;
+    return this.access.isPlatformAdmin(actingUserId);
+  }
+
   private async adminCompany(
     actingUserId: string,
     permission: Permission,

@@ -44,31 +44,96 @@ export class NotificationsService {
 
   // Each recipient whose company doesn't show this type in the application
   // (PA·9), or who turned it off themselves, is left out; with nobody left,
-  // nothing is written (null).
-  async create(dto: CreateNotificationDto) {
-    const { recipientIds: addressed, ...data } = dto;
+  // nothing is written (null). With a `sourceKey` (a reminder's period, a
+  // digest's day), it is created once per source: a repeated run of a job
+  // creates nothing (null), as EXPENZO's.
+  async create(dto: CreateNotificationDto, sourceKey?: string) {
+    const { recipientIds: addressed, params: given, ...data } = dto;
     const recipientIds = await this.wantedBy(
       await this.moduleNotifications.inAppRecipients(addressed, dto.type),
       dto.type,
     );
     if (recipientIds.length === 0) return null;
-    const notification = await this.database.notification.create({
-      data: {
-        ...data,
-        recipients: {
-          createMany: {
-            data: recipientIds.map((userId) => ({ userId })),
+    const params = await this.paramsOf(dto, given);
+    const notification = await this.database.notification
+      .create({
+        data: {
+          ...data,
+          ...(params ? { params } : {}),
+          ...(sourceKey ? { sourceKey: sourceKey.slice(0, 200) } : {}),
+          recipients: {
+            createMany: {
+              data: recipientIds.map((userId) => ({ userId })),
+            },
           },
         },
-      },
-      include: { recipients: true },
-    });
-    // Every notification (courriers, tasks, manual) goes through here, so
-    // this is the single place the bell gets pushed.
-    this.realtime.emitToUsers(recipientIds, 'notification:new', {
-      id: notification.id,
-    });
+        include: {
+          recipients: true,
+          courrier: { select: { direction: true } },
+        },
+      })
+      .catch((error: unknown) => {
+        // Already created by an earlier run of the same source.
+        if (
+          sourceKey &&
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2002'
+        ) {
+          return null;
+        }
+        throw error;
+      });
+    if (!notification) return null;
+    // Every notification (courriers, tasks, reminders, manual) goes through
+    // here, so this is the single place the bell gets pushed: each recipient's
+    // open tabs receive their inbox entry (as GET /notifications/me gives it),
+    // refresh their bell and lists, and show it as a toast in their language.
+    const { recipients, courrier, ...row } = notification;
+    for (const recipient of recipients) {
+      this.realtime.toUser(recipient.userId, 'notification', {
+        ...recipient,
+        notification: {
+          ...row,
+          courrierDirection: courrier?.direction ?? null,
+        },
+      });
+    }
     return notification;
+  }
+
+  /**
+   * The params of the texts: the effet's number and subject, the task's
+   * title, then what the caller gave (reason, date…). Null when the caller
+   * gave none and nothing is linked (an announcement: its message is shown).
+   */
+  private async paramsOf(
+    dto: CreateNotificationDto,
+    given: Record<string, string> | undefined,
+  ): Promise<Prisma.InputJsonObject | null> {
+    const [courrier, instruction] = await Promise.all([
+      dto.courrierId
+        ? this.database.courrier.findUnique({
+            where: { id: dto.courrierId },
+            select: { number: true, subject: true },
+          })
+        : null,
+      dto.instructionId
+        ? this.database.instruction.findUnique({
+            where: { id: dto.instructionId },
+            select: { title: true, number: true },
+          })
+        : null,
+    ]);
+    if (!given && !courrier && !instruction) return null;
+    return {
+      ...(courrier
+        ? { number: courrier.number, subject: courrier.subject }
+        : {}),
+      ...(instruction
+        ? { title: instruction.title, taskNumber: instruction.number }
+        : {}),
+      ...given,
+    };
   }
 
   // A role or an access list changed. Never fails the change itself, and
@@ -79,6 +144,9 @@ export class NotificationsService {
     message: string,
     dossierId?: string,
   ) {
+    // Their open tabs reload their rights and lists at once (as EXPENZO's
+    // `access` event), whether or not they receive the notification.
+    this.realtime.accessChanged(userIds);
     const recipientIds = [...new Set(userIds)].filter(
       (id) => id !== actingUserId,
     );

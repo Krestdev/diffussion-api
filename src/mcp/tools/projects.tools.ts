@@ -33,7 +33,6 @@ import { CourrierNatureController } from '../../referentials/courrier-nature/cou
 import { DossierTypeController } from '../../referentials/dossier-type/dossier-type.controller';
 import { EffetTypeController } from '../../referentials/effet-type/effet-type.controller';
 import { FindProjectsQueryDto } from '../../referentials/project/dto/find-projects.query.dto';
-import { UpdateProjectDto } from '../../referentials/project/dto/update-project.dto';
 import { ProjectController } from '../../referentials/project/project.controller';
 import { CreateSupportTicketDto } from '../../support/dto/support.dto';
 import { SupportController } from '../../support/support.controller';
@@ -157,63 +156,14 @@ const only = (tool: McpTool, ...visibleTo: Permission[]): McpTool => ({
   visibleTo,
 });
 
-const reasonInput = (what: string) =>
-  z.string().trim().min(1).max(1000).describe(`Why the ${what} is archived`);
-const noteInput = (what: string) =>
-  z
-    .string()
-    .trim()
-    .max(1000)
-    .optional()
-    .describe(`Why the ${what} is brought back (kept in its history)`);
-
 // ------------------------------------------------------------------ projects
 
-/** UpdateProjectDto without its workflow fields: status changes have their own tools. */
-const projectEditShape: Record<string, z.ZodType> = {
-  ...dtoShape(UpdateProjectDto),
-};
-for (const field of ['status', 'reason', 'note'])
-  delete projectEditShape[field];
-
-/** A project status change (PATCH /projects/:id { status }). */
-function projectTransition(options: {
-  name: string;
-  title: string;
-  description: string;
-  status: 'ACTIVE' | 'CLOSED' | 'ARCHIVED';
-  extra?: 'reason' | 'note';
-  permission: Permission;
-}): McpTool {
-  return defineTool({
-    name: options.name,
-    title: options.title,
-    description: options.description,
-    level: DECISION,
-    domain: PROJECTS,
-    route: [ProjectController, 'update'],
-    visibleTo: [options.permission],
-    link: LINKS.project,
-    preview: 'get_project',
-    input: {
-      id: id('project'),
-      ...(options.extra === 'reason' ? { reason: reasonInput('project') } : {}),
-      ...(options.extra === 'note' ? { note: noteInput('project') } : {}),
-    },
-    run: async (args: Row, ctx) =>
-      ctx.call(
-        ProjectController,
-        'update',
-        String(args.id),
-        await ctx.dto(UpdateProjectDto, {
-          status: options.status,
-          reason: options.extra === 'reason' ? args.reason : undefined,
-          note: options.extra === 'note' ? args.note : undefined,
-        }),
-        ctx.user,
-      ),
-  });
-}
+/*
+ * Projects come from the CREAPP core (2026-11-23, as EXPENZO): Whass reads them here; creating,
+ * editing, suspending, closing, archiving and deleting them happen in the core's console, so the
+ * create_project, close/reopen/archive/unarchive_project and delete_project tools are withdrawn.
+ * update_project only sets Diffusion's own settings of a project.
+ */
 
 const PROJECT_TOOLS_LIST: McpTool[] = [
   paged({
@@ -221,7 +171,8 @@ const PROJECT_TOOLS_LIST: McpTool[] = [
     title: 'Search projects',
     description:
       "The company's projects the user may open, by name or reference and status (ACTIVE, " +
-      'CLOSED, ARCHIVED), with their figures (effets, contracts, dossiers in progress). Use ' +
+      'SUSPENDED, CLOSED, ARCHIVED; `statuses` takes several, e.g. ACTIVE,SUSPENDED), with ' +
+      'their figures (effets, contracts, dossiers in progress). Use ' +
       'for "our projects", "the project X". Returns one page and the total, each with its ' +
       '`link`; open one with get_project.',
     domain: PROJECTS,
@@ -236,8 +187,9 @@ const PROJECT_TOOLS_LIST: McpTool[] = [
     description:
       'A project in full, by id or by its reference (e.g. PRJ-2026-07): content type ' +
       "(dossiers or contracts), maître d'ouvrage, responsible, dates, status, figures, and " +
-      '`available` / `unavailable` actions (edit, close, reopen, archive, unarchive, ' +
-      'delete). Projects are mirrored from the CREAPP core; edits made here stay in Diffusion.',
+      "`available` / `unavailable` actions (edit: Diffusion's settings). Projects are read-only " +
+      "copies of the CREAPP core's: they are created, changed, suspended and closed in the core's " +
+      'console (Projets), not here.',
     level: READ,
     domain: PROJECTS,
     route: [ProjectController, 'findOne'],
@@ -293,90 +245,18 @@ const PROJECT_TOOLS_LIST: McpTool[] = [
     ids: { id: 'project' },
   }),
   restTool({
-    name: 'create_project',
-    title: 'Create a project',
-    description:
-      'Create a project in Diffusion: name, content type (DOSSIERS: dossiers directly, ' +
-      'CONTRACTS: contracts with their dossiers), optional reference, mode, maître ' +
-      "d'ouvrage (id or name), responsible and dates. Returns the new project with its `link`.",
-    level: WRITE,
-    domain: PROJECTS,
-    route: [ProjectController, 'create'],
-    link: LINKS.project,
-  }),
-  defineTool({
     name: 'update_project',
-    title: 'Edit a project',
+    title: "Set a project's Diffusion settings",
     description:
-      "Change a project's details (name, reference, mode, maître d'ouvrage, responsible, " +
-      'dates, content type while it is empty). Status changes have their own tools ' +
-      '(close_project, reopen_project, archive_project, unarchive_project). Returns the project.',
+      "Change Diffusion's own settings of a project: what it holds (contentType DOSSIERS or " +
+      "CONTRATS, while what it holds fits), its mode and its maître d'ouvrage (id or name). The " +
+      "name, reference, responsible, dates and status are the CREAPP core's (changed in its " +
+      'console). Returns the project.',
     level: WRITE,
     domain: PROJECTS,
     route: [ProjectController, 'update'],
-    visibleTo: [Permission.PROJECT_UPDATE],
     link: LINKS.project,
     preview: 'get_project',
-    input: { id: id('project'), ...projectEditShape },
-    run: async (args: Row, ctx) => {
-      const { id: projectId, ...fields } = args;
-      return ctx.call(
-        ProjectController,
-        'update',
-        String(projectId),
-        await ctx.dto(UpdateProjectDto, fields),
-        ctx.user,
-      );
-    },
-  }),
-  projectTransition({
-    name: 'close_project',
-    title: 'Close a project',
-    description:
-      'Close an ACTIVE project: its contracts and dossiers follow. Returns the project.' +
-      ONCE,
-    status: 'CLOSED',
-    permission: Permission.PROJECT_UPDATE,
-  }),
-  projectTransition({
-    name: 'reopen_project',
-    title: 'Reopen a project',
-    description:
-      'Reopen a CLOSED project (back to ACTIVE). Returns the project.' + ONCE,
-    status: 'ACTIVE',
-    permission: Permission.PROJECT_UPDATE,
-  }),
-  projectTransition({
-    name: 'archive_project',
-    title: 'Archive a project',
-    description:
-      'Archive a CLOSED project, with everything in it. Returns the project.' +
-      ONCE +
-      REASON,
-    status: 'ARCHIVED',
-    extra: 'reason',
-    permission: Permission.PROJECT_ARCHIVE,
-  }),
-  projectTransition({
-    name: 'unarchive_project',
-    title: 'Unarchive a project',
-    description:
-      'Bring an ARCHIVED project back to CLOSED (reopen_project then makes it ACTIVE). ' +
-      'Returns the project.' +
-      ONCE,
-    status: 'CLOSED',
-    extra: 'note',
-    permission: Permission.PROJECT_ARCHIVE,
-  }),
-  restTool({
-    name: 'delete_project',
-    title: 'Delete a project',
-    description:
-      'Delete a project for good: refused while dossiers or contracts still refer to it ' +
-      '(archive it instead). Returns { done: true }.',
-    level: DECISION,
-    domain: PROJECTS,
-    route: [ProjectController, 'remove'],
     ids: { id: 'project' },
   }),
   only(
