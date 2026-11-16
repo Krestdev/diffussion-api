@@ -1,4 +1,4 @@
-import { AnalysisOpinion } from '../../generated/prisma/enums';
+import { AnalysisOpinion } from '../generated/prisma/enums';
 
 /**
  * Severity order of the 5-value scale. NA sits outside it: "non applicable"

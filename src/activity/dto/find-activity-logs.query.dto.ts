@@ -11,7 +11,7 @@ import {
   IsString,
   IsUUID,
 } from 'class-validator';
-import { ActivityLevel } from 'generated/prisma/enums';
+import { ActivityLevel } from '../../generated/prisma/enums';
 import { AUDIT_CATEGORIES, AuditCategory } from '../audit-categories';
 
 // "a,b" -> ['a', 'b'] (also accepts the repeated ?x=a&x=b form).

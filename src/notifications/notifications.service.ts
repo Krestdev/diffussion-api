@@ -3,7 +3,7 @@ import {
   NotificationCanal,
   NotificationStatus,
   Prisma,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
 import { ModuleNotificationsService } from '../administration/settings/module-notifications.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';

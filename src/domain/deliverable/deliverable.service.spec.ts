@@ -10,7 +10,7 @@ import { ActivityService } from '../../activity/activity.service';
 import {
   InstructionStatus,
   LivrableStatus,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 
 // Dossier-state rules (RG-DOS-007, company activity, progress) are covered by
 // the DossierService spec; here they're stubbed so fixtures don't need a

@@ -11,7 +11,7 @@ import { Request, Response } from 'express';
 import { ClsService } from 'nestjs-cls';
 import { AppClsStore } from '../../cls.store';
 import { DbLogger } from '../../logging/db.logger';
-import { Prisma } from '../../../generated/prisma/client';
+import { Prisma } from '../../generated/prisma/client';
 
 // Prisma reports the offending columns differently depending on the engine:
 // `meta.target` (classic) or nested under `meta.driverAdapterError` (driver

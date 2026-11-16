@@ -9,7 +9,7 @@ import {
   IsUUID,
   MaxLength,
 } from 'class-validator';
-import { NotificationCanal } from 'generated/prisma/enums';
+import { NotificationCanal } from '../../generated/prisma/enums';
 
 export class CreateNotificationDto {
   @ApiProperty({

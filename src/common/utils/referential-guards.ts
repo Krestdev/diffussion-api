@@ -3,7 +3,7 @@ import {
   CorrespondentStatus,
   Prisma,
   CompanyStatus,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 import { createWithUniqueReference } from './generate-reference';
 
 type Db = Prisma.TransactionClient;

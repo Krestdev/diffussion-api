@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
-import { Prisma } from '../../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
 import { AppClsStore } from '../cls.store';
 import { AccessService } from '../auth/access/access.service';

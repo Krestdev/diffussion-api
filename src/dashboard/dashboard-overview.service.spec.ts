@@ -2,7 +2,7 @@ import {
   CourrierDirection,
   CourrierStatus,
   InstructionStatus,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import {
   bucketsOf,
   computeAging,

@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
-import { NotificationStatus } from '../../../generated/prisma/enums';
+import { NotificationStatus } from '../../generated/prisma/enums';
 import { AnalysisController } from '../../analysis/analysis.controller';
 import { FindAnalysisSheetsQueryDto } from '../../analysis/dto/analysis.dto';
 import { AuthController } from '../../auth/auth.controller';

@@ -1,4 +1,4 @@
-import { Prisma } from '../../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 
 /**
  * The categories of the audit journal's filter (AU·1). Each matches entries

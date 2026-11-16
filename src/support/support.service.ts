@@ -4,7 +4,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, SupportTicketStatus } from '../../generated/prisma/client';
+import { Prisma, SupportTicketStatus } from '../generated/prisma/client';
 import { ActivityService } from '../activity/activity.service';
 import {
   DEFAULT_TAKE,

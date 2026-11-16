@@ -3,7 +3,7 @@ import {
   AnalysisSheetStatus,
   CourrierStatus,
   LivrableStatus,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { Permission } from '../auth/permissions';
 import { ActionsSheet, analysisSheetActions } from './analysis-sheet-actions';
 

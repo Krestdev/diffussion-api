@@ -9,7 +9,7 @@ import {
   CourrierDirection,
   CourrierStatus,
   Prisma,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { SettingsService } from '../administration/settings/settings.service';
 import { DatabaseService } from '../database/database.service';
 import { WorkflowService } from '../workflow/workflow.service';

@@ -1,4 +1,4 @@
-import { InstructionStatus as S } from '../../generated/prisma/client';
+import { InstructionStatus as S } from '../generated/prisma/client';
 import { Permission } from '../auth/permissions';
 import { InstructionEvent, INSTRUCTION_STATES } from './instruction.states';
 

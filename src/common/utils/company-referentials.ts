@@ -2,7 +2,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import {
   ProjectContentType,
   ProjectStatus,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 import { AccessService } from '../../auth/access/access.service';
 import { DatabaseService } from '../../database/database.service';
 

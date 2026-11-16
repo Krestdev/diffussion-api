@@ -2,7 +2,7 @@ import {
   AnalysisSheetStatus,
   CourrierStatus,
   LivrableStatus,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { can } from '../auth/access/permission-checks';
 import { Permission } from '../auth/permissions';
 import {

@@ -1,4 +1,4 @@
-import { CorrespondentStatus as S } from '../../../generated/prisma/client';
+import { CorrespondentStatus as S } from '../../generated/prisma/client';
 import { CORRESPONDENT_STATES } from './correspondent.states';
 
 describe('CORRESPONDENT_STATES', () => {

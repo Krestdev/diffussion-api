@@ -1,4 +1,4 @@
-import { DossierStatus as S } from '../../../generated/prisma/client';
+import { DossierStatus as S } from '../../generated/prisma/client';
 import { DOSSIER_STATES, DossierEvent } from './dossier.states';
 
 // Today's dossier lifecycle (status map §6, §1c): from, event, to, permission.

@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsUUID } from 'class-validator';
-import { LivrableStatus } from 'generated/prisma/enums';
+import { LivrableStatus } from '../../../generated/prisma/enums';
 
 export class FindDeliverableQueryDto {
   @ApiPropertyOptional()

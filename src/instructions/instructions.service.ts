@@ -17,7 +17,7 @@ import {
   UserInstructionRole,
   UserStatus,
   ValidationDecision,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { DEFAULT_TAKE } from '../common/dto/pagination.query.dto';
 import { dateRange } from '../common/utils/date-range';
 import {

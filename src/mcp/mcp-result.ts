@@ -1,5 +1,5 @@
 import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import type { ToolLink } from './mcp-tool';
 
 type ActionStateLike = {

@@ -1,4 +1,4 @@
-import { CourrierStatus, Prisma } from '../../../generated/prisma/client';
+import { CourrierStatus, Prisma } from '../../generated/prisma/client';
 
 // Who validates a courrier submitted for validation: its dossier's
 // responsible; failing that, the responsible of the dossier's company; and for

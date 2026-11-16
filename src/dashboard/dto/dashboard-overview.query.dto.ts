@@ -10,7 +10,7 @@ import {
   IsUUID,
   ValidateIf,
 } from 'class-validator';
-import { CourrierDirection } from '../../../generated/prisma/client';
+import { CourrierDirection } from '../../generated/prisma/client';
 
 // "a,b" -> ['a', 'b'] (also accepts the repeated ?x=a&x=b form).
 const commaList = ({ value }: { value: unknown }) =>

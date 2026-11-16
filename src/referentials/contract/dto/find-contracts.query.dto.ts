@@ -10,7 +10,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
-import { ContractStatus } from '../../../../generated/prisma/client';
+import { ContractStatus } from '../../../generated/prisma/client';
 import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 
 // `search` (inherited) matches the contract's number, title or reference.

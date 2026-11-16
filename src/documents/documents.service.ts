@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ContractStatus, Prisma } from '../../generated/prisma/client';
+import { ContractStatus, Prisma } from '../generated/prisma/client';
 import { SetAccessDto } from '../common/dto/access.dto';
 import { SetOwnerDto } from '../common/dto/set-owner.dto';
 import { assertDossierOpenForActivity } from '../common/utils/dossier-lifecycle';

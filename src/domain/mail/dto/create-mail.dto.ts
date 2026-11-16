@@ -13,7 +13,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { CourrierDirection } from 'generated/prisma/enums';
+import { CourrierDirection } from '../../../generated/prisma/enums';
 import { EmptyToUndefined } from '../../../common/transforms/empty-to-undefined.transform';
 
 export class CourrierDocumentDto {

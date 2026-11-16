@@ -1,4 +1,4 @@
-import { LivrableStatus as S } from '../../../generated/prisma/client';
+import { LivrableStatus as S } from '../../generated/prisma/client';
 import { LivrableEvent, LIVRABLE_STATES } from './livrable.states';
 
 // Today's transitions (status map §4): no permission on the rules, the services check who acts.

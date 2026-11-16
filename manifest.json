@@ -7,6 +7,6 @@
   "stage": "BETA",
   "baseUrl": "https://diffusion.creaconsult-app.com",
   "adminPath": "/dashboard/admin/settings",
-  "healthUrl": "https://diffusion-api.creaconsult-app.com/",
+  "healthUrl": "https://diffusion-api.creaconsult-app.com/health",
   "apiUrl": "https://diffusion-api.creaconsult-app.com"
 }

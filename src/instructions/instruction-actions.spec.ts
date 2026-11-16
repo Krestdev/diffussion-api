@@ -4,7 +4,7 @@ import {
   LivrableStatus,
   SubscriptionDecision,
   UserInstructionRole,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { Permission } from '../auth/permissions';
 import type { ActionState } from '../workflow/action-states';
 import { ActionsInstruction, instructionActions } from './instruction-actions';

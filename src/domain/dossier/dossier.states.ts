@@ -1,4 +1,4 @@
-import { DossierStatus } from '../../../generated/prisma/client';
+import { DossierStatus } from '../../generated/prisma/client';
 import { Permission } from '../../auth/permissions';
 import { TransitionTable } from '../../workflow/transition-table';
 

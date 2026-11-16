@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma } from '../../../generated/prisma/client';
+import { Prisma } from '../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { Permission } from '../../auth/permissions';
 import { AccessService } from '../../auth/access/access.service';

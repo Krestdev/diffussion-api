@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
-import { AccessProfile, Prisma } from '../../../generated/prisma/client';
+import { AccessProfile, Prisma } from '../../generated/prisma/client';
 import { AppClsStore } from '../../cls.store';
 import { DatabaseService } from '../../database/database.service';
 import { normalizePermissions, Permission } from '../permissions';

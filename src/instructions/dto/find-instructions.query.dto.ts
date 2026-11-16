@@ -1,7 +1,7 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import { IsBoolean, IsEnum, IsInt, IsOptional, IsUUID } from 'class-validator';
-import { InstructionStatus } from 'generated/prisma/enums';
+import { InstructionStatus } from '../../generated/prisma/enums';
 
 export class FindInstructionsQueryDto {
   @ApiPropertyOptional({

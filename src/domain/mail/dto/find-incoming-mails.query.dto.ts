@@ -8,7 +8,7 @@ import {
   IsOptional,
   IsUUID,
 } from 'class-validator';
-import { CourrierStatus } from 'generated/prisma/enums';
+import { CourrierStatus } from '../../../generated/prisma/enums';
 import { PaginationQueryDto } from '../../../common/dto/pagination.query.dto';
 
 /**

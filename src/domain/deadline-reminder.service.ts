@@ -10,7 +10,7 @@ import {
   NotificationCanal,
   Prisma,
   UserInstructionRole,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { SettingsService } from '../administration/settings/settings.service';
 import type {
   GeneralSettings,

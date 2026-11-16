@@ -5,7 +5,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   AnalysisSheetStatus,
   LivrableStatus,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ActivityService } from '../activity/activity.service';
 import { AccessService } from '../auth/access/access.service';

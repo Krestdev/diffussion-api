@@ -12,7 +12,7 @@ import {
 import {
   DossierConfidentiality,
   DossierPriority,
-} from 'generated/prisma/enums';
+} from '../../../generated/prisma/enums';
 
 export class CreateDossierDto {
   @ApiPropertyOptional({

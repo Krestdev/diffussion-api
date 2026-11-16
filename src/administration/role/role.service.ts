@@ -8,7 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ClsService } from 'nestjs-cls';
-import { Prisma, UserStatus } from '../../../generated/prisma/client';
+import { Prisma, UserStatus } from '../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { activeDelegationsFilter } from '../../auth/access/access.service';
 import { permissionIds } from '../../auth/default-roles';

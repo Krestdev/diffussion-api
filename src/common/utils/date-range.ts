@@ -1,4 +1,4 @@
-import { Prisma } from '../../../generated/prisma/client';
+import { Prisma } from '../../generated/prisma/client';
 
 /**
  * A `{ gte, lt | lte }` filter from optional ISO bounds, for list endpoints'

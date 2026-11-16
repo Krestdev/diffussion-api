@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { AccessProfile, UserStatus } from '../../generated/prisma/client';
+import { AccessProfile, UserStatus } from '../generated/prisma/client';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../database/database.service';
 import {

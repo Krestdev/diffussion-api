@@ -7,7 +7,7 @@ import {
   IsUUID,
   MaxLength,
 } from 'class-validator';
-import { CorrespondentStatus } from 'generated/prisma/enums';
+import { CorrespondentStatus } from '../../../generated/prisma/enums';
 
 export class CreateCorrespondentDto {
   @ApiProperty({ example: 'Mairie de Yaoundé' })

@@ -6,7 +6,7 @@ import {
   IsOptional,
   IsUUID,
 } from 'class-validator';
-import { AccessProfile } from '../../../../generated/prisma/client';
+import { AccessProfile } from '../../../generated/prisma/client';
 
 /**
  * What Diffusion decides about a person: their roles and how the administration screens present

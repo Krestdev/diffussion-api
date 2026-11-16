@@ -5,7 +5,7 @@ import {
   OnApplicationBootstrap,
   OnModuleDestroy,
 } from '@nestjs/common';
-import { DossierStatus } from '../../../generated/prisma/client';
+import { DossierStatus } from '../../generated/prisma/client';
 import { DatabaseService } from '../../database/database.service';
 import { WorkflowService } from '../../workflow/workflow.service';
 import { DOSSIER_STATES } from './dossier.states';

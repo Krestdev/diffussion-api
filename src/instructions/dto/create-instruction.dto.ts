@@ -11,7 +11,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { InstructionPriority } from 'generated/prisma/enums';
+import { InstructionPriority } from '../../generated/prisma/enums';
 
 export class CreateInstructionLivrableDto {
   @ApiProperty({ example: 'Rapport de conformité' })

@@ -1,4 +1,4 @@
-import { Prisma } from '../../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { PERMISSION_LABELS } from './permission-labels';
 import {
   ADMIN_ROLE_CODE,

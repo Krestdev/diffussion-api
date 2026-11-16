@@ -5,7 +5,7 @@ import { Permission } from '../auth/permissions';
 import { PERMISSIONS_KEY, PLATFORM_ADMIN_KEY } from '../auth/access/decorators';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
-import { NotificationStatus } from '../../generated/prisma/client';
+import { NotificationStatus } from '../generated/prisma/client';
 
 describe('NotificationsController', () => {
   let controller: NotificationsController;

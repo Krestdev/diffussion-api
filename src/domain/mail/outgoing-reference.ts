@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { CourrierDirection, Prisma } from '../../../generated/prisma/client';
+import { CourrierDirection, Prisma } from '../../generated/prisma/client';
 import {
   formatReference,
   ReferenceCode,

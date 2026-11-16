@@ -9,7 +9,7 @@ import {
   Prisma,
   CompanyStatus,
   UserStatus,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { generateReference } from '../common/utils/generate-reference';
 import { AppConfigService } from '../config/app-config.service';
 import { DatabaseService } from '../database/database.service';

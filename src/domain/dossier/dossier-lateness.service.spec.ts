@@ -1,4 +1,4 @@
-import { DossierStatus } from '../../../generated/prisma/client';
+import { DossierStatus } from '../../generated/prisma/client';
 import { WorkflowService } from '../../workflow/workflow.service';
 import { DossierLatenessService } from './dossier-lateness.service';
 

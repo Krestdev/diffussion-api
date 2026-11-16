@@ -23,7 +23,7 @@ import { Type } from 'class-transformer';
 import {
   AnalysisOpinion,
   AnalysisSheetStatus,
-} from '../../../generated/prisma/enums';
+} from '../../generated/prisma/enums';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 import { Trim } from '../../common/transforms/trim.transform';
 

@@ -1,4 +1,4 @@
-import { CorrespondentStatus } from '../../../generated/prisma/client';
+import { CorrespondentStatus } from '../../generated/prisma/client';
 import { Permission } from '../../auth/permissions';
 import { TransitionTable } from '../../workflow/transition-table';
 

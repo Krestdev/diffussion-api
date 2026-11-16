@@ -1,4 +1,4 @@
-import { LivrableStatus } from '../../../generated/prisma/client';
+import { LivrableStatus } from '../../generated/prisma/client';
 import { TransitionTable } from '../../workflow/transition-table';
 
 const S = LivrableStatus;

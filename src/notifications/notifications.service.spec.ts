@@ -4,7 +4,7 @@ import { NotificationsService } from './notifications.service';
 import { DatabaseService } from '../database/database.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ModuleNotificationsService } from '../administration/settings/module-notifications.service';
-import { NotificationStatus } from '../../generated/prisma/client';
+import { NotificationStatus } from '../generated/prisma/client';
 
 describe('NotificationsService', () => {
   let service: NotificationsService;

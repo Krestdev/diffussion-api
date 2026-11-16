@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { Prisma, UserStatus } from '../../../generated/prisma/client';
+import { Prisma, UserStatus } from '../../generated/prisma/client';
 
 type Db = Prisma.TransactionClient;
 

@@ -7,7 +7,7 @@ import {
 import {
   NotificationCanal,
   UserInstructionRole,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { agentOverdueWhere, taskOverdueWhere } from './instruction-overdue';

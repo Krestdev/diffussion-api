@@ -4,7 +4,7 @@ import {
   OnApplicationBootstrap,
   OnModuleDestroy,
 } from '@nestjs/common';
-import { Prisma } from '../../generated/prisma/client';
+import { Prisma } from '../generated/prisma/client';
 import { SettingsService } from '../administration/settings/settings.service';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';

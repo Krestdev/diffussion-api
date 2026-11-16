@@ -8,7 +8,7 @@ import {
   Prisma,
   SubscriptionDecision,
   UserInstructionRole,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { Permission } from '../auth/permissions';
 import { AuthUser, CoreRequestContext } from '../auth/types/auth-user.type';
 import { awaitingValidationBy } from '../common/utils/courrier-validation';

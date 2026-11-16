@@ -7,7 +7,7 @@ import {
   InstructionStatus,
   Prisma,
   ProjectStatus,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 import { ANALYSIS_SHEET_STATES } from '../../analysis/analysis-sheet.states';
 import { statusForDueDate } from '../../domain/dossier/dossier.service';
 import { DOSSIER_STATES } from '../../domain/dossier/dossier.states';

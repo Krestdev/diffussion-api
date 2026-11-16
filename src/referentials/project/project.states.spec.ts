@@ -1,4 +1,4 @@
-import { ProjectStatus as S } from '../../../generated/prisma/client';
+import { ProjectStatus as S } from '../../generated/prisma/client';
 import { PROJECT_STATES, projectEventFor } from './project.states';
 
 describe('PROJECT_STATES (was NEXT_STATUSES)', () => {

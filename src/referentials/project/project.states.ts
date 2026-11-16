@@ -1,4 +1,4 @@
-import { ProjectStatus } from '../../../generated/prisma/client';
+import { ProjectStatus } from '../../generated/prisma/client';
 import { Permission } from '../../auth/permissions';
 import { TransitionTable } from '../../workflow/transition-table';
 

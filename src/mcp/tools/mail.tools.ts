@@ -4,7 +4,7 @@ import {
   type Type,
 } from '@nestjs/common';
 import { z } from 'zod';
-import { CourrierDirection } from '../../../generated/prisma/enums';
+import { CourrierDirection } from '../../generated/prisma/enums';
 import { Permission } from '../../auth/permissions';
 import { FindCompanyListQueryDto } from '../../common/dto/company-list-item.dto';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';

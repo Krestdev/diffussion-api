@@ -1,7 +1,7 @@
 import {
   CourrierDirection,
   CourrierStatus,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 import {
   COURRIER_DONE,
   COURRIER_ENTRANT_STATES,

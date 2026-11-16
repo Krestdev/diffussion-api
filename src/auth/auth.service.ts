@@ -7,7 +7,7 @@ import {
   DossierStatus,
   ProjectStatus,
   CompanyStatus,
-} from 'generated/prisma/enums';
+} from '../generated/prisma/enums';
 
 @Injectable()
 export class AuthService {

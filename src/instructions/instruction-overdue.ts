@@ -1,4 +1,4 @@
-import { InstructionStatus, Prisma } from '../../generated/prisma/client';
+import { InstructionStatus, Prisma } from '../generated/prisma/client';
 
 // The executants still owe their livrables: not subscribed yet, at work, or
 // correcting.

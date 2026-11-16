@@ -3,7 +3,7 @@ import {
   CourrierDirection,
   CourrierStatus,
   NotificationStatus,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { Permission } from '../auth/permissions';
 import { AuthUser, CoreRequestContext } from '../auth/types/auth-user.type';
 import { DatabaseService } from '../database/database.service';

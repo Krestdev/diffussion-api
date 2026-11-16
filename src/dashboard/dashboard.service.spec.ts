@@ -1,6 +1,6 @@
 import { ForbiddenException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { CourrierStatus } from '../../generated/prisma/client';
+import { CourrierStatus } from '../generated/prisma/client';
 import { AccessService } from '../auth/access/access.service';
 import { DatabaseService } from '../database/database.service';
 import { DashboardService } from './dashboard.service';

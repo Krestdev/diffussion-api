@@ -1,4 +1,4 @@
-import { AnalysisSheetStatus as S } from '../../generated/prisma/client';
+import { AnalysisSheetStatus as S } from '../generated/prisma/client';
 import { Permission } from '../auth/permissions';
 import {
   AnalysisSheetEvent,

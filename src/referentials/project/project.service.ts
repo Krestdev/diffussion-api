@@ -13,7 +13,7 @@ import {
   ProjectContentType,
   ProjectStatus,
   UserStatus,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 import {
   DEFAULT_TAKE,
   PaginationQueryDto,

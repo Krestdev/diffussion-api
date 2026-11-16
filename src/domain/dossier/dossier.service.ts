@@ -13,7 +13,7 @@ import {
   InstructionStatus,
   Prisma,
   UserStatus,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 import { ActivityService } from '../../activity/activity.service';
 import { AuditLog } from '../../activity/decorators/audit-log.decorator';
 import { Permission } from '../../auth/permissions';

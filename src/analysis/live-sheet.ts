@@ -2,7 +2,7 @@ import {
   AnalysisSheetStatus,
   LivrableStatus,
   Prisma,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 
 /**
  * A fiche still in progress on its effet — at most one per effet. The others

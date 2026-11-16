@@ -7,7 +7,7 @@ import {
   InstructionStatus,
   Prisma,
   SubscriptionDecision,
-} from '../../generated/prisma/client';
+} from '../generated/prisma/client';
 import { Permission } from '../auth/permissions';
 import { AccessService } from '../auth/access/access.service';
 import { assertCompanyExists } from '../common/utils/company-referentials';

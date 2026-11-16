@@ -15,7 +15,7 @@ import {
   Prisma,
   UserStatus,
   ValidationDecision,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 import { SetAccessDto } from '../../common/dto/access.dto';
 import { SetOwnerDto } from '../../common/dto/set-owner.dto';
 import { createWithUniqueReference } from '../../common/utils/generate-reference';

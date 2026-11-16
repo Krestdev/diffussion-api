@@ -11,7 +11,7 @@ import { DatabaseService } from '../../database/database.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { AccessService } from '../../auth/access/access.service';
 import { ActivityService } from '../../activity/activity.service';
-import { DossierStatus } from '../../../generated/prisma/client';
+import { DossierStatus } from '../../generated/prisma/client';
 import { WorkflowService } from '../../workflow/workflow.service';
 
 // Runs as a signed-in person holding `permissions` (the engine checks them).

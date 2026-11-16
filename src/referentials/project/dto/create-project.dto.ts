@@ -7,7 +7,7 @@ import {
   IsUUID,
   MaxLength,
 } from 'class-validator';
-import { ProjectContentType } from '../../../../generated/prisma/client';
+import { ProjectContentType } from '../../../generated/prisma/client';
 
 export class CreateProjectDto {
   @ApiProperty({ example: 'Construction du Viaduc sur la Sanaga' })

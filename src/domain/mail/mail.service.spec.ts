@@ -13,7 +13,7 @@ import {
   CourrierDirection,
   CourrierStatus,
   ValidationDecision,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 import { StorageService } from '../../storage/storage.service';
 import { ActivityService } from '../../activity/activity.service';
 import { SettingsService } from '../../administration/settings/settings.service';

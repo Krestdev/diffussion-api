@@ -1,4 +1,4 @@
-import { AnalysisOpinion } from '../../generated/prisma/enums';
+import { AnalysisOpinion } from '../generated/prisma/enums';
 import { suggestItemOpinion, suggestSheetOpinion } from './analysis-opinion';
 
 const { AF, AFR, AS, AD, NA } = AnalysisOpinion;

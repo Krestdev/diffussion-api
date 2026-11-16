@@ -17,7 +17,7 @@ import { PermissionsGuard } from '../auth/access/permissions.guard';
 import { Permission } from '../auth/permissions';
 import { PlatformAdmin, RequirePermissions } from '../auth/access/decorators';
 import { AuthUser } from '../auth/types/auth-user.type';
-import { NotificationStatus } from '../../generated/prisma/client';
+import { NotificationStatus } from '../generated/prisma/client';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { SetNotificationPreferencesDto } from './dto/set-notification-preferences.dto';
 import { NotificationsService } from './notifications.service';

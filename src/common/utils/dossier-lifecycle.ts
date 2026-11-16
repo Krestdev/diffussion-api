@@ -7,7 +7,7 @@ import {
   DossierStatus,
   InstructionStatus,
   Prisma,
-} from '../../../generated/prisma/client';
+} from '../../generated/prisma/client';
 import { DOSSIER_STATES } from '../../domain/dossier/dossier.states';
 import { WorkflowService } from '../../workflow/workflow.service';
 import { assertCompanyActive } from './referential-guards';

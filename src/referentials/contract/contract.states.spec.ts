@@ -1,4 +1,4 @@
-import { ContractStatus as S } from '../../../generated/prisma/client';
+import { ContractStatus as S } from '../../generated/prisma/client';
 import { CONTRACT_STATES, ContractEvent } from './contract.states';
 
 describe('CONTRACT_STATES', () => {

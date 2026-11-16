@@ -12,7 +12,7 @@ import {
   InstructionPriority,
   InstructionStatus,
   UserInstructionRole,
-} from 'generated/prisma/enums';
+} from '../../generated/prisma/enums';
 import { PaginationQueryDto } from '../../common/dto/pagination.query.dto';
 
 /**
