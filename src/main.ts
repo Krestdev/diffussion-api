@@ -17,9 +17,9 @@ async function bootstrap() {
   // /api/v1/app-admin/...). The root stays where the health check reads it.
   app.setGlobalPrefix(API_PREFIX, API_PREFIX_OPTIONS);
 
-  // The Next.js frontend runs on a different origin (localhost:4000) and
-  // sends the CREAPP core's access cookie (creapp_access) with each call:
-  // credentials are allowed, for the listed origins only.
+  // The UI calls this API through its own origin (Next rewrite of /api/v1, as
+  // EXPENZO), so browsers never reach it directly; CORS stays for the listed
+  // origins only, with the core's access cookie (creapp_access).
   app.enableCors({
     origin: corsOrigins(),
     credentials: true,
@@ -50,6 +50,7 @@ async function bootstrap() {
   const swaggerDocument = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('api', app, swaggerDocument);
 
-  await app.listen(process.env.PORT ?? 8000);
+  // 4000 when PORT is unset, as EXPENZO's API (the Dockerfile exposes the same port).
+  await app.listen(process.env.PORT ?? 4000);
 }
 void bootstrap();

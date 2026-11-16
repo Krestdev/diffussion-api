@@ -30,7 +30,9 @@ FROM node:22-alpine AS production
 
 WORKDIR /app
 
-ENV NODE_ENV=production
+# Time zone data and OpenSSL (Prisma's schema engine, migrate deploy at start), as EXPENZO.
+RUN apk add --no-cache tzdata openssl
+ENV NODE_ENV=production TZ=Africa/Douala
 
 # Only production dependencies.
 COPY package.json package-lock.json ./
@@ -45,7 +47,15 @@ COPY --from=build /app/dist ./dist
 # so copy it explicitly.
 COPY --from=build /app/generated ./generated
 
-EXPOSE 3000
+# Runs unprivileged, as EXPENZO (the files above stay root-owned and read-only for it).
+USER node
 
-# Run pending migrations then start the server.
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main"]
+# The server listens on PORT (4000 when unset, see src/main.ts).
+EXPOSE 4000
+# The root route answers outside the /api/v1 prefix (manifest healthUrl).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT:-4000}/" > /dev/null || exit 1
+
+# Run pending migrations then start the server. The entry is dist/src/main: prisma.config.ts and
+# generated/ (the Prisma client) sit beside src/, so the compiled tree keeps the src/ folder.
+CMD ["sh", "-c", "node_modules/.bin/prisma migrate deploy && exec node dist/src/main"]
