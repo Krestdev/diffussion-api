@@ -15,6 +15,6 @@ export class FindProjectsQueryDto extends PaginationQueryDto {
       "Only this company's projects (one only ever sees their own company's)",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 }

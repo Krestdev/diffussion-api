@@ -389,7 +389,7 @@ export class CreateCriterionTemplateDto {
       "The company whose fiches it serves. Left out: a common criterion (platform administrator), or the caller's company when they manage only one",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional()
@@ -428,7 +428,7 @@ export class FindCriteriaQueryDto {
       "The common criteria plus this company's — what a fiche of that company offers. Left out: the common ones plus the caller's company's (every company's for a platform administrator)",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 }
 
@@ -438,7 +438,7 @@ export class AnalysisSettingsQueryDto {
       "This company's settings (its own, else the common ones). Left out: the common ones",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 }
 
@@ -448,7 +448,7 @@ export class UpdateAnalysisSettingsDto {
       'Set the settings of this company only. Left out: the common ones (platform administrator)',
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiProperty({

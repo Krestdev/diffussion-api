@@ -8,7 +8,7 @@ export class FindCanalsQueryDto {
       "Only the canaux of this company (one only ever sees their own company's: another gives nothing)",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional({ description: 'true: the active ones only' })

@@ -13,7 +13,7 @@ export class AssignInstructionDto {
   @IsOptional()
   @IsArray()
   @ArrayUnique()
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   executantIds?: string[];
 
   @ApiPropertyOptional()
@@ -25,7 +25,7 @@ export class AssignInstructionDto {
     description: 'A new validateur; left out, the current one stays',
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   validateurId?: string;
 
   @ApiPropertyOptional({

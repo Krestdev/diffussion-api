@@ -9,7 +9,7 @@ export class FindRolesQueryDto extends PaginationQueryDto {
       'Kept for older clients: a role belongs to one company and everyone only sees the roles of their own company (another company gives an empty list).',
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional({

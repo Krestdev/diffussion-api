@@ -18,7 +18,7 @@ export class FindMailsQueryDto {
       "Only this company's effets — within those the caller may already see",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional()

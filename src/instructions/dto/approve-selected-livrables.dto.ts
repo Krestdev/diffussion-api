@@ -7,6 +7,6 @@ export class ApproveSelectedLivrablesDto {
     description: 'Liste des identifiants des livrables à valider',
   })
   @IsArray()
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   livrableIds: string[];
 }

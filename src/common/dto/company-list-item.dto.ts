@@ -46,7 +46,7 @@ export class CreateCompanyListItemDto {
       "The company it belongs to. Left out: the caller's company when they manage only one",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 }
 
@@ -63,7 +63,7 @@ export class FindCompanyListQueryDto extends PaginationQueryDto {
       "Only this company's (a platform administrator; anyone else only ever sees their own company's)",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional({ description: 'true: the active ones only' })

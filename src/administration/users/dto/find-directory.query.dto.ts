@@ -23,7 +23,7 @@ export class FindDirectoryQueryDto {
       "Only this company's people: everyone only ever gets their own company's.",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional({ description: 'Name, email or function, partial' })
@@ -56,7 +56,7 @@ export class FindDirectoryQueryDto {
   )
   @IsArray()
   @ArrayMaxSize(100)
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   ids?: string[];
 
   @ApiPropertyOptional({ default: 200, maximum: 500 })

@@ -22,7 +22,7 @@ export class UpdateUserDto {
   @IsOptional()
   @IsArray()
   @ArrayUnique()
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   roleIds?: string[];
 
   @ApiPropertyOptional({

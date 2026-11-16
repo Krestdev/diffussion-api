@@ -19,7 +19,7 @@ export class CreateNotificationDto {
   @IsArray()
   @ArrayMinSize(1)
   @ArrayUnique()
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   recipientIds: string[];
 
   @ApiProperty({ example: 'INSTRUCTION_OVERDUE' })

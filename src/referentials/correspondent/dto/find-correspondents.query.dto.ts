@@ -25,7 +25,7 @@ export class FindCorrespondantsQueryDto extends PaginationQueryDto {
       "Only the correspondents of this company (one only ever sees their own company's: another gives nothing)",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional({ enum: CorrespondentStatus })

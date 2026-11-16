@@ -91,7 +91,7 @@ export class CreateInstructionsDto {
   @IsOptional()
   @IsArray()
   @ArrayUnique()
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   executantIds?: string[];
 
   @ApiPropertyOptional({
@@ -107,7 +107,7 @@ export class CreateInstructionsDto {
       'Who decides on the livrables first, before the superviseur. Not one of the executants. Without one, the superviseur decides from the start.',
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   validateurId?: string;
 
   @ApiPropertyOptional({

@@ -18,7 +18,7 @@ export class CreateCorrespondentDto {
   @ApiProperty({
     description: "The company it belongs to: only that company's effets use it",
   })
-  @IsUUID('4')
+  @IsUUID('all')
   companyId: string;
 
   @ApiPropertyOptional({ description: 'CorrespondentType id' })

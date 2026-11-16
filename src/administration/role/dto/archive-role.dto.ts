@@ -7,6 +7,6 @@ export class ArchiveRoleDto {
       'Its holders receive this role instead (a role of the same company). Without it, they simply lose the archived role.',
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   reassignToRoleId?: string;
 }

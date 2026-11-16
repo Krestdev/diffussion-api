@@ -8,7 +8,7 @@ export class FindEffetTypesQueryDto {
       'Only the types of this company. Everyone only ever sees the global types plus those of their own company.',
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional({

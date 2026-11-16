@@ -32,6 +32,6 @@ export class CreateCanalDto {
     description:
       "The company it belongs to: only that company's effets use it (a name is unique within a company)",
   })
-  @IsUUID('4')
+  @IsUUID('all')
   companyId: string;
 }

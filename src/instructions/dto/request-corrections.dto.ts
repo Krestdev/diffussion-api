@@ -23,7 +23,7 @@ export class RejectLivrableDto {
 
 export class LivrableCorrectionDto extends RejectLivrableDto {
   @ApiProperty({ description: 'Submitted livrable of this instruction' })
-  @IsUUID('4')
+  @IsUUID('all')
   livrableId: string;
 }
 

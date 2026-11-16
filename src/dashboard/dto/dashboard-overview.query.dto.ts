@@ -49,7 +49,7 @@ export type ExportSection = (typeof EXPORT_SECTIONS)[number];
 
 export class DashboardOverviewQueryDto {
   @ApiProperty({ description: 'The company shown — never any other' })
-  @IsUUID('4')
+  @IsUUID('all')
   companyId!: string;
 
   @ApiPropertyOptional({ enum: OVERVIEW_PERIODS, default: '30d' })
@@ -85,12 +85,12 @@ export class DashboardOverviewQueryDto {
   @Transform(commaList)
   @IsArray()
   @ArrayMaxSize(100)
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   projectIds?: string[];
 
   @ApiPropertyOptional({ description: 'A contract id or a dossier id' })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   contractOrDossierId?: string;
 
   @ApiPropertyOptional({
@@ -98,12 +98,12 @@ export class DashboardOverviewQueryDto {
       'A team: the id of one of the company roles listed in `teams`. Effets whose person in charge or supervisor holds it',
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   team?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   supervisorId?: string;
 
   @ApiPropertyOptional({ description: 'Comma-separated effet type ids' })
@@ -111,7 +111,7 @@ export class DashboardOverviewQueryDto {
   @Transform(commaList)
   @IsArray()
   @ArrayMaxSize(100)
-  @IsUUID('4', { each: true })
+  @IsUUID('all', { each: true })
   typeIds?: string[];
 
   @ApiPropertyOptional({ enum: CourrierDirection })

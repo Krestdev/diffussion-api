@@ -27,7 +27,7 @@ export class CreateProjectDto {
       "The company it belongs to: the person's own (may be left out)",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional({ example: 'PRJ-2026-07', description: 'Réf Projet' })

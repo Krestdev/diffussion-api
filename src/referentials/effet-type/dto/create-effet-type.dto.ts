@@ -65,6 +65,6 @@ export class CreateEffetTypeDto {
       "The company this type belongs to: the person's own when omitted (another is refused); omitted by a Diffusion super-administrator: a global type, usable on every company.",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 }

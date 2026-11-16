@@ -26,7 +26,7 @@ export class SettingsQueryDto {
       "This company's settings (its own, else the common ones). Left out: the caller's own company's — the common ones for a platform user",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 }
 
@@ -36,7 +36,7 @@ export class UpdateSettingsDto {
       "Set this company's settings. Left out: the caller's company when they manage only one; the common settings for a platform administrator",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional({

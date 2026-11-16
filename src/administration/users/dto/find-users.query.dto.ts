@@ -14,6 +14,6 @@ export class FindUsersQueryDto extends PaginationQueryDto {
       'Only the users of this company. A company administrator only ever sees their own company.',
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 }

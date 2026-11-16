@@ -62,7 +62,7 @@ export class FindActivityLogsQueryDto {
       "Only this company's entries — within the companies the caller may audit (every company for a platform administrator)",
   })
   @IsOptional()
-  @IsUUID('4')
+  @IsUUID('all')
   companyId?: string;
 
   @ApiPropertyOptional({
