@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { forwardRef, Inject, Logger } from '@nestjs/common';
 import {
   OnGatewayConnection,
   WebSocketGateway,
@@ -51,7 +51,13 @@ export class RealtimeGateway implements OnGatewayConnection {
   @WebSocketServer()
   private readonly server?: Server;
 
-  constructor(private readonly access: CoreAccessService) {}
+  // forwardRef: core-access → directory sync → project sync → cascade → dossiers → notifications
+  // → this gateway is a file cycle, so CoreAccessService is still undefined when this class is
+  // declared; resolve it lazily.
+  constructor(
+    @Inject(forwardRef(() => CoreAccessService))
+    private readonly access: CoreAccessService,
+  ) {}
 
   async handleConnection(client: Socket) {
     try {
