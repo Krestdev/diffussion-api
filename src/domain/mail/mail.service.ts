@@ -2711,7 +2711,8 @@ export class MailService {
   async getAccess(id: string) {
     await this.findOne(id);
     return this.database.courrierAccess.findMany({
-      where: { courrierId: id },
+      // Not the people deleted in the core (C9).
+      where: { courrierId: id, user: { deletedAt: null } },
       include: courrierAccessInclude,
       orderBy: { createdAt: 'asc' },
     });

@@ -466,7 +466,8 @@ export class ContractService {
 
   private accessList(contractId: string) {
     return this.database.user.findMany({
-      where: { contractAccesses: { some: { contractId } } },
+      // Not the people deleted in the core (C9).
+      where: { contractAccesses: { some: { contractId } }, deletedAt: null },
       select: { id: true, name: true, email: true },
       orderBy: { name: 'asc' },
     });

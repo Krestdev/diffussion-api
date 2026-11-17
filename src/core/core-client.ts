@@ -26,6 +26,11 @@ export interface CoreDirectory {
       tenantAdmin: boolean;
       /** Last sign-in to the platform, rounded down to the hour (ISO); null: never. */
       lastSignInAt?: string | null;
+      /**
+       * Deleted in the core with their history kept (C9): sent with status DEACTIVATED (ISO);
+       * null or absent (older cores): not deleted.
+       */
+      deletedAt?: string | null;
     }[];
     /**
      * The company's projects, once the core owns them (Tenant.projectsSince): Diffusion keeps

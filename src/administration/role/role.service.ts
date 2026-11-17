@@ -56,7 +56,8 @@ const ROLE_INCLUDE = {
   rolePermissions: { select: { permission: { select: { code: true } } } },
   company: { select: { id: true, name: true } },
   archivedBy: { select: { id: true, name: true } },
-  _count: { select: { userRoles: true } },
+  // People deleted in the core (C9) are no longer counted among the holders.
+  _count: { select: { userRoles: { where: { user: { deletedAt: null } } } } },
 } satisfies Prisma.RoleInclude;
 
 type RoleRow = Prisma.RoleGetPayload<{ include: typeof ROLE_INCLUDE }>;
@@ -273,6 +274,7 @@ export class RoleService {
       include: {
         ...ROLE_INCLUDE,
         userRoles: {
+          where: { user: { deletedAt: null } },
           select: {
             user: { select: { id: true, name: true, email: true } },
           },

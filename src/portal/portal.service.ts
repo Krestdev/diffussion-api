@@ -147,28 +147,7 @@ export class PortalService {
     user: AuthUser,
     core?: CoreRequestContext,
   ): Promise<PortalSummary> {
-    const now = Date.now();
-    const kinds = this.kinds(user.sub).filter(
-      (kind) => !kind.permission || user.permissions.has(kind.permission),
-    );
-    const read = await Promise.all(
-      kinds.map(async ({ key, link, load }): Promise<PortalItem | null> => {
-        const found = await this.soft(key, load());
-        if (!found || found.total === 0) return null;
-        const since = found.since.map((at) => at.getTime());
-        return {
-          key,
-          count: found.total,
-          amount: null,
-          late: since.filter((at) => now - at > LATE_MS).length,
-          oldestDays: since.length
-            ? Math.max(0, Math.floor((now - Math.min(...since)) / DAY))
-            : 0,
-          link,
-        };
-      }),
-    );
-    const items = read.filter((item): item is PortalItem => item !== null);
+    const items = await this.pendingItems(user);
     const [delegations, notifications] = await Promise.all([
       this.soft('delegations', this.delegations(user.sub)),
       this.soft(
@@ -184,6 +163,39 @@ export class PortalService {
       delegations: delegations ?? [],
       notifications: notifications ?? [],
     };
+  }
+
+  /**
+   * What waits for the person, kind by kind, with their rights. For the portal (soft: a failing
+   * or slow kind is left out) and for the responsibilities the core checks before deleting
+   * someone (C9, strict: a kind that fails fails the answer rather than hide work).
+   */
+  async pendingItems(
+    user: Pick<AuthUser, 'sub' | 'permissions'>,
+    strict = false,
+  ): Promise<PortalItem[]> {
+    const now = Date.now();
+    const kinds = this.kinds(user.sub).filter(
+      (kind) => !kind.permission || user.permissions.has(kind.permission),
+    );
+    const read = await Promise.all(
+      kinds.map(async ({ key, link, load }): Promise<PortalItem | null> => {
+        const found = strict ? await load() : await this.soft(key, load());
+        if (!found || found.total === 0) return null;
+        const since = found.since.map((at) => at.getTime());
+        return {
+          key,
+          count: found.total,
+          amount: null,
+          late: since.filter((at) => now - at > LATE_MS).length,
+          oldestDays: since.length
+            ? Math.max(0, Math.floor((now - Math.min(...since)) / DAY))
+            : 0,
+          link,
+        };
+      }),
+    );
+    return read.filter((item): item is PortalItem => item !== null);
   }
 
   /** The kinds of work, in the order of « À traiter » (incoming, instructions, outgoing). */

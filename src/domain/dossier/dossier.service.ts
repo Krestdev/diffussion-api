@@ -569,7 +569,8 @@ export class DossierService {
   async getAccess(id: string, userId?: string) {
     await this.findOne(id, userId);
     return this.database.dossierAccess.findMany({
-      where: { dossierId: id },
+      // Not the people deleted in the core (C9).
+      where: { dossierId: id, user: { deletedAt: null } },
       include: dossierAccessInclude,
       orderBy: { createdAt: 'asc' },
     });

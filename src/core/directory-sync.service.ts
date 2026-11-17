@@ -37,6 +37,8 @@ export interface CorePerson {
   status: 'INVITED' | 'ACTIVE' | 'DEACTIVATED';
   tenantAdmin: boolean;
   lastSignInAt?: string | null;
+  /** Deleted in the core, history kept (C9); null or absent: not deleted. */
+  deletedAt?: string | null;
 }
 
 /** A company of the core (Diffusion keeps it under the same id). */
@@ -365,7 +367,9 @@ export async function upsertPerson(
     });
   }
 
-  const active = person.status === 'ACTIVE';
+  const deletedAt = deletedAtOf(person.deletedAt);
+  // A deleted person is never active here (access removed as for a deactivated one).
+  const active = person.status === 'ACTIVE' && !deletedAt;
   const name = `${person.firstName} ${person.lastName}`.trim() || email;
   const lastLogin = latestOf(existing?.lastLogin ?? null, person.lastSignInAt);
   const data = {
@@ -385,6 +389,8 @@ export async function upsertPerson(
             : AccessProfile.USER,
         }),
     ...(lastLogin === undefined ? {} : { lastLogin }),
+    // Out of every list and picker while set; a restore at the core clears it.
+    deletedAt,
     coreSyncedAt: now,
   };
   if (existing) {
@@ -435,6 +441,16 @@ export async function setUpAdmins(
   }
   await createDefaultRoles(tx, companyId);
   return giveAdminRole(tx, companyId, adminIds);
+}
+
+/**
+ * When the core deleted the person (C9), history kept. null: not deleted, restored, or an older
+ * core that doesn't send it; an unreadable date counts as not deleted.
+ */
+export function deletedAtOf(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? null : at;
 }
 
 /**

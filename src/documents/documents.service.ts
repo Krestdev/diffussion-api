@@ -320,7 +320,8 @@ export class DocumentsService {
   async getAccess(id: string, actingUserId: string) {
     await this.findOne(id, actingUserId);
     return this.database.documentAccess.findMany({
-      where: { documentId: id },
+      // Not the people deleted in the core (C9).
+      where: { documentId: id, user: { deletedAt: null } },
       include: documentAccessInclude,
       orderBy: { createdAt: 'asc' },
     });

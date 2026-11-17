@@ -235,7 +235,8 @@ export class ProjectService {
 
   private accessList(projectId: string) {
     return this.database.user.findMany({
-      where: { projectAccesses: { some: { projectId } } },
+      // Not the people deleted in the core (C9).
+      where: { projectAccesses: { some: { projectId } }, deletedAt: null },
       select: { id: true, name: true, email: true },
       orderBy: { name: 'asc' },
     });

@@ -86,6 +86,10 @@ model User {
   lastLogin       DateTime?
   /// Last time the core's directory listed the person.
   coreSyncedAt    DateTime?
+  /// Deleted in the core with their history kept (contract C9): SUSPENDED, the copy stays (names
+  /// on decisions, comments, journal, documents, notifications) and is left out of every list and
+  /// picker. Back to null when the core restores the person.
+  deletedAt       DateTime?
 
   /// The one company the user belongs to (RG-ORG-001, revised: one company per
   /// user). Null for platform users (super-admins), whose roles are global.

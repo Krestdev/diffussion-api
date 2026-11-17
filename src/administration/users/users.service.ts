@@ -83,6 +83,8 @@ export class UsersService {
     const skip = query.skip ?? 0;
     const take = query.take ?? DEFAULT_TAKE;
     const where: Prisma.UserWhereInput = {
+      // People deleted in the core (C9) stay for history only: never listed nor offered.
+      deletedAt: null,
       AND: [
         { companyId },
         query.companyId ? { companyId: query.companyId } : {},
@@ -275,6 +277,8 @@ export class UsersService {
       : undefined;
     const where: Prisma.UserWhereInput = {
       status: UserStatus.ACTIVE,
+      // People deleted in the core (C9) stay for history only: never listed nor offered.
+      deletedAt: null,
       companyId,
       AND: [
         holds
