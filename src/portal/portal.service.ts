@@ -168,15 +168,19 @@ export class PortalService {
   /**
    * What waits for the person, kind by kind, with their rights. For the portal (soft: a failing
    * or slow kind is left out) and for the responsibilities the core checks before deleting
-   * someone (C9, strict: a kind that fails fails the answer rather than hide work).
+   * someone (C9, strict: a kind that fails fails the answer rather than hide work). `only`:
+   * just these kinds (C9 reads only the work naming the person).
    */
   async pendingItems(
     user: Pick<AuthUser, 'sub' | 'permissions'>,
     strict = false,
+    only?: readonly PortalItemKey[],
   ): Promise<PortalItem[]> {
     const now = Date.now();
     const kinds = this.kinds(user.sub).filter(
-      (kind) => !kind.permission || user.permissions.has(kind.permission),
+      (kind) =>
+        (!only || only.includes(kind.key)) &&
+        (!kind.permission || user.permissions.has(kind.permission)),
     );
     const read = await Promise.all(
       kinds.map(async ({ key, link, load }): Promise<PortalItem | null> => {

@@ -1,6 +1,7 @@
 import { UserStatus } from '../generated/prisma/client';
 import { deletedAtOf, upsertPerson } from '../core/directory-sync.service';
 import {
+  NAMED_KINDS,
   type ResponsibilityFacts,
   responsibilityItems,
 } from './user-responsibilities';
@@ -82,22 +83,40 @@ describe('responsibilityItems (C9)', () => {
     ]);
   });
 
-  it('PENDING_ITEMS: the total of À traiter and its kinds', () => {
+  it('PENDING_ITEMS: the total of what waits for them by name, and its kinds', () => {
     const [item] = responsibilityItems({
       ...none(),
       pending: [
-        { key: 'incomingToDispatch', count: 2 },
-        { key: 'dispatchToValidate', count: 1 },
+        { key: 'incomingToHandle', count: 2 },
+        { key: 'outgoingToValidate', count: 1 },
         { key: 'tasksToDeliver', count: 0 },
       ],
     });
     expect(item).toEqual({
       kind: 'PENDING_ITEMS',
       label:
-        '3 éléments en attente dans À traiter (2 effets entrants à dispatcher, 1 dispatching à valider)',
+        '3 éléments à son nom en attente dans À traiter (2 effets entrants à traiter, 1 effet sortant à valider)',
       count: 3,
       href: '/dashboard/tasks',
     });
+  });
+
+  it('NAMED_KINDS: shared queues (dispatch, dispatch validation) never block (owner 2026-11-18)', () => {
+    expect(NAMED_KINDS).not.toContain('incomingToDispatch');
+    expect(NAMED_KINDS).not.toContain('dispatchToValidate');
+    expect([...NAMED_KINDS].sort()).toEqual(
+      [
+        'incomingToHandle',
+        'livrablesToReview',
+        'outgoingToCorrect',
+        'outgoingToDischarge',
+        'outgoingToSend',
+        'outgoingToValidate',
+        'tasksToDeliver',
+        'tasksToReassign',
+        'tasksToSubscribe',
+      ].sort(),
+    );
   });
 
   it('DELEGATION: active as substitute, upcoming as holder', () => {
@@ -201,18 +220,21 @@ describe('UserResponsibilitiesService (C9)', () => {
     await expect(service.of('c-1', 'u')).resolves.toEqual({ items: [] });
   });
 
-  it('nothing held: empty; their À traiter read strictly with their rights', async () => {
+  it('nothing held: empty; their named work read strictly with their rights', async () => {
     database.user.findUnique.mockResolvedValue({ id: 'u', companyId: 'c-1' });
     access.computePermissions.mockResolvedValue(['incoming.dispatch']);
     await expect(service.of('c-1', 'u')).resolves.toEqual({ items: [] });
     expect(access.computePermissions).toHaveBeenCalledWith('u', 'c-1');
-    const [person, strict] = portal.pendingItems.mock.calls[0] as [
+    const [person, strict, only] = portal.pendingItems.mock.calls[0] as [
       { sub: string; permissions: Set<string> },
       boolean,
+      readonly string[],
     ];
     expect(person.sub).toBe('u');
     expect([...person.permissions]).toEqual(['incoming.dispatch']);
     expect(strict).toBe(true);
+    // A dispatcher's queue is shared: not read for the deletion check.
+    expect(only).toBe(NAMED_KINDS);
   });
 
   it('gathers what they hold', async () => {

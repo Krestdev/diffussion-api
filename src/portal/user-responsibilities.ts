@@ -33,7 +33,7 @@ export interface ResponsibilityFacts {
   incoming: number;
   /** Analysis sheets naming them as validator, not decided yet. */
   analysisSheets: number;
-  /** What waits for them in À traiter (portal C6 kinds; zero counts ignored). */
+  /** What waits for them by name in À traiter (NAMED_KINDS; zero counts ignored). */
   pending: { key: PortalItemKey; count: number }[];
   /** Role delegations running now or planned. */
   delegations: {
@@ -46,6 +46,25 @@ export interface ResponsibilityFacts {
   }[];
   now: Date;
 }
+
+/**
+ * The kinds of À traiter that name the person (owner, 2026-11-18: only work that names the person
+ * blocks the deletion): effets they own or supervise, instructions they are assigned to,
+ * livrables waiting for their opinion or decision, outgoing effets they answer for, wrote or
+ * approved. Left out, because any holder of the right may handle them: incoming effets to
+ * dispatch (incomingToDispatch) and dispatchings to validate (dispatchToValidate).
+ */
+export const NAMED_KINDS: readonly PortalItemKey[] = [
+  'incomingToHandle',
+  'tasksToSubscribe',
+  'tasksToDeliver',
+  'tasksToReassign',
+  'livrablesToReview',
+  'outgoingToValidate',
+  'outgoingToCorrect',
+  'outgoingToSend',
+  'outgoingToDischarge',
+];
 
 /** Singular and plural of each kind of waiting work. */
 const PENDING: Record<PortalItemKey, { one: string; many: string }> = {
@@ -172,7 +191,7 @@ export function responsibilityItems(
     const total = pending.reduce((sum, p) => sum + p.count, 0);
     items.push({
       kind: 'PENDING_ITEMS',
-      label: `${plural(total, 'élément', 'éléments')} en attente dans À traiter (${pending
+      label: `${plural(total, 'élément', 'éléments')} à son nom en attente dans À traiter (${pending
         .map((p) => plural(p.count, PENDING[p.key].one, PENDING[p.key].many))
         .join(', ')})`,
       count: total,

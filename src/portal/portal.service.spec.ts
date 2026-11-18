@@ -117,6 +117,15 @@ describe('PortalService', () => {
     const without = await service.summary(userWith(), core('fr'));
     expect(without.items).toEqual([]);
     expect(mail.findIncoming).not.toHaveBeenCalled();
+
+    // C9 (owner 2026-11-18): only the kinds naming the person are read, even for a dispatcher.
+    const named = await service.pendingItems(
+      userWith(Permission.INCOMING_DISPATCH),
+      true,
+      ['incomingToHandle'],
+    );
+    expect(named).toEqual([]);
+    expect(mail.findIncoming).not.toHaveBeenCalled();
   });
 
   it('reads the outgoing kinds only with their permission; validation is a designation', async () => {

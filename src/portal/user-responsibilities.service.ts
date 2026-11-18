@@ -13,6 +13,7 @@ import { AccessService } from '../auth/access/access.service';
 import { DatabaseService } from '../database/database.service';
 import { PortalService } from './portal.service';
 import {
+  NAMED_KINDS,
   type ResponsibilityFacts,
   type ResponsibilityItem,
   responsibilityItems,
@@ -36,7 +37,8 @@ const COURRIER_DONE = [
  * Contract C9: before deleting a person, the core asks each app what they still hold there. The
  * administrator reassigns it first: responsible of dossiers, contracts, the company or Diffusion's
  * own projects (they validate outgoing effets), roles on open instructions, entrant effets they
- * supervise, analysis sheets awaiting their decision, their À traiter, role delegations.
+ * supervise, analysis sheets awaiting their decision, what waits for them by name in À traiter,
+ * role delegations. Only what names the person blocks (owner, 2026-11-18): shared queues do not.
  */
 @Injectable()
 export class UserResponsibilitiesService {
@@ -173,7 +175,11 @@ export class UserResponsibilitiesService {
     };
   }
 
-  /** What waits in their À traiter: the portal's kinds (C6), with their own rights. */
+  /**
+   * What waits for them by name in À traiter, with their own rights: the portal's kinds (C6)
+   * naming the person only (NAMED_KINDS, owner 2026-11-18). Mail any dispatcher may dispatch or
+   * any validator may validate does not block the deletion.
+   */
   private async pending(
     companyId: string,
     userId: string,
@@ -182,6 +188,7 @@ export class UserResponsibilitiesService {
     const items = await this.portal.pendingItems(
       { sub: userId, permissions: new Set<string>(permissions) },
       true,
+      NAMED_KINDS,
     );
     return items.map((item) => ({ key: item.key, count: item.count }));
   }
