@@ -431,55 +431,84 @@ export class MailService {
             'defaultTreatmentDays',
           )
         : await this.defaultDeadline(siteId, new Date(), 'outgoingReplyDays');
-    const courrier = await createWithUniqueReference('M', (number) =>
-      this.database.courrier.create({
-        data: {
-          ...data,
-          // A sortant's reference is given by its type's model, never typed.
-          ...(dto.direction === CourrierDirection.SORTANT
-            ? { reference: undefined }
-            : {}),
-          typeId,
-          number,
-          receivedAt: received,
-          dueDate: deadline,
-          ...dossierLinks,
-          status:
-            dto.direction === CourrierDirection.ENTRANT
-              ? CourrierStatus.RECU
-              : CourrierStatus.BROUILLON,
-          createdById,
-        },
-        include: mailInclude,
-      }),
-    );
-
+    // Upload files to object storage before writing anything to the DB.
+    // If an upload fails here, no courrier record exists yet — no duplicate.
+    // (Uploads that succeed before a later failure leave orphaned S3 objects,
+    // which is acceptable and unavoidable without a two-phase protocol.)
+    type PendingDocument = {
+      originalName: string;
+      name: string;
+      storageKey: string;
+      mimeType: string;
+      sizeBytes: number;
+    };
+    const pendingDocuments: PendingDocument[] = [];
     if (files && files.length > 0) {
+      // We don't have the courrier id yet, so use a stable per-request prefix.
+      // The document records are created inside the transaction below and will
+      // carry the real courrierId once the row exists.
+      const uploadPrefix = `courriers/pending-${Date.now()}`;
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         const meta = documentMetas?.[i];
         const { key } = await this.storage.upload(file.buffer, {
           originalName: file.originalname,
           contentType: file.mimetype,
-          prefix: `courriers/${courrier.id}`,
+          prefix: uploadPrefix,
         });
-        await this.database.document.create({
-          data: {
-            originalName: file.originalname,
-            name: meta?.name ?? file.originalname,
-            storageKey: key,
-            mimeType: file.mimetype,
-            sizeBytes: file.size,
-            courrierId: courrier.id,
-            uploadedById: createdById,
-          },
+        pendingDocuments.push({
+          originalName: file.originalname,
+          name: meta?.name ?? file.originalname,
+          storageKey: key,
+          mimeType: file.mimetype,
+          sizeBytes: file.size,
         });
       }
     }
 
-    if (dto.dossierId) {
-      await markDossierInProgress(this.database, dto.dossierId);
-    }
+    // Single transaction: courrier row + document rows + dossier status.
+    // A failure anywhere rolls back the entire DB write; the courrier is
+    // never left without its documents, and a retry won't create a duplicate.
+    const courrier = await createWithUniqueReference('M', (number) =>
+      this.database.$transaction(async (tx) => {
+        const created = await tx.courrier.create({
+          data: {
+            ...data,
+            // A sortant's reference is given by its type's model, never typed.
+            ...(dto.direction === CourrierDirection.SORTANT
+              ? { reference: undefined }
+              : {}),
+            typeId,
+            number,
+            receivedAt: received,
+            dueDate: deadline,
+            ...dossierLinks,
+            status:
+              dto.direction === CourrierDirection.ENTRANT
+                ? CourrierStatus.RECU
+                : CourrierStatus.BROUILLON,
+            createdById,
+          },
+          include: mailInclude,
+        });
+
+        for (const doc of pendingDocuments) {
+          await tx.document.create({
+            data: {
+              ...doc,
+              courrierId: created.id,
+              uploadedById: createdById,
+            },
+          });
+        }
+
+        if (dto.dossierId) {
+          await markDossierInProgress(tx, dto.dossierId);
+        }
+
+        return created;
+      }),
+    );
 
     if (transmit) {
       return this.transmit(courrier.id, createdById);
@@ -490,7 +519,7 @@ export class MailService {
       await this.notifyRegistered(courrier, createdById);
     }
 
-    if (files && files.length > 0) {
+    if (pendingDocuments.length > 0) {
       return this.findOne(courrier.id);
     }
 

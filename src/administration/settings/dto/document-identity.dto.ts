@@ -54,4 +54,20 @@ export class UpdateDocumentIdentityDto {
   })
   @IsOptional()
   logo?: unknown;
+
+  @ApiPropertyOptional({
+    description: 'true: remove the current analysis background PDF',
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  removeAnalysisBackground?: boolean;
+
+  @ApiPropertyOptional({
+    type: 'string',
+    format: 'binary',
+    description: 'PDF, PNG or JPEG used as background for each page of the fiche d\'analyse, 5 MB at most',
+  })
+  @IsOptional()
+  analysisBackground?: unknown;
 }
