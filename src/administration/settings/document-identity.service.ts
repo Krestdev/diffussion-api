@@ -19,11 +19,29 @@ const DEFAULT_ACCENT = '#7C3AED';
 export const LOGO_TYPES = ['image/png', 'image/svg+xml'] as const;
 export const LOGO_MAX_BYTES = 2 * 1024 * 1024;
 
+export const BACKGROUND_TYPES = ['application/pdf', 'image/png', 'image/jpeg'] as const;
+export const BACKGROUND_MAX_BYTES = 5 * 1024 * 1024;
+
+function assertBackground(file: Express.Multer.File) {
+  if (!(BACKGROUND_TYPES as readonly string[]).includes(file.mimetype)) {
+    throw new BadRequestException(
+      'The analysis background must be a PDF, PNG or JPEG',
+    );
+  }
+  if (file.size > BACKGROUND_MAX_BYTES) {
+    throw new BadRequestException(
+      'The analysis background must weigh 5 MB at most',
+    );
+  }
+}
+
 type IdentityRow = {
   accentColor: string | null;
   useModuleColor: boolean | null;
   logoKey: string | null;
   logoMime: string | null;
+  analysisBackgroundKey: string | null;
+  analysisBackgroundMime: string | null;
 } | null;
 
 /**
@@ -50,6 +68,9 @@ export class DocumentIdentityService {
     const hasLogo = logoFromSite || Boolean(common?.logoKey);
     const useModuleColor = pick('useModuleColor') ?? false;
     const accentColor = pick('accentColor') ?? DEFAULT_ACCENT;
+    const hasBackground =
+      Boolean(own?.analysisBackgroundKey) ||
+      Boolean(common?.analysisBackgroundKey);
     return {
       siteId,
       accentColor,
@@ -62,11 +83,17 @@ export class DocumentIdentityService {
             url: `/settings/document-identity/logo${siteId ? `?siteId=${siteId}` : ''}`,
           }
         : null,
+      analysisBackground: hasBackground
+        ? {
+            url: `/settings/document-identity/analysis-background${siteId ? `?siteId=${siteId}` : ''}`,
+          }
+        : null,
       inherited: siteId
         ? {
             accentColor: own?.accentColor == null,
             useModuleColor: own?.useModuleColor == null,
             logo: !own?.logoKey,
+            analysisBackground: !own?.analysisBackgroundKey,
           }
         : null,
     };
@@ -96,7 +123,19 @@ export class DocumentIdentityService {
     return { ...file, contentType: mime ?? file.contentType };
   }
 
-  /** For a PDF: the colour, and the logo when it is a PNG (pdfkit). */
+  /** The analysis background file in force at `siteId` (PDF, PNG or JPEG). */
+  async analysisBackground(siteId: string | null) {
+    const [common, own] = await this.rows(siteId);
+    const key =
+      own?.analysisBackgroundKey ?? common?.analysisBackgroundKey ?? null;
+    const mime =
+      own?.analysisBackgroundMime ?? common?.analysisBackgroundMime ?? null;
+    if (!key) throw new NotFoundException('No analysis background');
+    const file = await this.storage.download(key);
+    return { ...file, contentType: mime ?? file.contentType };
+  }
+
+  /** For a PDF: the colour, the logo when it is a PNG, and the background PDF. */
   async forPdf(siteId: string | null) {
     const identity = await this.get(siteId);
     let logo: Buffer | null = null;
@@ -111,12 +150,36 @@ export class DocumentIdentityService {
         logo = null; // A missing file never blocks the PDF.
       }
     }
-    return { color: identity.effectiveColor, logo };
+    let analysisBackground: Buffer | null = null;
+    let analysisBackgroundMime: string | null = null;
+    if (identity.analysisBackground) {
+      try {
+        const [common, own] = await this.rows(siteId);
+        analysisBackgroundMime =
+          own?.analysisBackgroundMime ??
+          common?.analysisBackgroundMime ??
+          null;
+        const { body } = await this.analysisBackground(siteId);
+        const chunks: Buffer[] = [];
+        for await (const chunk of body)
+          chunks.push(Buffer.from(chunk as ArrayBufferLike));
+        analysisBackground = Buffer.concat(chunks);
+      } catch {
+        analysisBackground = null; // A missing background never blocks the PDF.
+      }
+    }
+    return {
+      color: identity.effectiveColor,
+      logo,
+      analysisBackground,
+      analysisBackgroundMime,
+    };
   }
 
   async update(
     dto: UpdateDocumentIdentityDto,
-    file: Express.Multer.File | undefined,
+    logo: Express.Multer.File | undefined,
+    background: Express.Multer.File | undefined,
     userId: string,
   ) {
     const scope = await this.rbac.managedSites(
@@ -130,27 +193,55 @@ export class DocumentIdentityService {
       siteId ? 'Cette identité visuelle' : "L'identité visuelle commune",
       PermissionCode.AdminManageSettings,
     );
-    if (file) assertLogo(file);
+    if (logo) assertLogo(logo);
+    if (background) assertBackground(background);
 
     const [common, own] = await this.rows(siteId);
     const current = siteId ? own : common;
-    const oldKey = current?.logoKey ?? null;
+    const oldLogoKey = current?.logoKey ?? null;
+    const oldBackgroundKey = current?.analysisBackgroundKey ?? null;
 
-    let logo: { logoKey: string | null; logoMime: string | null } | undefined;
-    if (file) {
-      const { key } = await this.storage.upload(file.buffer, {
-        originalName: file.originalname,
-        contentType: file.mimetype,
+    // Upload new files before touching the DB (same pattern as mail.service).
+    let logoUpdate:
+      | { logoKey: string | null; logoMime: string | null }
+      | undefined;
+    if (logo) {
+      const { key } = await this.storage.upload(logo.buffer, {
+        originalName: logo.originalname,
+        contentType: logo.mimetype,
         prefix: `settings/logos/${siteId ?? 'common'}`,
       });
-      logo = { logoKey: key, logoMime: file.mimetype };
+      logoUpdate = { logoKey: key, logoMime: logo.mimetype };
     } else if (dto.removeLogo || (siteId && dto.reset)) {
-      logo = { logoKey: null, logoMime: null };
+      logoUpdate = { logoKey: null, logoMime: null };
+    }
+
+    let backgroundUpdate:
+      | {
+          analysisBackgroundKey: string | null;
+          analysisBackgroundMime: string | null;
+        }
+      | undefined;
+    if (background) {
+      const { key } = await this.storage.upload(background.buffer, {
+        originalName: background.originalname,
+        contentType: background.mimetype,
+        prefix: `settings/analysis-backgrounds/${siteId ?? 'common'}`,
+      });
+      backgroundUpdate = {
+        analysisBackgroundKey: key,
+        analysisBackgroundMime: background.mimetype,
+      };
+    } else if (dto.removeAnalysisBackground || (siteId && dto.reset)) {
+      backgroundUpdate = {
+        analysisBackgroundKey: null,
+        analysisBackgroundMime: null,
+      };
     }
 
     const data =
       dto.reset && siteId
-        ? { accentColor: null, useModuleColor: null, ...logo }
+        ? { accentColor: null, useModuleColor: null, ...logoUpdate, ...backgroundUpdate }
         : {
             ...(dto.accentColor !== undefined
               ? { accentColor: dto.accentColor.toUpperCase() }
@@ -158,7 +249,8 @@ export class DocumentIdentityService {
             ...(dto.useModuleColor !== undefined
               ? { useModuleColor: dto.useModuleColor }
               : {}),
-            ...logo,
+            ...logoUpdate,
+            ...backgroundUpdate,
           };
 
     try {
@@ -176,13 +268,26 @@ export class DocumentIdentityService {
         });
       }
     } catch (error) {
-      if (logo?.logoKey)
-        await this.storage.delete(logo.logoKey).catch(() => undefined);
+      // DB write failed — clean up any files just uploaded.
+      if (logoUpdate?.logoKey)
+        await this.storage.delete(logoUpdate.logoKey).catch(() => undefined);
+      if (backgroundUpdate?.analysisBackgroundKey)
+        await this.storage
+          .delete(backgroundUpdate.analysisBackgroundKey)
+          .catch(() => undefined);
       throw error;
     }
-    // The replaced logo's file goes.
-    if (logo && oldKey && oldKey !== logo.logoKey) {
-      await this.storage.delete(oldKey).catch(() => undefined);
+
+    // Replace means the old file is now orphaned — remove it.
+    if (logoUpdate && oldLogoKey && oldLogoKey !== logoUpdate.logoKey) {
+      await this.storage.delete(oldLogoKey).catch(() => undefined);
+    }
+    if (
+      backgroundUpdate &&
+      oldBackgroundKey &&
+      oldBackgroundKey !== backgroundUpdate.analysisBackgroundKey
+    ) {
+      await this.storage.delete(oldBackgroundKey).catch(() => undefined);
     }
 
     await this.activity
@@ -194,7 +299,12 @@ export class DocumentIdentityService {
         metadata: {
           accentColor: dto.accentColor,
           useModuleColor: dto.useModuleColor,
-          logo: file ? 'replaced' : logo ? 'removed' : 'unchanged',
+          logo: logo ? 'replaced' : logoUpdate ? 'removed' : 'unchanged',
+          analysisBackground: background
+            ? 'replaced'
+            : backgroundUpdate
+              ? 'removed'
+              : 'unchanged',
           reset: Boolean(dto.reset),
         },
       })
@@ -208,6 +318,8 @@ export class DocumentIdentityService {
       useModuleColor: true,
       logoKey: true,
       logoMime: true,
+      analysisBackgroundKey: true,
+      analysisBackgroundMime: true,
     } as const;
     return Promise.all([
       this.database.appSettings.findUnique({

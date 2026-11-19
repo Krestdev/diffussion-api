@@ -1743,6 +1743,9 @@ model AppSettings {
   useModuleColor                Boolean?
   logoKey                       String?
   logoMime                      String?  @db.VarChar(50)
+  /// A4 background PDF stamped behind every page of a fiche d'analyse.
+  analysisBackgroundKey         String?
+  analysisBackgroundMime        String?  @db.VarChar(50)
   updatedAt                     DateTime @updatedAt
 
   @@map("app_settings")
@@ -1752,14 +1755,17 @@ model AppSettings {
 /// doesn't set — a null column, a key absent from `values` /
 /// `notifications` — is inherited.
 model SiteSettings {
-  siteId         String   @id
-  values         Json?
-  notifications  Json?
-  accentColor    String?  @db.VarChar(9)
-  useModuleColor Boolean?
-  logoKey        String?
-  logoMime       String?  @db.VarChar(50)
-  updatedAt      DateTime @updatedAt
+  siteId                 String   @id
+  values                 Json?
+  notifications          Json?
+  accentColor            String?  @db.VarChar(9)
+  useModuleColor         Boolean?
+  logoKey                String?
+  logoMime               String?  @db.VarChar(50)
+  /// A4 background PDF stamped behind every page of a fiche d'analyse.
+  analysisBackgroundKey  String?
+  analysisBackgroundMime String?  @db.VarChar(50)
+  updatedAt              DateTime @updatedAt
 
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
