@@ -78,7 +78,14 @@ const VERSIONABLE_STATUSES: AnalysisSheetStatus[] = [
 ];
 
 const sheetInclude = {
-  courrier: { select: { id: true, number: true, subject: true } },
+  courrier: {
+    select: {
+      id: true,
+      number: true,
+      subject: true,
+      correspondent: { select: { id: true, name: true } },
+    },
+  },
   dossier: { select: { id: true, number: true, title: true } },
   contract: {
     select: { id: true, number: true, reference: true, title: true },
@@ -888,8 +895,18 @@ export class AnalysisSheetService {
       reference: sheet.reference,
       version: sheet.version,
       status: sheet.status,
+      createdAt: sheet.createdAt,
       title: sheet.title,
       courrier: `${sheet.courrier.number} — ${sheet.courrier.subject}`,
+      expediteur: sheet.courrier.correspondent?.name ?? null,
+      refBL: sheet.refBL,
+      lieuUsage: sheet.lieuUsage,
+      projet: sheet.project?.name ?? null,
+      refProjet: sheet.projectReference ?? sheet.project?.reference ?? null,
+      mode: sheet.mode ?? sheet.project?.mode ?? null,
+      allotissement: sheet.allotment ?? null,
+      maitreOuvrage: sheet.owner ?? sheet.project?.maitreOuvrage?.name ?? null,
+      dateRemise: sheet.remise,
       header: [
         ['Projet', sheet.project?.name ?? null],
         [
@@ -928,6 +945,7 @@ export class AnalysisSheetService {
         label: item.label,
         document: item.document?.originalName ?? null,
         norms: item.norms,
+        description: item.description,
         opinion: item.opinion,
         suggestedOpinion: item.suggestedOpinion,
         observation: item.observation,

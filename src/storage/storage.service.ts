@@ -51,11 +51,19 @@ export class StorageService implements OnModuleInit {
       accessKeyId: requireEnv('RUSTFS_ACCESS_KEY'),
       secretAccessKey: requireEnv('RUSTFS_SECRET_KEY'),
     };
+    // RustFS does not support the flexible-checksums extension introduced in
+    // @aws-sdk/client-s3 v3.1110+. Disable both request and response checksum
+    // handling so the SDK falls back to the plain S3 wire protocol.
+    const checksumConfig = {
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
+    } as const;
     this.client = new S3Client({
       endpoint: requireEnv('RUSTFS_ENDPOINT'),
       region: process.env.RUSTFS_REGION ?? 'us-east-1',
       forcePathStyle: true,
       credentials,
+      ...checksumConfig,
     });
     // Presigned URLs must be signed with the endpoint the client will actually
     // call — the host is part of the signature. Use a dedicated client pointed
@@ -67,6 +75,7 @@ export class StorageService implements OnModuleInit {
           region: process.env.RUSTFS_REGION ?? 'us-east-1',
           forcePathStyle: true,
           credentials,
+          ...checksumConfig,
         })
       : this.client;
   }

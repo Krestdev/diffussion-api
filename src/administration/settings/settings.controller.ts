@@ -5,11 +5,11 @@ import {
   Patch,
   Query,
   Res,
-  UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
@@ -20,6 +20,7 @@ import { PermissionCode } from '../../auth/rbac/rbac.constants';
 import { RequirePermission } from '../../auth/rbac/require-permission.decorator';
 import { JwtPayload } from '../../auth/types/jwt-payload.type';
 import {
+  BACKGROUND_MAX_BYTES,
   DocumentIdentityService,
   LOGO_MAX_BYTES,
 } from './document-identity.service';
@@ -85,18 +86,32 @@ export class SettingsController {
   @Patch('document-identity')
   @ApiConsumes('multipart/form-data', 'application/json')
   @UseInterceptors(
-    FileInterceptor('logo', {
-      storage: memoryStorage(),
-      // A little over the limit, so the service answers a clear 400.
-      limits: { fileSize: LOGO_MAX_BYTES + 1 },
-    }),
+    FileFieldsInterceptor(
+      [
+        { name: 'logo', maxCount: 1 },
+        { name: 'analysisBackground', maxCount: 1 },
+      ],
+      {
+        storage: memoryStorage(),
+        limits: { fileSize: Math.max(LOGO_MAX_BYTES, BACKGROUND_MAX_BYTES) + 1 },
+      },
+    ),
   )
   updateIdentity(
     @Body() dto: UpdateDocumentIdentityDto,
-    @UploadedFile() logo: Express.Multer.File | undefined,
+    @UploadedFiles()
+    files: {
+      logo?: Express.Multer.File[];
+      analysisBackground?: Express.Multer.File[];
+    },
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.identity.update(dto, logo, user.sub);
+    return this.identity.update(
+      dto,
+      files?.logo?.[0],
+      files?.analysisBackground?.[0],
+      user.sub,
+    );
   }
 }
 
@@ -112,6 +127,17 @@ export class DocumentLogoController {
   @Get('logo')
   async logo(@Query() query: SettingsQueryDto, @Res() res: Response) {
     const file = await this.identity.logo(query.siteId ?? null);
+    if (file.contentType) res.setHeader('Content-Type', file.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    file.body.pipe(res);
+  }
+
+  @Get('analysis-background')
+  async analysisBackground(
+    @Query() query: SettingsQueryDto,
+    @Res() res: Response,
+  ) {
+    const file = await this.identity.analysisBackground(query.siteId ?? null);
     if (file.contentType) res.setHeader('Content-Type', file.contentType);
     res.setHeader('Cache-Control', 'public, max-age=300');
     file.body.pipe(res);
