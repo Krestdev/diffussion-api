@@ -1,7 +1,10 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsString, IsUUID } from 'class-validator';
-import { DossierPriority, DossierStatus } from '../../../generated/prisma/enums';
+import {
+  DossierPriority,
+  DossierStatus,
+} from '../../../generated/prisma/enums';
 
 export class FindDossiersQueryDto {
   @ApiPropertyOptional({ description: 'Search in title/number/keywords' })

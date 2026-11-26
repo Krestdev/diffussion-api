@@ -2,7 +2,10 @@ import { COURRIER_STATUS_DOC } from './courrier-status.doc';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsEnum, IsInt, IsOptional, IsString, IsUUID } from 'class-validator';
-import { CourrierDirection, CourrierStatus } from '../../../generated/prisma/enums';
+import {
+  CourrierDirection,
+  CourrierStatus,
+} from '../../../generated/prisma/enums';
 
 export class FindMailsQueryDto {
   @ApiPropertyOptional({

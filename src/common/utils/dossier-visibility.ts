@@ -1,7 +1,4 @@
-import {
-  DossierConfidentiality,
-  Prisma,
-} from '../../generated/prisma/client';
+import { DossierConfidentiality, Prisma } from '../../generated/prisma/client';
 
 /**
  * Dossiers `userId` may see: every PUBLIC dossier, plus RESTRICTED ones they
