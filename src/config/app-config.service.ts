@@ -37,6 +37,13 @@ export interface AppConfig {
    * days (as EXPENZO's REMINDER_AFTER_DAYS). Default 3.
    */
   REMINDER_AFTER_DAYS: number;
+  /**
+   * Browser notifications (Web Push, `npx web-push generate-vapid-keys`). Either key empty: push
+   * is off and notifications only show in open tabs. VAPID_SUBJECT: mailto:… or https://….
+   */
+  VAPID_PUBLIC_KEY: string;
+  VAPID_PRIVATE_KEY: string;
+  VAPID_SUBJECT: string;
 }
 
 export const MCP_TOOL_LEVEL_VALUES = [
@@ -96,6 +103,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       1,
       Math.floor(number(env.REMINDER_AFTER_DAYS, 3)),
     ),
+    VAPID_PUBLIC_KEY: (env.VAPID_PUBLIC_KEY ?? '').trim(),
+    VAPID_PRIVATE_KEY: (env.VAPID_PRIVATE_KEY ?? '').trim(),
+    VAPID_SUBJECT: (env.VAPID_SUBJECT ?? '').trim(),
   };
   if (config.NODE_ENV !== 'test') {
     const missing = (['CORE_URL', 'CORE_ISSUER'] as const).filter(

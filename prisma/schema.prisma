@@ -90,6 +90,9 @@ model User {
   /// on decisions, comments, journal, documents, notifications) and is left out of every list and
   /// picker. Back to null when the core restores the person.
   deletedAt       DateTime?
+  /// « Notifications du navigateur » (console Mon profil): off removes every push subscription
+  /// of the person and stops Web Push; on lets each browser subscribe once it allows them.
+  browserNotifications Boolean @default(true)
 
   /// The one company the user belongs to (RG-ORG-001, revised: one company per
   /// user). Null for platform users (super-admins), whose roles are global.
@@ -113,6 +116,7 @@ model User {
   validations             Validation[]
   subscriptions           InstructionSubscription[]
   notificationPreferences NotificationPreference[]
+  pushSubscriptions       PushSubscription[]
 
   managedCompanies               Company[]               @relation("CompanyManager")
   responsibleDossiers        Dossier[]            @relation("DossierResponsible")
@@ -1462,6 +1466,28 @@ model NotificationPreference {
 
   @@id([userId, type])
   @@map("notification_preference")
+}
+
+/// A browser receiving the person's notifications as Web Push while no Diffusion tab is open
+/// (« Notifications du navigateur »). One row per browser endpoint; removed on unsubscribe,
+/// sign-out, or when the push service answers 404/410.
+model PushSubscription {
+  id         String    @id @default(uuid())
+  userId     String
+  /// The browser's push service URL (a browser belongs to one person at a time).
+  endpoint   String    @unique
+  p256dh     String
+  auth       String
+  /// The person's language when the browser subscribed (the texts of the pop-ups).
+  language   String    @default("fr") @db.VarChar(5)
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscription")
 }
 
 // ---------------------------------------------------------------------------

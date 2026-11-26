@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import {
   NotificationCanal,
   NotificationStatus,
@@ -10,6 +10,7 @@ import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { NotificationPreferenceDto } from './dto/set-notification-preferences.dto';
 import { isNotificationType, NOTIFICATION_TYPES } from './notification-types';
+import { PushService } from './push.service';
 
 // What the inbox returns: the front picks the effet's page by its direction.
 const inboxInclude = {
@@ -40,6 +41,8 @@ export class NotificationsService {
     private readonly database: DatabaseService,
     private readonly realtime: RealtimeGateway,
     private readonly moduleNotifications: ModuleNotificationsService,
+    // « Notifications du navigateur » (optional: unit tests build the service without it).
+    @Optional() private readonly push?: PushService,
   ) {}
 
   // Each recipient whose company doesn't show this type in the application
@@ -98,6 +101,11 @@ export class NotificationsService {
         },
       });
     }
+    // Web Push to the recipients' browsers, in the background (never blocks the change).
+    this.push?.notify(
+      recipients.map((r) => r.userId),
+      { ...row, courrierDirection: courrier?.direction ?? null },
+    );
     return notification;
   }
 
