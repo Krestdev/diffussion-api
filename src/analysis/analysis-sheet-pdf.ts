@@ -18,6 +18,13 @@ export interface AnalysisSheetPdfContent {
   allotissement?: string | null;
   maitreOuvrage?: string | null;
   dateRemise?: Date | null;
+  /** « number — title » of the linked dossier. */
+  dossier?: string | null;
+  /** « reference (or number) — title » of the linked contract. */
+  contrat?: string | null;
+  norme?: string | null;
+  /** The « Docs références », comma-separated. */
+  docsReferences?: string | null;
   items: {
     order: number;
     label: string;
@@ -303,7 +310,8 @@ function renderContent(content: AnalysisSheetPdfContent): Promise<Buffer> {
 
     // ── 2. METADATA GRID — as the fiche shows on screen ─────────────
     // Left: 3 rows, Remise (double), then 4 rows. Right: Projet (4 rows),
-    // Mode, then 4 rows. Both sides are 9 rows high.
+    // Mode, then 4 rows. Both sides are 9 rows high; up to 2 full-width
+    // rows follow (Dossier/Contrat, Norme/Docs références).
     const RH = 16;
     const LEFT_W = Math.round(CW * 0.55);
     const RIGHT_W = CW - LEFT_W;
@@ -483,7 +491,26 @@ function renderContent(content: AnalysisSheetPdfContent): Promise<Buffer> {
       ry += RH;
     }
 
-    y += RH * 9 + 16;
+    y += RH * 9;
+
+    // Dossier | Contrat, then Norme | Docs références, on the grid's two
+    // columns. A row with neither value is left out.
+    for (const [l1, v1, l2, v2] of [
+      ['Dossier', content.dossier, 'Contrat', content.contrat],
+      ['Norme', content.norme, 'Docs références', content.docsReferences],
+    ] as [
+      string,
+      string | null | undefined,
+      string,
+      string | null | undefined,
+    ][]) {
+      if (!v1 && !v2) continue;
+      fullRow(M, y, LBL, LEFT_W, l1, v1);
+      fullRow(RX, y, RL, RIGHT_W, l2, v2);
+      y += RH;
+    }
+
+    y += 16;
 
     // An opinion as on screen: its coloured badge, dark text.
     function opinionBadge(

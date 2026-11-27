@@ -1,3 +1,4 @@
+import { inflateSync } from 'zlib';
 import { PDFDocument } from 'pdf-lib';
 import {
   renderAnalysisSheetPdf,
@@ -38,7 +39,63 @@ async function a4Pdf() {
   return Buffer.from(await pdf.save());
 }
 
+// The text drawn by pdfkit's standard fonts: each content stream inflated,
+// each TJ array's hex strings decoded (WinAnsi) and joined.
+function pdfText(buffer: Buffer) {
+  const raw = buffer.toString('latin1');
+  const lines: string[] = [];
+  const streams = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+  for (let match = streams.exec(raw); match; match = streams.exec(raw)) {
+    let body: string;
+    try {
+      body = inflateSync(Buffer.from(match[1], 'latin1')).toString('latin1');
+    } catch {
+      continue;
+    }
+    for (const tj of body.matchAll(/\[([^\]]*)\]\s*TJ/g)) {
+      lines.push(
+        [...tj[1].matchAll(/<([0-9a-fA-F]*)>/g)]
+          .map(([, hex]) => Buffer.from(hex, 'hex').toString('latin1'))
+          .join(''),
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
 describe('renderAnalysisSheetPdf', () => {
+  it('shows Dossier, Contrat, Norme and Docs références when given', async () => {
+    const text = pdfText(
+      await renderAnalysisSheetPdf({
+        ...content,
+        dossier: 'D-0001 — Lot 2',
+        contrat: 'CT-12 — Travaux',
+        norme: 'NF EN 1992',
+        docsReferences: 'Plans EXE, Notes de calcul',
+      }),
+    );
+
+    for (const label of [
+      'Dossier',
+      'D-0001',
+      'Contrat',
+      'CT-12',
+      'Norme',
+      'NF EN 1992',
+      'Docs références',
+      'Plans EXE, Notes de calcul',
+    ]) {
+      expect(text).toContain(label);
+    }
+  });
+
+  it('leaves out the Dossier/Contrat and Norme/Docs rows when empty', async () => {
+    const text = pdfText(await renderAnalysisSheetPdf(content));
+
+    expect(text).not.toContain('Docs références');
+    expect(text).not.toMatch(/^Norme$/m);
+  });
+
   it('renders the fiche on A4 pages without a background', async () => {
     const pdf = await PDFDocument.load(await renderAnalysisSheetPdf(content));
 

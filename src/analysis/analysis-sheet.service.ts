@@ -990,6 +990,14 @@ export class AnalysisSheetService {
       allotissement: sheet.allotment ?? null,
       maitreOuvrage: sheet.owner ?? sheet.project?.maitreOuvrage?.name ?? null,
       dateRemise: sheet.remise,
+      dossier: sheet.dossier
+        ? `${sheet.dossier.number} — ${sheet.dossier.title}`
+        : null,
+      contrat: sheet.contract
+        ? `${sheet.contract.reference ?? sheet.contract.number} — ${sheet.contract.title}`
+        : null,
+      norme: sheet.norme,
+      docsReferences: sheet.docsReferences.join(', ') || null,
       items: sheet.items.map((item) => ({
         order: item.order,
         label: item.label,
