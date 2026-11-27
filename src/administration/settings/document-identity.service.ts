@@ -19,17 +19,28 @@ const DEFAULT_ACCENT = '#7C3AED';
 export const LOGO_TYPES = ['image/png', 'image/svg+xml'] as const;
 export const LOGO_MAX_BYTES = 2 * 1024 * 1024;
 
+/** The fiche d'analyse's background: an A4 page drawn behind every page. */
+export const BACKGROUND_TYPES = [
+  'application/pdf',
+  'image/png',
+  'image/jpeg',
+] as const;
+export const BACKGROUND_MAX_BYTES = 5 * 1024 * 1024;
+
 type IdentityRow = {
   accentColor: string | null;
   useModuleColor: boolean | null;
   logoKey: string | null;
   logoMime: string | null;
+  analysisBackgroundKey: string | null;
+  analysisBackgroundMime: string | null;
 } | null;
 
 /**
  * The documents' visual identity (PA·3) — the letterhead of the fiches
- * d'analyse: logo, accent colour, or the module's colour. Common, and each
- * company's own over it (a company that sets nothing inherits it).
+ * d'analyse: logo, accent colour, or the module's colour, and the fiche's
+ * page background. Common, and each company's own over it (a company that
+ * sets nothing inherits it).
  */
 @Injectable()
 export class DocumentIdentityService {
@@ -50,8 +61,10 @@ export class DocumentIdentityService {
       ? own!.logoMime
       : (common?.logoMime ?? null);
     const hasLogo = logoFromCompany || Boolean(common?.logoKey);
+    const background = pickBackground(common, own);
     const useModuleColor = pick('useModuleColor') ?? false;
     const accentColor = pick('accentColor') ?? DEFAULT_ACCENT;
+    const query = companyId ? `?companyId=${companyId}` : '';
     return {
       companyId,
       accentColor,
@@ -61,7 +74,13 @@ export class DocumentIdentityService {
       logo: hasLogo
         ? {
             mimeType: logoMime,
-            url: `/settings/document-identity/logo${companyId ? `?companyId=${companyId}` : ''}`,
+            url: `/settings/document-identity/logo${query}`,
+          }
+        : null,
+      analysisBackground: background
+        ? {
+            mimeType: background.mime,
+            url: `/settings/document-identity/analysis-background${query}`,
           }
         : null,
       inherited: companyId
@@ -69,6 +88,7 @@ export class DocumentIdentityService {
             accentColor: own?.accentColor == null,
             useModuleColor: own?.useModuleColor == null,
             logo: !own?.logoKey,
+            analysisBackground: !own?.analysisBackgroundKey,
           }
         : null,
     };
@@ -98,27 +118,42 @@ export class DocumentIdentityService {
     return { ...file, contentType: mime ?? file.contentType };
   }
 
-  /** For a PDF: the colour, and the logo when it is a PNG (pdfkit). */
+  /** The fiche d'analyse's background file in force at `companyId`. */
+  async analysisBackground(companyId: string | null) {
+    const [common, own] = await this.rows(companyId);
+    const background = pickBackground(common, own);
+    if (!background) throw new NotFoundException('No analysis background');
+    const file = await this.storage.download(background.key);
+    return { ...file, contentType: background.mime ?? file.contentType };
+  }
+
+  /**
+   * For a PDF: the colour, the logo when it is a PNG (pdfkit), and the fiche
+   * d'analyse's background. A missing file never blocks the PDF.
+   */
   async forPdf(companyId: string | null) {
     const identity = await this.get(companyId);
-    let logo: Buffer | null = null;
-    if (identity.logo?.mimeType === 'image/png') {
-      try {
-        const { body } = await this.logo(companyId);
-        const chunks: Buffer[] = [];
-        for await (const chunk of body)
-          chunks.push(Buffer.from(chunk as ArrayBufferLike));
-        logo = Buffer.concat(chunks);
-      } catch {
-        logo = null; // A missing file never blocks the PDF.
-      }
-    }
-    return { color: identity.effectiveColor, logo };
+    const logo =
+      identity.logo?.mimeType === 'image/png'
+        ? await this.logo(companyId)
+            .then((file) => readAll(file.body))
+            .catch(() => null)
+        : null;
+    const background = identity.analysisBackground
+      ? await this.analysisBackground(companyId)
+          .then(async (file) => ({
+            data: await readAll(file.body),
+            mimeType: file.contentType ?? null,
+          }))
+          .catch(() => null)
+      : null;
+    return { color: identity.effectiveColor, logo, background };
   }
 
   async update(
     dto: UpdateDocumentIdentityDto,
-    file: Express.Multer.File | undefined,
+    logo: Express.Multer.File | undefined,
+    background: Express.Multer.File | undefined,
     userId: string,
   ) {
     const companyId = targetCompany(
@@ -132,27 +167,66 @@ export class DocumentIdentityService {
       companyId,
       companyId ? 'Cette identité visuelle' : "L'identité visuelle commune",
     );
-    if (file) assertLogo(file);
+    if (logo) assertLogo(logo);
+    if (background) assertBackground(background);
 
     const [common, own] = await this.rows(companyId);
     const current = companyId ? own : common;
-    const oldKey = current?.logoKey ?? null;
+    const oldLogoKey = current?.logoKey ?? null;
+    const oldBackgroundKey = current?.analysisBackgroundKey ?? null;
+    const folder = companyId ?? 'common';
 
-    let logo: { logoKey: string | null; logoMime: string | null } | undefined;
-    if (file) {
-      const { key } = await this.storage.upload(file.buffer, {
-        originalName: file.originalname,
-        contentType: file.mimetype,
-        prefix: `settings/logos/${companyId ?? 'common'}`,
+    // The files are stored first; the row changes only once they are.
+    let logoUpdate:
+      { logoKey: string | null; logoMime: string | null } | undefined;
+    if (logo) {
+      const { key } = await this.storage.upload(logo.buffer, {
+        originalName: logo.originalname,
+        contentType: logo.mimetype,
+        prefix: `settings/logos/${folder}`,
       });
-      logo = { logoKey: key, logoMime: file.mimetype };
+      logoUpdate = { logoKey: key, logoMime: logo.mimetype };
     } else if (dto.removeLogo || (companyId && dto.reset)) {
-      logo = { logoKey: null, logoMime: null };
+      logoUpdate = { logoKey: null, logoMime: null };
+    }
+
+    let backgroundUpdate:
+      | {
+          analysisBackgroundKey: string | null;
+          analysisBackgroundMime: string | null;
+        }
+      | undefined;
+    if (background) {
+      const { key } = await this.storage
+        .upload(background.buffer, {
+          originalName: background.originalname,
+          contentType: background.mimetype,
+          prefix: `settings/analysis-backgrounds/${folder}`,
+        })
+        .catch(async (error: unknown) => {
+          // The logo just stored would be left without its row.
+          await this.deleteQuietly(logoUpdate?.logoKey);
+          throw error;
+        });
+      backgroundUpdate = {
+        analysisBackgroundKey: key,
+        analysisBackgroundMime: background.mimetype,
+      };
+    } else if (dto.removeAnalysisBackground || (companyId && dto.reset)) {
+      backgroundUpdate = {
+        analysisBackgroundKey: null,
+        analysisBackgroundMime: null,
+      };
     }
 
     const data =
       dto.reset && companyId
-        ? { accentColor: null, useModuleColor: null, ...logo }
+        ? {
+            accentColor: null,
+            useModuleColor: null,
+            ...logoUpdate,
+            ...backgroundUpdate,
+          }
         : {
             ...(dto.accentColor !== undefined
               ? { accentColor: dto.accentColor.toUpperCase() }
@@ -160,7 +234,8 @@ export class DocumentIdentityService {
             ...(dto.useModuleColor !== undefined
               ? { useModuleColor: dto.useModuleColor }
               : {}),
-            ...logo,
+            ...logoUpdate,
+            ...backgroundUpdate,
           };
 
     try {
@@ -178,14 +253,19 @@ export class DocumentIdentityService {
         });
       }
     } catch (error) {
-      if (logo?.logoKey)
-        await this.storage.delete(logo.logoKey).catch(() => undefined);
+      // The files just stored go with the failed write.
+      await this.deleteQuietly(logoUpdate?.logoKey);
+      await this.deleteQuietly(backgroundUpdate?.analysisBackgroundKey);
       throw error;
     }
-    // The replaced logo's file goes.
-    if (logo && oldKey && oldKey !== logo.logoKey) {
-      await this.storage.delete(oldKey).catch(() => undefined);
-    }
+    // The replaced files go.
+    if (logoUpdate && oldLogoKey !== logoUpdate.logoKey)
+      await this.deleteQuietly(oldLogoKey);
+    if (
+      backgroundUpdate &&
+      oldBackgroundKey !== backgroundUpdate.analysisBackgroundKey
+    )
+      await this.deleteQuietly(oldBackgroundKey);
 
     await this.activity
       .tryRecord({
@@ -196,7 +276,8 @@ export class DocumentIdentityService {
         metadata: {
           accentColor: dto.accentColor,
           useModuleColor: dto.useModuleColor,
-          logo: file ? 'replaced' : logo ? 'removed' : 'unchanged',
+          logo: fileChange(logo, logoUpdate),
+          analysisBackground: fileChange(background, backgroundUpdate),
           reset: Boolean(dto.reset),
         },
       })
@@ -210,6 +291,8 @@ export class DocumentIdentityService {
       useModuleColor: true,
       logoKey: true,
       logoMime: true,
+      analysisBackgroundKey: true,
+      analysisBackgroundMime: true,
     } as const;
     return Promise.all([
       this.database.appSettings.findUnique({
@@ -223,6 +306,10 @@ export class DocumentIdentityService {
           })
         : Promise.resolve(null),
     ]);
+  }
+
+  private async deleteQuietly(key: string | null | undefined) {
+    if (key) await this.storage.delete(key).catch(() => undefined);
   }
 
   private async ownCompany(userId: string) {
@@ -241,6 +328,40 @@ function assertLogo(file: Express.Multer.File) {
   if (file.size > LOGO_MAX_BYTES) {
     throw new BadRequestException('The logo must weigh 2 MB at most');
   }
+}
+
+function assertBackground(file: Express.Multer.File) {
+  if (!(BACKGROUND_TYPES as readonly string[]).includes(file.mimetype)) {
+    throw new BadRequestException(
+      'The analysis background must be a PDF, a PNG or a JPEG',
+    );
+  }
+  if (file.size > BACKGROUND_MAX_BYTES) {
+    throw new BadRequestException(
+      'The analysis background must weigh 5 MB at most',
+    );
+  }
+}
+
+/** The background in force: the company's own, else the common one. */
+function pickBackground(common: IdentityRow, own: IdentityRow) {
+  const row = own?.analysisBackgroundKey ? own : common;
+  return row?.analysisBackgroundKey
+    ? { key: row.analysisBackgroundKey, mime: row.analysisBackgroundMime }
+    : null;
+}
+
+/** What an update did to a file, for the activity log. */
+function fileChange(uploaded: unknown, update: unknown) {
+  if (uploaded) return 'replaced';
+  return update ? 'removed' : 'unchanged';
+}
+
+async function readAll(body: AsyncIterable<unknown>): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of body)
+    chunks.push(Buffer.from(chunk as ArrayBufferLike));
+  return Buffer.concat(chunks);
 }
 
 function targetCompany(

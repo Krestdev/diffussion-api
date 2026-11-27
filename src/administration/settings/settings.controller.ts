@@ -5,11 +5,11 @@ import {
   Patch,
   Query,
   Res,
-  UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { memoryStorage } from 'multer';
@@ -19,7 +19,9 @@ import { PermissionsGuard } from '../../auth/access/permissions.guard';
 import { Permission } from '../../auth/permissions';
 import { RequirePermissions } from '../../auth/access/decorators';
 import { AuthUser } from '../../auth/types/auth-user.type';
+import type { DownloadResult } from '../../storage/storage.service';
 import {
+  BACKGROUND_MAX_BYTES,
   DocumentIdentityService,
   LOGO_MAX_BYTES,
 } from './document-identity.service';
@@ -82,24 +84,43 @@ export class SettingsController {
   @Patch('document-identity')
   @ApiConsumes('multipart/form-data', 'application/json')
   @UseInterceptors(
-    FileInterceptor('logo', {
-      storage: memoryStorage(),
-      // A little over the limit, so the service answers a clear 400.
-      limits: { fileSize: LOGO_MAX_BYTES + 1 },
-    }),
+    FileFieldsInterceptor(
+      [
+        { name: 'logo', maxCount: 1 },
+        { name: 'analysisBackground', maxCount: 1 },
+      ],
+      {
+        storage: memoryStorage(),
+        // A little over the largest limit, so the service answers a clear 400.
+        limits: {
+          fileSize: Math.max(LOGO_MAX_BYTES, BACKGROUND_MAX_BYTES) + 1,
+        },
+      },
+    ),
   )
   updateIdentity(
     @Body() dto: UpdateDocumentIdentityDto,
-    @UploadedFile() logo: Express.Multer.File | undefined,
+    @UploadedFiles()
+    files: IdentityFiles | undefined,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.identity.update(dto, logo, user.sub);
+    return this.identity.update(
+      dto,
+      files?.logo?.[0],
+      files?.analysisBackground?.[0],
+      user.sub,
+    );
   }
 }
 
+type IdentityFiles = {
+  logo?: Express.Multer.File[];
+  analysisBackground?: Express.Multer.File[];
+};
+
 /**
- * The logo file, without a token: an <img src> can't send one, and a
- * letterhead logo is no secret.
+ * The letterhead's files, without a token: an <img src> can't send one, and
+ * a letterhead logo or page background is no secret.
  */
 @ApiTags('settings')
 @Controller('settings/document-identity')
@@ -108,9 +129,21 @@ export class DocumentLogoController {
 
   @Get('logo')
   async logo(@Query() query: SettingsQueryDto, @Res() res: Response) {
-    const file = await this.identity.logo(query.companyId ?? null);
-    if (file.contentType) res.setHeader('Content-Type', file.contentType);
-    res.setHeader('Cache-Control', 'public, max-age=300');
-    file.body.pipe(res);
+    send(res, await this.identity.logo(query.companyId ?? null));
   }
+
+  // PA·3 — the fiche d'analyse's page background (PDF, PNG or JPEG).
+  @Get('analysis-background')
+  async analysisBackground(
+    @Query() query: SettingsQueryDto,
+    @Res() res: Response,
+  ) {
+    send(res, await this.identity.analysisBackground(query.companyId ?? null));
+  }
+}
+
+function send(res: Response, file: DownloadResult) {
+  if (file.contentType) res.setHeader('Content-Type', file.contentType);
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  file.body.pipe(res);
 }

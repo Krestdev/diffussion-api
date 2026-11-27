@@ -1810,11 +1810,15 @@ model AppSettings {
   values                        Json?
   /// The module's notifications (PA·9): { [type]: { inApp, email } }.
   notifications                 Json?
-  /// The documents' identity (PA·3): accent colour, module colour, logo.
+  /// The documents' identity (PA·3): accent colour, module colour, logo,
+  /// the fiche d'analyse's background.
   accentColor                   String?  @db.VarChar(9)
   useModuleColor                Boolean?
   logoKey                       String?
   logoMime                      String?  @db.VarChar(50)
+  /// The fiche d'analyse's background (PDF, PNG or JPEG), drawn behind every page.
+  analysisBackgroundKey         String?
+  analysisBackgroundMime        String?  @db.VarChar(50)
   updatedAt                     DateTime @updatedAt
 
   @@map("app_settings")
@@ -1824,14 +1828,17 @@ model AppSettings {
 /// doesn't set — a null column, a key absent from `values` /
 /// `notifications` — is inherited.
 model CompanySettings {
-  companyId         String   @id
-  values         Json?
-  notifications  Json?
-  accentColor    String?  @db.VarChar(9)
-  useModuleColor Boolean?
-  logoKey        String?
-  logoMime       String?  @db.VarChar(50)
-  updatedAt      DateTime @updatedAt
+  companyId              String   @id
+  values                 Json?
+  notifications          Json?
+  accentColor            String?  @db.VarChar(9)
+  useModuleColor         Boolean?
+  logoKey                String?
+  logoMime               String?  @db.VarChar(50)
+  /// The fiche d'analyse's background (PDF, PNG or JPEG), drawn behind every page.
+  analysisBackgroundKey  String?
+  analysisBackgroundMime String?  @db.VarChar(50)
+  updatedAt              DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 

@@ -63,11 +63,19 @@ export class StorageService implements OnModuleInit {
     };
     const region = process.env.S3_REGION || 'us-east-1';
     const forcePathStyle = process.env.S3_FORCE_PATH_STYLE !== 'false';
+    // The SDK's default flexible checksums (CRC32 on every request and
+    // response) are not understood by every S3-compatible storage: send and
+    // check them only when the operation requires one.
+    const checksumConfig = {
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
+    } as const;
     this.client = new S3Client({
       endpoint: requireEnv('S3_ENDPOINT'),
       region,
       forcePathStyle,
       credentials,
+      ...checksumConfig,
     });
     // Presigned URLs must be signed with the endpoint the client will actually
     // call — the host is part of the signature. Use a dedicated client pointed
@@ -79,6 +87,7 @@ export class StorageService implements OnModuleInit {
           region,
           forcePathStyle,
           credentials,
+          ...checksumConfig,
         })
       : this.client;
   }

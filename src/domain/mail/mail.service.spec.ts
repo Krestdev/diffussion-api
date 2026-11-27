@@ -136,7 +136,7 @@ describe('MailService', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       canal: { findUnique: jest.fn() },
-      document: { create: jest.fn() },
+      document: { create: jest.fn(), createMany: jest.fn() },
       company: { findUnique: jest.fn() },
       user: {
         findUnique: jest.fn(),
@@ -677,6 +677,68 @@ describe('MailService', () => {
         service.create(ENTRANT, 'super-admin'),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(database.courrier.create).not.toHaveBeenCalled();
+    });
+
+    describe('with its documents', () => {
+      const scan = {
+        originalname: 'courrier.pdf',
+        mimetype: 'application/pdf',
+        size: 12,
+        buffer: Buffer.from('%PDF-1.4'),
+      } as Express.Multer.File;
+
+      beforeEach(() => {
+        database.user.findUnique.mockResolvedValue({ companyId: 's-1' });
+        jest
+          .spyOn(service, 'findOne')
+          .mockResolvedValue({ id: 'c-1' } as never);
+      });
+
+      it('stores the files first, under the courrier, then writes the courrier and its documents together', async () => {
+        await service.create(
+          { ...ENTRANT, documents: [{ name: 'Lettre' }] },
+          'u-agent',
+          [scan],
+        );
+
+        const id = database.courrier.create.mock.calls[0][0].data.id as string;
+        expect(storage.upload).toHaveBeenCalledWith(
+          scan.buffer,
+          expect.objectContaining({ prefix: `courriers/${id}` }),
+        );
+        expect(storage.upload.mock.invocationCallOrder[0]).toBeLessThan(
+          database.courrier.create.mock.invocationCallOrder[0],
+        );
+        expect(database.document.createMany).toHaveBeenCalledWith({
+          data: [
+            expect.objectContaining({
+              courrierId: id,
+              name: 'Lettre',
+              storageKey: 'test-key',
+              uploadedById: 'u-agent',
+            }),
+          ],
+        });
+      });
+
+      it('writes nothing when a file cannot be stored', async () => {
+        storage.upload.mockRejectedValueOnce(new Error('storage down'));
+
+        await expect(
+          service.create(ENTRANT, 'u-agent', [scan]),
+        ).rejects.toThrow('storage down');
+        expect(database.courrier.create).not.toHaveBeenCalled();
+      });
+
+      it('removes the stored files when the courrier cannot be written', async () => {
+        database.courrier.create.mockRejectedValue(new Error('db down'));
+
+        await expect(
+          service.create(ENTRANT, 'u-agent', [scan]),
+        ).rejects.toThrow('db down');
+        expect(storage.delete).toHaveBeenCalledWith('test-key');
+        expect(database.document.createMany).not.toHaveBeenCalled();
+      });
     });
   });
 

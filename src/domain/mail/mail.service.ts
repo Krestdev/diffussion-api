@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import {
   ContractStatus,
   CourrierDirection,
@@ -426,11 +427,40 @@ export class MailService {
             new Date(),
             'outgoingReplyDays',
           );
+    // The files are stored first, under the courrier's id chosen here; the
+    // courrier, its documents, its first status and its dossier's progress
+    // are then written in one transaction. Nothing is written when an upload
+    // fails, and the stored files go when the transaction fails.
+    const courrierId = randomUUID();
+    const documents: Prisma.DocumentCreateManyInput[] = [];
+    try {
+      for (const [i, file] of (files ?? []).entries()) {
+        const { key } = await this.storage.upload(file.buffer, {
+          originalName: file.originalname,
+          contentType: file.mimetype,
+          prefix: `courriers/${courrierId}`,
+        });
+        documents.push({
+          originalName: file.originalname,
+          name: documentMetas?.[i]?.name ?? file.originalname,
+          storageKey: key,
+          mimeType: file.mimetype,
+          sizeBytes: file.size,
+          courrierId,
+          uploadedById: createdById,
+        });
+      }
+    } catch (error) {
+      await this.deleteStoredFiles(documents);
+      throw error;
+    }
+
     const courrier = await createWithUniqueReference('M', (number) =>
       this.database.$transaction(async (tx) => {
         const created = await tx.courrier.create({
           data: {
             ...data,
+            id: courrierId,
             // A sortant's reference is given by its type's model, never typed.
             ...(dto.direction === CourrierDirection.SORTANT
               ? { reference: undefined }
@@ -454,36 +484,18 @@ export class MailService {
           toStatus: created.status,
           companyId,
         });
+        if (documents.length) {
+          await tx.document.createMany({ data: documents });
+        }
+        if (dto.dossierId) {
+          await markDossierInProgress(tx, dto.dossierId);
+        }
         return created;
       }),
-    );
-
-    if (files && files.length > 0) {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const meta = documentMetas?.[i];
-        const { key } = await this.storage.upload(file.buffer, {
-          originalName: file.originalname,
-          contentType: file.mimetype,
-          prefix: `courriers/${courrier.id}`,
-        });
-        await this.database.document.create({
-          data: {
-            originalName: file.originalname,
-            name: meta?.name ?? file.originalname,
-            storageKey: key,
-            mimeType: file.mimetype,
-            sizeBytes: file.size,
-            courrierId: courrier.id,
-            uploadedById: createdById,
-          },
-        });
-      }
-    }
-
-    if (dto.dossierId) {
-      await markDossierInProgress(this.database, dto.dossierId);
-    }
+    ).catch(async (error: unknown) => {
+      await this.deleteStoredFiles(documents);
+      throw error;
+    });
 
     if (transmit) {
       return this.transmit(courrier.id, createdById);
@@ -494,7 +506,7 @@ export class MailService {
       await this.notifyRegistered(courrier, createdById);
     }
 
-    if (files && files.length > 0) {
+    if (documents.length) {
       return this.findOne(courrier.id);
     }
 
@@ -2703,6 +2715,15 @@ export class MailService {
       await this.storage.delete(key).catch(() => undefined);
       throw error;
     }
+  }
+
+  /** Removes files stored for documents that were never written. */
+  private async deleteStoredFiles(documents: { storageKey: string }[]) {
+    await Promise.all(
+      documents.map(({ storageKey }) =>
+        this.storage.delete(storageKey).catch(() => undefined),
+      ),
+    );
   }
 
   // Independent from the dossier's own access list (see CourrierAccess in

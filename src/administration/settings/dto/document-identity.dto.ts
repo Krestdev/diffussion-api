@@ -8,7 +8,8 @@ const toBoolean = ({ value }: { value: unknown }) =>
 
 /**
  * PATCH /settings/document-identity — multipart (with a `logo` file: PNG or
- * SVG, 2 MB at most) or JSON (colours only).
+ * SVG, 2 MB at most, and/or an `analysisBackground` file: PDF, PNG or JPEG,
+ * 5 MB at most) or JSON (colours only).
  */
 export class UpdateDocumentIdentityDto {
   @ApiPropertyOptional({
@@ -54,4 +55,21 @@ export class UpdateDocumentIdentityDto {
   })
   @IsOptional()
   logo?: unknown;
+
+  @ApiPropertyOptional({
+    description: "true: remove the current fiche d'analyse background",
+  })
+  @IsOptional()
+  @Transform(toBoolean)
+  @IsBoolean()
+  removeAnalysisBackground?: boolean;
+
+  @ApiPropertyOptional({
+    type: 'string',
+    format: 'binary',
+    description:
+      "The fiche d'analyse's background, drawn behind every page: an A4 PDF, PNG or JPEG, 5 MB at most",
+  })
+  @IsOptional()
+  analysisBackground?: unknown;
 }
